@@ -77,6 +77,44 @@
         <div><button class="btn-primary" type="submit">Save</button></div>
     </form>
 
+    <section class="panel p-5 space-y-3">
+        <h2 class="text-sm font-medium">DNS provider credentials (TLS DNS-01)</h2>
+        <p class="text-sm text-zinc-400">API tokens for Cloudflare / DigitalOcean certbot plugins. Stored root-only under <span class="font-mono">/etc/azerioid-panel/dns-credentials/</span>. Existing secrets are never shown — enter a new token only to replace.</p>
+        <ul class="space-y-1 font-mono text-xs text-zinc-400">
+            @forelse ($dnsProviders as $p)
+                <li>
+                    {{ $p['display_name'] ?? $p['id'] }} —
+                    @if (!empty($p['credentials_present']))
+                        <span class="text-good">token stored</span>
+                    @else
+                        <span class="text-zinc-500">not configured</span>
+                    @endif
+                </li>
+            @empty
+                <li class="text-zinc-500">Providers unavailable (broker tls.dns-providers).</li>
+            @endforelse
+        </ul>
+        <form wire:submit="rotateDnsCredential" class="grid gap-3 md:grid-cols-2">
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Provider
+                <select class="field mt-1" wire:model="dnsRotateProvider">
+                    <option value="">Select…</option>
+                    @foreach ($dnsProviders as $p)
+                        <option value="{{ $p['id'] }}">{{ $p['display_name'] ?? $p['id'] }}</option>
+                    @endforeach
+                </select>
+            </label>
+            <label class="text-xs uppercase tracking-wide text-zinc-500">New API token
+                <input class="field mt-1" type="password" autocomplete="new-password" wire:model="dnsRotateToken" placeholder="••••••••">
+            </label>
+            @if ($dnsError)
+                <p class="text-sm text-bad md:col-span-2">{{ $dnsError }}</p>
+            @endif
+            <div class="md:col-span-2">
+                <button class="btn-primary" type="submit">Store / replace token</button>
+            </div>
+        </form>
+    </section>
+
     <section class="panel p-5 space-y-2">
         <h2 class="text-sm font-medium">Integrations</h2>
         <p class="text-sm text-zinc-400">Telegram bot token, Spaces keys, and the backup passphrase are entered on <a class="text-brass-400" href="{{ route('alerts') }}">Alerts</a> and <a class="text-brass-400" href="{{ route('backups') }}">Backups</a>. They are encrypted with <span class="font-mono">APP_KEY</span>, masked after save, and never written to the audit log in plaintext.</p>

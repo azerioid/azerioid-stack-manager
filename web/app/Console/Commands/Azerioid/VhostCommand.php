@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Azerioid;
 
+use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use Illuminate\Console\Command;
 
@@ -16,8 +17,11 @@ class VhostCommand extends Command
         {--php= : PHP version for php vhosts}
         {--root= : Document root}
         {--upstream= : Upstream host:port for proxy vhosts}
-        {--tls= : Enable TLS on add (flag) or on|off for edit}
-        {--tls-mode= : on|off for edit (alias of --tls=)}
+        {--tls= : auto|dns|self|off (aliases: on=auto, dns01=dns, internal=self)}
+        {--tls-mode= : Alias of --tls=}
+        {--dns-provider= : cloudflare|digitalocean (for --tls=dns)}
+        {--wildcard : Also request *.apex for DNS-01}
+        {--staging : Use Let\'s Encrypt staging}
         {--stack= : Filter list by caddy|apache|nginx}
         {--json : JSON output (list)}';
 
@@ -58,7 +62,29 @@ class VhostCommand extends Command
         }
 
         if ($this->wantsJson()) {
-            return $this->emitData(['vhosts' => $vhosts]);
+            // Ensure tls_status fields are present for scripting.
+            $safe = array_map(static function ($row) {
+                if (! is_array($row)) {
+                    return $row;
+                }
+                $ts = is_array($row['tls_status'] ?? null) ? $row['tls_status'] : [];
+                $row['tls_status'] = [
+                    'enabled' => (bool) ($ts['enabled'] ?? ! empty($row['tls'])),
+                    'mode' => (string) ($ts['mode'] ?? ($row['tls_mode'] ?? 'off')),
+                    'issuer_type' => (string) ($ts['issuer_type'] ?? 'none'),
+                    'issuer' => $ts['issuer'] ?? null,
+                    'valid_to' => $ts['valid_to'] ?? null,
+                    'days_remaining' => $ts['days_remaining'] ?? null,
+                    'ok' => (bool) ($ts['ok'] ?? false),
+                    'pending' => (bool) ($ts['pending'] ?? false),
+                    'failed' => (bool) ($ts['failed'] ?? false),
+                    'label' => (string) ($ts['label'] ?? (! empty($row['tls']) ? 'tls' : 'http')),
+                ];
+
+                return $row;
+            }, is_array($vhosts) ? $vhosts : []);
+
+            return $this->emitData(['vhosts' => $safe]);
         }
 
         $rows = [];
@@ -115,21 +141,17 @@ class VhostCommand extends Command
                 throw new \RuntimeException((string) $res->error);
             }
 
-            // Optional TLS via edit after create (add path does not take tls flag in broker).
-            $tlsOpt = $this->option('tls');
-            $wantTls = $tlsOpt === true || $tlsOpt === '1' || $tlsOpt === 'on' || $tlsOpt === '';
-            // Symfony treats bare --tls as true; --tls=on as "on"; absent as null/false.
-            if ($this->input->hasParameterOption(['--tls'], true) && $wantTls) {
-                $edit = $this->brokerCall('vhost.edit', [$domain], [
-                    'domain' => $domain,
-                    'tls' => true,
-                ]);
+            $tlsPayload = $this->buildTlsPayload($domain);
+            if ($tlsPayload !== null) {
+                $edit = $this->brokerCall('vhost.edit', [$domain], $tlsPayload);
                 if (! $edit->ok) {
-                    $this->line('Vhost created but TLS enable failed: ' . $edit->error);
+                    $this->line('Vhost created but TLS configure failed: ' . $edit->error);
+
+                    return self::FAILURE;
                 }
             }
 
-            $this->info("Created vhost {$domain}.");
+            $this->line("Created vhost {$domain}.");
             if ($this->wantsJson() || is_array($res->data)) {
                 $this->line(json_encode($res->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
             }
@@ -153,24 +175,11 @@ class VhostCommand extends Command
             if ($this->option('php')) {
                 $payload['php_version'] = (string) $this->option('php');
             }
-            $tlsMode = strtolower(trim((string) ($this->option('tls-mode') ?: '')));
-            if ($tlsMode === '') {
-                $tlsRaw = $this->option('tls');
-                if ($tlsRaw === true || $tlsRaw === '') {
-                    $tlsMode = 'auto';
-                } elseif (is_string($tlsRaw) && $tlsRaw !== '') {
-                    $tlsMode = strtolower($tlsRaw);
-                }
-            }
-            if (in_array($tlsMode, ['on', '1', 'true', 'yes'], true)) {
-                $payload['tls_mode'] = 'auto';
-                $payload['tls'] = true;
-            } elseif (in_array($tlsMode, ['off', '0', 'false', 'no'], true)) {
-                $payload['tls_mode'] = 'off';
-                $payload['tls'] = false;
-            } elseif (in_array($tlsMode, ['auto', 'internal', 'dns01'], true)) {
-                $payload['tls_mode'] = $tlsMode;
-                $payload['tls'] = $tlsMode !== 'off';
+            $tlsPayload = $this->buildTlsPayload($domain);
+            if ($tlsPayload !== null) {
+                $payload = array_merge($payload, $tlsPayload);
+            } elseif (! $this->option('root') && ! $this->option('php')) {
+                throw new \RuntimeException('Nothing to edit. Pass --root=, --php=, and/or --tls=.');
             }
 
             $res = $this->brokerCall('vhost.edit', [$domain], $payload);
@@ -189,8 +198,6 @@ class VhostCommand extends Command
     {
         try {
             $raw = trim((string) $this->option('domain'));
-            // Mirror the UI: refuse readonly/panel vhosts before mutate (covers listen
-            // addresses like 127.0.0.1:3169 that fail Validator::domain but are listed).
             $this->assertNotReadonlyVhost($raw, 'delete');
             $domain = Validator::domain($raw);
             $res = $this->brokerCall('vhost.del', [$domain], []);
@@ -206,9 +213,68 @@ class VhostCommand extends Command
     }
 
     /**
-     * Same protection the dashboard applies (hide/refuse readonly sites) and that
-     * CaddyDriver/ApacheDriver enforce after domain validation.
+     * @return array<string,mixed>|null null when TLS flags were not provided
      */
+    private function buildTlsPayload(string $domain): ?array
+    {
+        $raw = $this->option('tls-mode');
+        if ($raw === null || $raw === false || $raw === '') {
+            if (! $this->input->hasParameterOption(['--tls'], true)) {
+                return null;
+            }
+            $raw = $this->option('tls');
+        }
+        // Bare --tls (boolean true) means auto.
+        if ($raw === true || $raw === null || $raw === '') {
+            $raw = 'auto';
+        }
+        $mode = $this->normalizeTlsCli((string) $raw);
+        $payload = [
+            'domain' => $domain,
+            'tls_mode' => $mode,
+            'tls' => TlsMode::enabled($mode),
+        ];
+        if ($mode === TlsMode::DNS01) {
+            $provider = strtolower(trim((string) $this->option('dns-provider')));
+            if ($provider === '') {
+                throw new \RuntimeException('--dns-provider=cloudflare|digitalocean is required with --tls=dns.');
+            }
+            $payload['dns_provider'] = $provider;
+            $token = (string) (getenv('AZERIOID_DNS_API_TOKEN') ?: getenv('DNS_API_TOKEN') ?: '');
+            if ($token !== '') {
+                $store = $this->brokerCall('tls.dns-credential.store', [], [
+                    'provider' => $provider,
+                    'token' => $token,
+                ]);
+                if (! $store->ok) {
+                    throw new \RuntimeException((string) $store->error);
+                }
+                $this->line("Stored DNS credentials for {$provider} (token not echoed).");
+            }
+            if ($this->option('wildcard')) {
+                $payload['wildcard'] = true;
+            }
+        }
+        if ($this->option('staging')) {
+            $payload['staging'] = true;
+        }
+
+        return $payload;
+    }
+
+    private function normalizeTlsCli(string $raw): string
+    {
+        $raw = strtolower(trim($raw));
+
+        return match ($raw) {
+            'auto', 'on', '1', 'true', 'yes', 'http01', 'http-01', 'le', 'letsencrypt' => TlsMode::AUTO,
+            'off', '0', 'false', 'no', 'http' => TlsMode::OFF,
+            'self', 'self-signed', 'selfsigned', 'internal', 'snakeoil' => TlsMode::INTERNAL,
+            'dns', 'dns01', 'dns-01', 'wildcard' => TlsMode::DNS01,
+            default => throw new \RuntimeException('--tls must be auto|dns|self|off.'),
+        };
+    }
+
     private function assertNotReadonlyVhost(string $domain, string $op = 'delete'): void
     {
         if ($domain === '') {

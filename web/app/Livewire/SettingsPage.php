@@ -30,6 +30,10 @@ class SettingsPage extends Component
     public array $phpVersions = [];
     public array $opcache = [];
     public array $panelRuntime = [];
+    public array $dnsProviders = [];
+    public string $dnsRotateProvider = '';
+    public string $dnsRotateToken = '';
+    public ?string $dnsError = null;
 
     public function mount(BrokerClient $broker): void
     {
@@ -53,6 +57,49 @@ class SettingsPage extends Component
                 $this->phpIni = $ini->ok ? ($ini->data['values'] ?? []) : [];
                 $this->loadOpcache($broker);
             }
+        }
+        $this->reloadDnsProviders($broker);
+    }
+
+    public function rotateDnsCredential(BrokerClient $broker): void
+    {
+        $this->dnsError = null;
+        $provider = strtolower(trim($this->dnsRotateProvider));
+        $token = trim($this->dnsRotateToken);
+        if ($provider === '') {
+            $this->dnsError = 'Choose a DNS provider.';
+
+            return;
+        }
+        if (strlen($token) < 8) {
+            $this->dnsError = 'Enter a new API token (existing secret is never shown).';
+
+            return;
+        }
+        $res = $broker->call('tls.dns-credential.store', [], [
+            'provider' => $provider,
+            'token' => $token,
+        ]);
+        if (! $res->ok) {
+            $this->dnsError = (string) $res->error;
+
+            return;
+        }
+        $this->reset('dnsRotateToken');
+        $this->flash = "DNS credentials stored for {$provider} (token not displayed).";
+        $this->reloadDnsProviders($broker);
+    }
+
+    private function reloadDnsProviders(BrokerClient $broker): void
+    {
+        $res = $broker->call('tls.dns-providers', [], [], null, false);
+        if ($res->ok) {
+            $this->dnsProviders = $res->data['providers'] ?? [];
+        } else {
+            $this->dnsProviders = [
+                ['id' => 'cloudflare', 'display_name' => 'Cloudflare', 'credentials_present' => false],
+                ['id' => 'digitalocean', 'display_name' => 'DigitalOcean', 'credentials_present' => false],
+            ];
         }
     }
 
@@ -140,7 +187,7 @@ class SettingsPage extends Component
             'totpEnrolled' => $user instanceof User && $user->hasTwoFactorEnabled(),
         ])->layoutData([
             'heading' => 'Settings',
-            'sub' => 'Admin, session, panel runtime, php.ini',
+            'sub' => 'Admin, session, panel runtime, DNS-01 credentials, php.ini',
         ]);
     }
 }

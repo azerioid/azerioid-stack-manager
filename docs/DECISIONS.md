@@ -130,4 +130,4 @@ The uninstall path performs the same panel-scoped flush before removing the jail
 
 **Secrets:** DNS API tokens only via broker stdin → root-only `0600` files under `/etc/azerioid-panel/dns-credentials/`. Never argv, never logged.
 
-**UI:** Vhost list TLS column shows issuer type + expiry (from live probe), not a boolean yes/http.
+**UI:** Vhost create/edit offer Automatic / DNS challenge / Self-signed. List TLS column shows issuer type + expiry (from live probe), not a boolean yes/http. Settings can rotate DNS provider credentials without re-displaying the secret. CLI mirrors the same TLS flags (`--tls=auto|dns|self`, env token for DNS-01).

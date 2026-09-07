@@ -32,6 +32,9 @@ final class VhostList
                     'issuer' => null,
                     'valid_to' => null,
                     'days_remaining' => null,
+                    'ok' => false,
+                    'pending' => false,
+                    'failed' => false,
                     'label' => 'http',
                 ];
                 continue;
@@ -53,27 +56,42 @@ final class VhostList
                 continue;
             }
             $info = CertProbe::probe($runtime, $domain, $mode);
-            $label = match ($info['issuer_type']) {
-                'lets_encrypt' => 'Let\'s Encrypt',
-                'dns01' => 'DNS-01 (Let\'s Encrypt)',
+            $issuerType = $info['issuer_type'];
+            // Prefer mode-aware labels when probe is ambiguous/pending.
+            if ($issuerType === 'lets_encrypt' && $mode === TlsMode::DNS01) {
+                $issuerType = 'dns01';
+            }
+            if ($issuerType === 'pending' && $mode === TlsMode::INTERNAL) {
+                $issuerType = 'self_signed';
+            }
+            $label = match ($issuerType) {
+                'lets_encrypt' => 'Let\'s Encrypt (HTTP-01)',
+                'dns01' => 'Let\'s Encrypt (DNS-01)',
                 'self_signed' => 'self-signed',
-                'pending' => 'pending',
+                'pending' => 'pending / failed',
                 'none' => 'http',
-                default => 'TLS',
+                default => 'TLS (unknown)',
             };
-            if ($info['ok'] && $info['valid_to']) {
+            if (!empty($info['ok']) && $info['valid_to']) {
                 $label .= ' · exp ' . substr((string) $info['valid_to'], 0, 16);
+            } elseif ($issuerType === 'pending') {
+                $err = trim((string) ($info['error'] ?? ''));
+                if ($err !== '') {
+                    $label .= ' · ' . (strlen($err) > 48 ? substr($err, 0, 45) . '…' : $err);
+                }
             }
             $v['tls_status'] = [
                 'enabled' => true,
                 'mode' => $mode,
-                'issuer_type' => $info['issuer_type'],
+                'issuer_type' => $issuerType,
                 'issuer' => $info['issuer'],
                 'valid_from' => $info['valid_from'],
                 'valid_to' => $info['valid_to'],
                 'days_remaining' => $info['days_remaining'],
                 'renewal' => $info['renewal'],
-                'ok' => $info['ok'],
+                'ok' => (bool) ($info['ok'] ?? false),
+                'pending' => $issuerType === 'pending',
+                'failed' => $issuerType === 'pending' && !($info['ok'] ?? false),
                 'error' => $info['error'],
                 'label' => $label,
             ];

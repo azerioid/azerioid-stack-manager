@@ -20,6 +20,11 @@ class VhostsPage extends Component
     public string $type = 'php';
     public string $php_version = '';
     public string $upstream = '127.0.0.1:9000';
+    public string $tlsMode = 'off';
+    public string $dnsProvider = '';
+    public string $dnsToken = '';
+    public bool $acmeStaging = false;
+    public bool $wildcard = false;
     public ?string $error = null;
     public ?string $flash = null;
     public ?string $confirmDelete = null;
@@ -35,6 +40,7 @@ class VhostsPage extends Component
     public string $editDnsProvider = '';
     public string $editDnsToken = '';
     public bool $editAcmeStaging = false;
+    public bool $editWildcard = false;
     public string $editType = 'php';
     public array $dnsProviders = [];
 
@@ -73,8 +79,43 @@ class VhostsPage extends Component
 
                 return;
             }
+            if ($this->tlsMode !== '' && $this->tlsMode !== 'off') {
+                $payload = [
+                    'domain' => $domain,
+                    'tls_mode' => $this->tlsMode,
+                    'tls' => true,
+                ];
+                if ($this->tlsMode === 'dns01') {
+                    if ($this->dnsProvider === '') {
+                        throw new \RuntimeException('Choose a DNS provider for DNS-01.');
+                    }
+                    $payload['dns_provider'] = $this->dnsProvider;
+                    if (trim($this->dnsToken) !== '') {
+                        $store = $broker->call('tls.dns-credential.store', [], [
+                            'provider' => $this->dnsProvider,
+                            'token' => $this->dnsToken,
+                        ]);
+                        if (! $store->ok) {
+                            throw new \RuntimeException((string) $store->error);
+                        }
+                    }
+                    if ($this->wildcard) {
+                        $payload['wildcard'] = true;
+                    }
+                }
+                if ($this->acmeStaging) {
+                    $payload['staging'] = true;
+                }
+                $edit = $broker->call('vhost.edit', [$domain], $payload);
+                if (! $edit->ok) {
+                    $this->error = $this->operatorMessage('Vhost created, but TLS failed: '.(string) $edit->error);
+                    $this->reload($broker);
+
+                    return;
+                }
+            }
             $this->flash = "Created {$domain}.";
-            $this->reset('domain', 'root', 'type', 'upstream', 'showForm');
+            $this->reset('domain', 'root', 'type', 'upstream', 'tlsMode', 'dnsProvider', 'dnsToken', 'acmeStaging', 'wildcard', 'showForm');
             $this->reload($broker);
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
@@ -98,6 +139,7 @@ class VhostsPage extends Component
             $this->editDnsProvider = '';
             $this->editDnsToken = '';
             $this->editAcmeStaging = false;
+            $this->editWildcard = false;
 
             return;
         }
@@ -106,7 +148,7 @@ class VhostsPage extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editType');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType');
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -144,6 +186,9 @@ class VhostsPage extends Component
                         throw new \RuntimeException((string) $store->error);
                     }
                     $this->editDnsToken = '';
+                }
+                if ($this->editWildcard) {
+                    $payload['wildcard'] = true;
                 }
             }
             if ($this->editAcmeStaging) {

@@ -38,6 +38,9 @@ final class FakeBroker
     /** @var array<string, array<string, mixed>> */
     public array $terminalSessions = [];
 
+    /** @var array<string, bool> provider id => credentials present */
+    public array $dnsCredentialsPresent = [];
+
     public function __construct()
     {
         $this->reset();
@@ -52,6 +55,7 @@ final class FakeBroker
         $this->fakeObservedComponents = [];
         $this->supervisorPrograms = [];
         $this->terminalSessions = [];
+        $this->dnsCredentialsPresent = [];
         $this->databaseEngine = 'mariadb';
         $this->postgresqlConfigured = false;
         $this->vhosts = [
@@ -63,6 +67,19 @@ final class FakeBroker
                 'php_version' => '8.4',
                 'type' => 'php',
                 'tls' => true,
+                'tls_mode' => 'auto',
+                'tls_status' => [
+                    'enabled' => true,
+                    'mode' => 'auto',
+                    'issuer_type' => 'lets_encrypt',
+                    'issuer' => "C=US, O=Let's Encrypt",
+                    'valid_to' => '2026-10-30T00:00:00Z',
+                    'days_remaining' => 63,
+                    'ok' => true,
+                    'pending' => false,
+                    'failed' => false,
+                    'label' => "Let's Encrypt (HTTP-01) · exp 2026-10-30T00:00",
+                ],
                 'reverse_proxy' => null,
                 'readonly' => false,
                 'enabled' => true,
@@ -76,6 +93,16 @@ final class FakeBroker
                 'php_version' => null,
                 'type' => 'proxy',
                 'tls' => true,
+                'tls_mode' => 'auto',
+                'tls_status' => [
+                    'enabled' => true,
+                    'mode' => 'auto',
+                    'issuer_type' => 'lets_encrypt',
+                    'ok' => true,
+                    'pending' => false,
+                    'failed' => false,
+                    'label' => "Let's Encrypt (HTTP-01)",
+                ],
                 'reverse_proxy' => '127.0.0.1:3000',
                 'readonly' => true,
                 'enabled' => true,
@@ -89,6 +116,16 @@ final class FakeBroker
                 'php_version' => '8.4',
                 'type' => 'php',
                 'tls' => false,
+                'tls_mode' => 'off',
+                'tls_status' => [
+                    'enabled' => false,
+                    'mode' => 'off',
+                    'issuer_type' => 'none',
+                    'ok' => false,
+                    'pending' => false,
+                    'failed' => false,
+                    'label' => 'http',
+                ],
                 'reverse_proxy' => null,
                 'readonly' => true,
                 'enabled' => true,
@@ -164,16 +201,9 @@ final class FakeBroker
                     'valid_from' => 'Aug  1 00:00:00 2026 GMT',
                     'valid_to' => 'Oct 30 00:00:00 2026 GMT', 'days_remaining' => 63, 'renewal' => 'ok', 'tls_mode' => 'auto',
                 ]]],
-                'tls.dns-providers' => ['providers' => [
-                    ['id' => 'cloudflare', 'display_name' => 'Cloudflare', 'credentials_present' => false],
-                    ['id' => 'digitalocean', 'display_name' => 'DigitalOcean', 'credentials_present' => false],
-                ]],
-                'tls.dns-credential.store' => [
-                    'provider' => $stdin['provider'] ?? 'cloudflare',
-                    'stored' => true,
-                    'path' => '/etc/azerioid-panel/dns-credentials/cloudflare.ini',
-                ],
-                'tls.dns-credential.status' => ['providers' => []],
+                'tls.dns-providers' => ['providers' => $this->dnsProviders()],
+                'tls.dns-credential.store' => $this->storeDnsCredential($stdin),
+                'tls.dns-credential.status' => ['providers' => $this->dnsProviders()],
                 'tls.renew.dry-run' => [
                     'dry_run' => ['ok' => true, 'stdout' => 'fake dry-run'],
                     'certbot_timer' => 'inactive',
@@ -357,6 +387,43 @@ final class FakeBroker
         ];
     }
 
+    /** @return list<array{id:string,display_name:string,credentials_present:bool}> */
+    private function dnsProviders(): array
+    {
+        return [
+            [
+                'id' => 'cloudflare',
+                'display_name' => 'Cloudflare',
+                'credentials_present' => (bool) ($this->dnsCredentialsPresent['cloudflare'] ?? false),
+            ],
+            [
+                'id' => 'digitalocean',
+                'display_name' => 'DigitalOcean',
+                'credentials_present' => (bool) ($this->dnsCredentialsPresent['digitalocean'] ?? false),
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function storeDnsCredential(array $stdin): array
+    {
+        $provider = strtolower(trim((string) ($stdin['provider'] ?? 'cloudflare')));
+        $token = (string) ($stdin['token'] ?? $stdin['api_token'] ?? '');
+        if ($token === '' || strlen($token) < 8) {
+            throw new BrokerCallException('API token is required (stdin JSON: token). Never pass tokens via argv.', 2);
+        }
+        $this->dnsCredentialsPresent[$provider] = true;
+
+        return [
+            'provider' => $provider,
+            'stored' => true,
+            'path' => '/etc/azerioid-panel/dns-credentials/'.$provider.'.ini',
+        ];
+    }
+
     private function vhostAdd(array $args, array $stdin): array
     {
         if ($this->failNextValidate) {
@@ -379,7 +446,17 @@ final class FakeBroker
             'php_socket' => ($args[2] ?? 'php') === 'php' ? 'unix//run/php/php' . ($args[3] ?? '8.4') . '-fpm.sock' : null,
             'php_version' => ($args[2] ?? 'php') === 'php' ? ($args[3] ?? '8.4') : null,
             'type' => $args[2] ?? 'php',
-            'tls' => true,
+            'tls' => false,
+            'tls_mode' => 'off',
+            'tls_status' => [
+                'enabled' => false,
+                'mode' => 'off',
+                'issuer_type' => 'none',
+                'ok' => false,
+                'pending' => false,
+                'failed' => false,
+                'label' => 'http',
+            ],
             'reverse_proxy' => ($args[2] ?? '') === 'proxy' ? ($args[3] ?? null) : null,
             'readonly' => false,
             'enabled' => true,
@@ -433,11 +510,27 @@ final class FakeBroker
             if (isset($stdin['tls_key'])) {
                 $v['tls_key'] = (string) $stdin['tls_key'];
             }
+            $mode = (string) ($v['tls_mode'] ?? ($v['tls'] ? 'auto' : 'off'));
+            $issuer = match ($mode) {
+                'off' => 'none',
+                'internal' => 'self_signed',
+                'dns01' => 'dns01',
+                default => 'lets_encrypt',
+            };
+            $label = match ($issuer) {
+                'none' => 'http',
+                'self_signed' => 'self-signed',
+                'dns01' => "Let's Encrypt (DNS-01)",
+                default => "Let's Encrypt (HTTP-01)",
+            };
             $v['tls_status'] = [
                 'enabled' => ! empty($v['tls']),
-                'mode' => $v['tls_mode'] ?? ($v['tls'] ? 'auto' : 'off'),
-                'issuer_type' => ! empty($v['tls']) ? (($v['tls_mode'] ?? '') === 'internal' ? 'self_signed' : 'lets_encrypt') : 'none',
-                'label' => ! empty($v['tls']) ? (($v['tls_mode'] ?? 'auto') === 'internal' ? 'self-signed' : 'Let\'s Encrypt') : 'http',
+                'mode' => $mode,
+                'issuer_type' => $issuer,
+                'ok' => ! empty($v['tls']) && $mode !== 'off',
+                'pending' => false,
+                'failed' => false,
+                'label' => $label,
             ];
             $after = [
                 'root' => $v['root'] ?? null,

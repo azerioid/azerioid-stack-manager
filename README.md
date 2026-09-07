@@ -16,11 +16,26 @@ sudo ./stack-manager.sh --non-interactive
 
 The installer waits until the panel HTTP endpoint, FPM socket, and queue worker are actually ready before printing success.
 
+### Default credentials
+
+If you create an admin during install and accept the prompts’ defaults (or use non-interactive `--create-admin=true` without overriding email/password), the account is:
+
+| | |
+|--|--|
+| **Email** | `admin@example.com` |
+| **Password** | `password` |
+
+That default is fine for **local / tunnel-only** use.
+
+**⚠ SECURITY:** On any **public-mode** install (`--access=public`), this default password **must be changed immediately after first login** (Settings → Password). The installer prints the same warning at the end of a public install when the default password is in use. Do not leave a public panel on the documented default.
+
+To set a custom email/password at install time instead, use the interactive prompts or the installer flags (`--create-admin=true`, `--admin-email=…`, and `ADMIN_PASSWORD` via environment — see `sudo ./stack-manager.sh --help`).
+
 ### What happens next
 
-1. Open the **setup URL** printed at the end of the install (default panel port **3169**).
-2. Complete **`/setup`** in the browser to create the single admin account. **Login does not work until setup finishes** — there are zero users after a fresh install.
-3. Sign in at **`/login`** with the credentials you chose.
+1. Open the URL printed at the end of the install (default panel port **3169**).
+2. If an admin was created during install, sign in at **`/login`** with those credentials (defaults above unless you chose otherwise).
+3. If no admin was created, complete **`/setup`** in the browser first — login does not work until an admin exists.
 
 **Default access mode is `tunnel`:** the panel listens on `http://127.0.0.1:3169`. Reach it remotely with an SSH tunnel:
 
@@ -94,8 +109,21 @@ Debian **13** is accepted by the OS gate but has not been targeted in smoke test
 - **Localhost-first:** panel default bind `127.0.0.1:3169`; managed DB/cache defaults to loopback.
 - **Auth:** optional TOTP (`--require-totp=true`), rate limiting and account lockout in the app; optional **fail2ban** jail and **ufw**/firewalld panel-port rule via installer flags.
 - **SELinux (EL):** installer can label port 3169 and panel paths when enforcing (see `docs/DECISIONS.md` A3).
+- **TLS secrets:** DNS provider API tokens for DNS-01 are never accepted on argv; the broker writes them root-only (`0600`) under `/etc/azerioid-panel/dns-credentials/`. Rotate from **Settings** or via CLI env `AZERIOID_DNS_API_TOKEN` — existing tokens are never re-displayed.
 
-Details: `docs/SPEC.md`, `docs/port-ownership.md`.
+Details: `docs/SPEC.md`, `docs/port-ownership.md`, ADR **A21** in `docs/DECISIONS.md`.
+
+### TLS / HTTPS (user vhosts)
+
+| Mode | When to use | Mechanism |
+|------|-------------|-----------|
+| **Automatic (HTTP-01)** | Real domain already pointed at this host | **Caddy:** native automatic HTTPS. **Apache/Nginx:** `certbot certonly --webroot` (broker owns vhost files — not certbot’s apache/nginx installers). |
+| **DNS challenge** | Wildcard, or domain not yet pointed here | certbot DNS plugins (**Cloudflare**, **DigitalOcean**). Cert files wired statically into the active driver. |
+| **Self-signed** | Local / IP / non-public names | Driver internal/self-signed TLS (`tls internal` on Caddy). |
+
+Renewal: Caddy renews its own HTTP-01 certs; certbot’s timer plus a deploy-hook reloads Apache/Nginx (or Caddy for DNS-01 static certs). Prefer Let’s Encrypt **staging** (`--staging` / UI checkbox) for repeated tests to avoid rate limits.
+
+Vhost list (UI and `azerioid vhost list --json`) shows issuer type, expiry, and pending/failed — not a bare yes/http.
 
 ## Architecture (brief)
 
@@ -154,6 +182,8 @@ Read commands accept **`--json`** for scripting/CI: `status`, `version`, `vhost 
 
 Generated database passwords are printed **once** in the command’s stdout at create/reset time, with an explicit “will not be shown again” warning. `db list` never prints passwords. The CLI **never** accepts a plaintext password as an argv flag (same reasoning as installer secrets via env, not process list). Reset always generates a new value via `--reset-password`; there is no `--password=` option.
 
+DNS-01 provider API tokens use the same rule: set `AZERIOID_DNS_API_TOKEN` (or `DNS_API_TOKEN`) in the environment before `vhost add`/`edit` with `--tls=dns`. Tokens are stored by the broker and never echoed back.
+
 ### Security guarantees (CLI = UI)
 
 - The panel’s own vhost (readonly / managed externally) **cannot** be deleted or edited via CLI — same refusal as the dashboard.
@@ -179,17 +209,24 @@ azerioid version --json
 
 | Command | Description |
 |---------|-------------|
-| `azerioid vhost list [--stack=caddy\|apache\|nginx] [--json]` | List managed vhosts (optional stack filter) |
-| `azerioid vhost add --domain=<d> --type=php\|static\|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls]` | Create a vhost (TLS optional after create) |
-| `azerioid vhost edit --domain=<d> [--php=<v>] [--root=<path>] [--tls=on\|off]` | Update PHP version, docroot, or TLS |
+| `azerioid vhost list [--stack=caddy\|apache\|nginx] [--json]` | List managed vhosts; JSON includes `tls_status` (issuer, expiry, pending/failed) |
+| `azerioid vhost add --domain=<d> --type=php\|static\|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls=auto\|dns\|self\|off] [--dns-provider=…] [--wildcard] [--staging]` | Create a vhost; optional TLS issuance |
+| `azerioid vhost edit --domain=<d> [--php=<v>] [--root=<path>] [--tls=…] [--dns-provider=…] [--wildcard] [--staging]` | Update PHP version, docroot, or TLS mode |
 | `azerioid vhost del --domain=<d>` | Delete a vhost (site files left in place) |
+
+`--tls` alone means `auto`. For `--tls=dns`, pass `--dns-provider=cloudflare|digitalocean` and set `AZERIOID_DNS_API_TOKEN` (or `DNS_API_TOKEN`) in the environment — never argv. Use `--staging` against Let’s Encrypt staging during tests.
 
 ```bash
 azerioid vhost list --json
-# {"vhosts":[{"domain":"example.com","type":"php","readonly":false,...}, ...]}
+# {"vhosts":[{"domain":"example.com","tls_status":{"issuer_type":"lets_encrypt","label":"Let's Encrypt (HTTP-01) · exp …",…},…}, …]}
 
-azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/www/app.example.com --tls
+azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/www/app.example.com --tls=auto
+azerioid vhost edit --domain=app.example.com --tls=self
 azerioid vhost edit --domain=app.example.com --tls=off
+
+# DNS-01 (token via env only):
+export AZERIOID_DNS_API_TOKEN='…'
+azerioid vhost add --domain=prepoint.example.com --type=static --tls=dns --dns-provider=cloudflare --staging
 azerioid vhost del --domain=app.example.com
 
 # Panel / readonly vhost is refused:
@@ -197,6 +234,7 @@ azerioid vhost del --domain=127.0.0.1:3169
 # This vhost is managed externally and cannot be deleted by the panel.
 ```
 
+See [TLS / HTTPS](#tls--https-user-vhosts) above.
 ### Databases
 
 | Command | Description |

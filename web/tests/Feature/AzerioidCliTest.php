@@ -30,6 +30,71 @@ class AzerioidCliTest extends TestCase
         $this->assertArrayHasKey('components', $decoded);
     }
 
+    public function test_vhost_list_json_includes_tls_status_fields(): void
+    {
+        $code = Artisan::call('azerioid:vhost', ['action' => 'list', '--json' => true]);
+        $this->assertSame(0, $code);
+        $decoded = json_decode(Artisan::output(), true);
+        $this->assertIsArray($decoded['vhosts'] ?? null);
+        $shop = collect($decoded['vhosts'])->firstWhere('domain', 'shop.example.com');
+        $this->assertIsArray($shop);
+        $this->assertArrayHasKey('tls_status', $shop);
+        $this->assertSame('lets_encrypt', $shop['tls_status']['issuer_type'] ?? null);
+        $this->assertArrayHasKey('pending', $shop['tls_status']);
+        $this->assertArrayHasKey('failed', $shop['tls_status']);
+        $this->assertArrayHasKey('label', $shop['tls_status']);
+    }
+
+    public function test_vhost_add_with_tls_auto_calls_edit(): void
+    {
+        $code = Artisan::call('azerioid:vhost', [
+            'action' => 'add',
+            '--domain' => 'tls-auto.example.com',
+            '--type' => 'static',
+            '--root' => '/data/www/tls-auto.example.com',
+            '--tls' => 'auto',
+        ]);
+        $this->assertSame(0, $code, Artisan::output());
+
+        $fake = $this->app->make(FakeBroker::class);
+        $row = collect($fake->vhosts)->firstWhere('domain', 'tls-auto.example.com');
+        $this->assertNotNull($row);
+        $this->assertTrue((bool) ($row['tls'] ?? false));
+        $this->assertSame('auto', $row['tls_mode'] ?? null);
+    }
+
+    public function test_vhost_add_dns_tls_uses_env_token_not_argv(): void
+    {
+        putenv('AZERIOID_DNS_API_TOKEN=test-dns-token-for-cli-fake');
+        try {
+            $code = Artisan::call('azerioid:vhost', [
+                'action' => 'add',
+                '--domain' => 'tls-dns.example.com',
+                '--type' => 'static',
+                '--root' => '/data/www/tls-dns.example.com',
+                '--tls' => 'dns',
+                '--dns-provider' => 'cloudflare',
+                '--staging' => true,
+            ]);
+            $this->assertSame(0, $code, Artisan::output());
+            $fake = $this->app->make(FakeBroker::class);
+            $this->assertTrue($fake->dnsCredentialsPresent['cloudflare'] ?? false);
+            $row = collect($fake->vhosts)->firstWhere('domain', 'tls-dns.example.com');
+            $this->assertSame('dns01', $row['tls_mode'] ?? null);
+        } finally {
+            putenv('AZERIOID_DNS_API_TOKEN');
+        }
+    }
+
+    public function test_help_mentions_tls_modes_and_dns_env(): void
+    {
+        $code = Artisan::call('azerioid:help');
+        $this->assertSame(0, $code);
+        $out = Artisan::output();
+        $this->assertStringContainsString('--tls=auto|dns|self|off', $out);
+        $this->assertStringContainsString('AZERIOID_DNS_API_TOKEN', $out);
+    }
+
     public function test_vhost_list_json(): void
     {
         $code = Artisan::call('azerioid:vhost', ['action' => 'list', '--json' => true]);

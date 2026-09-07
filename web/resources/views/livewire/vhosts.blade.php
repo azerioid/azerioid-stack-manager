@@ -39,6 +39,37 @@
                     <input class="field mt-1" wire:model="upstream" placeholder="127.0.0.1:9000">
                 </label>
             @endif
+            <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">TLS mode
+                <select class="field mt-1" wire:model.live="tlsMode">
+                    <option value="off">Off (HTTP only)</option>
+                    <option value="auto">Automatic (Let's Encrypt HTTP-01)</option>
+                    <option value="dns01">DNS challenge (wildcard / pre-DNS)</option>
+                    <option value="internal">Self-signed</option>
+                </select>
+            </label>
+            @if ($tlsMode === 'dns01')
+                <label class="text-xs uppercase tracking-wide text-zinc-500">DNS provider
+                    <select class="field mt-1" wire:model="dnsProvider">
+                        <option value="">Select…</option>
+                        @foreach ($dnsProviders as $p)
+                            <option value="{{ $p['id'] }}">{{ $p['display_name'] }}{{ !empty($p['credentials_present']) ? ' (token stored)' : '' }}</option>
+                        @endforeach
+                    </select>
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">API token (leave blank to reuse stored)
+                    <input class="field mt-1" type="password" autocomplete="new-password" wire:model="dnsToken" placeholder="••••••••">
+                </label>
+                <label class="flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">
+                    <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="wildcard">
+                    Also request wildcard (*.apex)
+                </label>
+            @endif
+            @if (in_array($tlsMode, ['auto', 'dns01'], true))
+                <label class="flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">
+                    <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="acmeStaging">
+                    Use Let's Encrypt staging (tests — avoids rate limits)
+                </label>
+            @endif
             <div class="md:col-span-2">
                 <button class="btn-primary" type="submit">Validate &amp; create</button>
             </div>
@@ -85,11 +116,17 @@
                 <label class="text-xs uppercase tracking-wide text-zinc-500">API token (stdin only — leave blank to reuse stored)
                     <input class="field mt-1" type="password" autocomplete="new-password" wire:model="editDnsToken" placeholder="••••••••">
                 </label>
+                <label class="flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">
+                    <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="editWildcard">
+                    Also request wildcard (*.apex)
+                </label>
             @endif
+            @if (in_array($editTlsMode, ['auto', 'dns01'], true))
             <label class="flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">
                 <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="editAcmeStaging">
                 Use Let's Encrypt staging (for tests — avoids rate limits)
             </label>
+            @endif
             <div class="flex gap-3 md:col-span-2">
                 <button class="btn-primary" type="submit">Validate &amp; save</button>
                 <button type="button" class="btn-ghost" wire:click="cancelEdit">Cancel</button>
@@ -128,9 +165,16 @@
                             @php
                                 $ts = $v['tls_status'] ?? null;
                                 $label = is_array($ts) ? ($ts['label'] ?? null) : null;
+                                $pending = is_array($ts) && (!empty($ts['pending']) || (!empty($ts['failed'])));
+                                $ok = is_array($ts) && !empty($ts['ok']);
                             @endphp
                             @if ($label)
-                                <span class="font-mono text-zinc-200">{{ $label }}</span>
+                                <span @class([
+                                    'font-mono',
+                                    'text-good' => $ok && !$pending,
+                                    'text-warn' => $pending,
+                                    'text-zinc-200' => !$ok && !$pending,
+                                ])>{{ $label }}</span>
                                 @if (!empty($ts['issuer_type']))
                                     <div class="mt-0.5 font-mono text-[10px] uppercase text-zinc-500">{{ $ts['issuer_type'] }} · {{ $v['tls_mode'] ?? '' }}</div>
                                 @endif

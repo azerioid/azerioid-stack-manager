@@ -20,8 +20,10 @@ Usage:
   azerioid version [--json]
 
   azerioid vhost list   [--stack=caddy|apache|nginx] [--json]
-  azerioid vhost add    --domain=<d> --type=php|static|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls]
-  azerioid vhost edit   --domain=<d> [--php=<v>] [--root=<path>] [--tls=on|off]
+  azerioid vhost add    --domain=<d> --type=php|static|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>]
+                        [--tls=auto|dns|self|off] [--dns-provider=cloudflare|digitalocean] [--wildcard] [--staging]
+  azerioid vhost edit   --domain=<d> [--php=<v>] [--root=<path>]
+                        [--tls=auto|dns|self|off] [--dns-provider=…] [--wildcard] [--staging]
   azerioid vhost del    --domain=<d>
 
   azerioid db list      [--engine=mariadb|postgresql|mongodb] [--json]
@@ -42,7 +44,10 @@ Usage:
 
   azerioid audit tail [--follow] [--lines=50] [--json]
 
-Secrets: generated DB passwords are printed once at creation/reset and never accepted via argv.
+Secrets:
+  DB passwords are generated and printed once — never accepted via argv.
+  DNS-01 API tokens: set AZERIOID_DNS_API_TOKEN (or DNS_API_TOKEN) in the environment — never argv.
+  Bare --tls means --tls=auto. Use --staging for Let's Encrypt staging (rate-limit safe).
 TXT);
 
         return self::SUCCESS;

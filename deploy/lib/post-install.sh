@@ -59,6 +59,11 @@ create_install_admin() {
     local php_bin allow_opt="" admin_password="${ADMIN_PASSWORD}" attempt=1 max_attempts=1
     php_bin="$(php_bin)"
     [[ -n "${IP_ALLOWLIST:-}" ]] && allow_opt="--allowlist=${IP_ALLOWLIST}"
+    # Non-interactive path never runs interactive.sh — still flag the well-known default.
+    if [[ "${admin_password}" == "password" ]]; then
+        INSTALL_USED_DEFAULT_ADMIN_PASSWORD=1
+        export INSTALL_USED_DEFAULT_ADMIN_PASSWORD
+    fi
 
     if [[ "${NON_INTERACTIVE:-0}" -eq 0 && -t 0 ]]; then
         max_attempts=2
