@@ -120,22 +120,6 @@ Deep dive: [`docs/SPEC.md`](docs/SPEC.md), [`docs/DECISIONS.md`](docs/DECISIONS.
 | `/etc/azerioid-panel/` | `broker.json`, `runtime.json`, `bootstrap.json`, `access.env` |
 | `/var/lib/azerioid-panel/` | SQLite DB, staging, managed-component manifest |
 
-## Upgrade from legacy installs
-
-If you previously ran **`lacmp-panel`** under old paths:
-
-```bash
-sudo ./deploy/relocate-from-lacmp.sh
-```
-
-To import a legacy **MariaDB panel database** (`lacmp_panel`) into SQLite after MariaDB is available on the host:
-
-```bash
-sudo ./deploy/migrate.sh          # see --dry-run, --force
-```
-
-Site/application databases on MariaDB are not modified by migration.
-
 ## Uninstall
 
 Panel artifacts only:
@@ -157,7 +141,7 @@ After install on a VM:
 ```bash
 sudo ./deploy/test/smoke-p1.sh    # bootstrap
 sudo ./deploy/test/smoke-p2.sh    # registry / broker list
-# … smoke-p3.sh through smoke-p7.sh for component and migration checks
+# … smoke-p3.sh through smoke-p6.sh for component and adopt checks
 ```
 
 UI setup + login check (HTTP/Livewire, no artisan):
@@ -165,10 +149,6 @@ UI setup + login check (HTTP/Livewire, no artisan):
 ```bash
 python3 deploy/test/ui-flow-verify.py
 ```
-
-## Background
-
-This project evolved from an earlier **LACMP Panel** that assumed a pre-built LCMP/LAMP host. AZERIOID Stack Manager replaces that model with a self-contained bootstrap and registry-driven component installs. Internal install paths and namespaces use **`azerioid-panel`**; the user-facing product name is **AZERIOID Stack Manager**.
 
 ## License
 

@@ -1,5 +1,5 @@
 # Example: public domain mode (Let's Encrypt). Preferred for public access.
-# ./lacmp_gui.sh --access=public --domain=panel.example.com --port=3169 --email=you@example.com
+# ./stack-manager.sh --access=public --domain=panel.example.com --port=3169 --email=you@example.com
 #
 # Optional allowlist:
 #   @blocked not remote_ip 203.0.113.0/24

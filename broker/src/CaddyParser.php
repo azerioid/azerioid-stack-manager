@@ -8,7 +8,7 @@ use AzerioidPanel\Broker\Web\ManagedVhost;
 final class CaddyParser
 {
     /**
-     * Parse a Caddy v2 site file from LACMP (or this panel).
+     * Parse a Caddy v2 site file from this panel (or compatible Caddyfile snippets).
      *
      * @return array{
      *   domains: list<string>,

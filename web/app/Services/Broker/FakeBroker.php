@@ -4,7 +4,7 @@ namespace App\Services\Broker;
 
 /**
  * Local / test stand-in. Mirrors broker JSON shapes so the UI can be
- * developed on a Mac without sudo or an LACMP host.
+ * developed on a Mac without sudo or a live panel host.
  */
 final class FakeBroker
 {
@@ -684,9 +684,7 @@ final class FakeBroker
             'component_id' => $id,
             'adopted' => true,
             'status' => $this->componentStatus($id),
-            'migration_note' => $id === 'mariadb'
-                ? 'Run sudo ./deploy/migrate.sh to copy the legacy lacmp_panel database into SQLite. Site databases are unchanged.'
-                : null,
+            'migration_note' => null,
         ];
     }
 

@@ -1,5 +1,5 @@
 # Example: public IP mode (tls internal). Browser will warn: untrusted cert.
-# Generated live by: ./lacmp_gui.sh --access=public --ip=<addr> --port=3169
+# Generated live by: ./stack-manager.sh --access=public --ip=<addr> --port=3169
 #
 # Never serve the panel over plaintext HTTP on a public interface.
 

@@ -77,9 +77,7 @@ final class ComponentAdopter
             'component_id' => $componentId,
             'adopted' => true,
             'status' => $updated,
-            'migration_note' => $componentId === 'mariadb'
-                ? 'Run sudo ./deploy/migrate.sh to copy the legacy lacmp_panel database into SQLite. Site databases are unchanged.'
-                : null,
+            'migration_note' => null,
         ];
     }
 }

@@ -1,6 +1,6 @@
 # AZERIOID Stack Manager — Master Specification
 
-Working title: **AZERIOID Stack Manager** (formerly LACMP Panel). A self-contained host control plane for managing web stacks on Linux.
+Working title: **AZERIOID Stack Manager**. A self-contained host control plane for managing web stacks on Linux.
 
 ## Architecture
 
@@ -61,9 +61,9 @@ P3: Redis install/uninstall via queued broker jobs. MariaDB/PostgreSQL in P4. Ad
 - **Application DBs**: MariaDB/PostgreSQL/Mongo default to localhost-only when installed (P3+).
 - **FPM lockdown**: panel pool disables dangerous functions; public pools retain `proc_open` lockdown.
 
-## Migration policy (A2)
+## Panel database (A2)
 
-Fresh installs target SQLite at `/var/lib/azerioid-panel/panel.sqlite`. Legacy MariaDB panel databases are migrated via **adopt + `migrate.sh`** (P5 adopt flow, P7 `migrate.sh` script). P1 does not implement migration.
+Fresh installs target SQLite at `/var/lib/azerioid-panel/panel.sqlite`. There is no automated path to import a prior panel's MariaDB schema into SQLite — see `docs/DECISIONS.md` (A2 removed features). MariaDB **adopt** (bring an existing MariaDB server under panel management for site databases) remains supported and is separate from panel-database migration.
 
 ## RBAC (A15)
 
@@ -110,18 +110,6 @@ Every phase exit runs `deploy/test/smoke-p1.sh` against Ubuntu 24.04, Debian 12,
 | `/var/lib/azerioid-panel` | SQLite DB, staging, managed-components |
 | `/var/log/azerioid-panel` | Panel audit + auth-fail logs |
 
-Upgrades from `lacmp-panel` paths: `sudo ./deploy/relocate-from-lacmp.sh`
+## Phase 7
 
-## Phase 7 scope
-
-- `deploy/migrate.sh` — copies legacy MariaDB `lacmp_panel` panel state into `/var/lib/azerioid-panel/panel.sqlite`
-- `php artisan panel:import-from-mariadb` — table-by-table import (shared columns only); site DBs untouched
-- Migration marker: `/var/lib/azerioid-panel/panel-db-migrated.json`
-- Smoke: `sudo ./deploy/test/smoke-p7.sh`
-
-## Migration workflow (A2)
-
-1. Upgrade panel code / run bootstrap installer on legacy host
-2. **Adopt** MariaDB from Components (P5) — broker admin creds only
-3. `sudo ./deploy/migrate.sh` — panel users, settings, jobs, audit logs → SQLite
-4. Optionally drop `lacmp_panel` schema when satisfied (site databases remain)
+Phase 7 originally shipped a legacy panel-DB migration path. That path has been **removed** (see DECISIONS A2). Remaining P5+ work is adopt/install/uninstall of managed components only.

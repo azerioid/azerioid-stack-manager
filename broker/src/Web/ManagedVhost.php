@@ -17,7 +17,7 @@ final class ManagedVhost
         'azerioid-panel',
     ];
 
-    /** Document roots that ship with Apache/LACMP, not panel-created sites. */
+    /** Document roots that ship with Apache/default, not panel-created sites. */
     private const DEFAULT_DOCROOTS = [
         '/var/www/html',
         '/var/www',

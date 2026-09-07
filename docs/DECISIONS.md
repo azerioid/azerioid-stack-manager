@@ -5,17 +5,28 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 ## A19 — Clean history
 
 **Status:** Accepted  
-**Decision:** New repo `azerioid-panel` with clean git history. Install paths: `/usr/local/lib/azerioid-panel`, `/etc/azerioid-panel`, `/var/lib/azerioid-panel`. PHP broker namespace: `AzerioidPanel\Broker`. Upgrades from `lacmp-panel` paths use `deploy/relocate-from-lacmp.sh`.
+**Decision:** New repo with clean git history. Install paths: `/usr/local/lib/azerioid-panel`, `/etc/azerioid-panel`, `/var/lib/azerioid-panel`. PHP broker namespace: `AzerioidPanel\Broker`. GitHub outward name: `azerioid/azerioid-stack-manager` (see A19 branding closure).
 
 ## A1 — Panel PHP isolation
 
 **Status:** Accepted  
 **Decision:** Panel PHP visible in Settings (runtime section) and Components (non-removable system card). Pinned to PHP 8.4. Broker refuses removal while panel depends on it. Dedicated FPM pool at `/run/php/azerioid-panel.sock`, user `caddy`.
 
-## A2 — Migration policy
+## A2 — Panel database / legacy migration
 
-**Status:** Accepted  
-**Decision:** Adopt + `migrate.sh` for legacy installs. P1 targets fresh installs only. Adopt flow in P5; `deploy/migrate.sh` + `panel:import-from-mariadb` in P7.
+**Status:** Accepted (revised 2026-09-07)  
+**Decision (current):** Panel state is SQLite only (`/var/lib/azerioid-panel/panel.sqlite`). MariaDB/PostgreSQL **adopt** (bring an existing database server under panel management for site databases) remains supported.
+
+**Removed (2026-09-07):** Automated migration from a prior `lacmp-panel`-era host is no longer supported. Removed from the tree:
+
+- `deploy/migrate.sh` (MariaDB `lacmp_panel` → SQLite import)
+- `deploy/relocate-from-lacmp.sh` (on-disk path relocation)
+- `MariadbPanelImporter` / `panel:import-from-mariadb`
+- Related seed/cleanup/smoke-p7 tests and README/SPEC upgrade docs
+
+**Tradeoff:** There is **no** supported one-command path to migrate an old `lacmp-panel` host onto the current product. If a legacy host (e.g. `dream` or any other) still runs that software and needs upgrading, the operator must do a **fresh install** of AZERIOID Stack Manager and, if needed, manually export/import application data. Do not rediscover this as a missing feature without an explicit new ADR — removal was intentional.
+
+**Historical note (no longer current):** The original A2 accepted “Adopt + `migrate.sh` for legacy installs” with P7 import tooling. That path is withdrawn.
 
 ## A3 — SELinux (EL)
 
@@ -79,7 +90,7 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 
 **Rationale:** Closes the branding item from the gap analysis (A19) without repeating the predecessor's half-measure path rename (LCMP→LACMP). User-facing identity matches the product; installed-system identity stays stable.
 
-**Out of scope / deliberately unchanged:** encrypted backup magic (`LACMP1`/`LCMP1`), `LACMP_*` env fallbacks, and `deploy/relocate-from-lacmp.sh` (historical migrate-from tool).
+**Out of scope / deliberately unchanged:** encrypted backup magic bytes (`LACMP1`/`LCMP1` — wire format for existing archives), and runtime temp/backup filename prefixes (`.lacmp-tmp`, `.lacmp-bak-*`) used by broker file ops. The relocate/migrate scripts themselves are **removed** (see A2).
 
 ## Panel database
 

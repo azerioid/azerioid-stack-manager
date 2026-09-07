@@ -52,13 +52,9 @@ else
     fail "Panel SQLite missing: ${PANEL_DB}"
 fi
 
-# 4. No MariaDB panel DB required
+# 4. No MariaDB panel DB required (panel state is SQLite)
 if command -v mariadb >/dev/null 2>&1; then
-    if mariadb -e "SHOW DATABASES LIKE 'lacmp_panel';" 2>/dev/null | grep -q lacmp_panel; then
-        echo "[WARN] lacmp_panel MariaDB schema exists (not required for bootstrap)"
-    else
-        pass "No MariaDB lacmp_panel schema (expected for bootstrap)"
-    fi
+    pass "MariaDB present on host (optional; not used for panel DB)"
 else
     pass "MariaDB not installed (expected for bootstrap)"
 fi
