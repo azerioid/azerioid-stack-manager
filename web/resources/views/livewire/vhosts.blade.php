@@ -165,21 +165,30 @@
                             @php
                                 $ts = $v['tls_status'] ?? null;
                                 $label = is_array($ts) ? ($ts['label'] ?? null) : null;
-                                $pending = is_array($ts) && (!empty($ts['pending']) || (!empty($ts['failed'])));
+                                $pending = is_array($ts) && !empty($ts['pending']);
+                                $failed = is_array($ts) && !empty($ts['failed']);
                                 $ok = is_array($ts) && !empty($ts['ok']);
                             @endphp
                             @if ($label)
                                 <span @class([
                                     'font-mono',
-                                    'text-good' => $ok && !$pending,
+                                    'text-good' => $ok && !$pending && !$failed,
                                     'text-warn' => $pending,
-                                    'text-zinc-200' => !$ok && !$pending,
+                                    'text-bad' => $failed,
+                                    'text-zinc-200' => !$ok && !$pending && !$failed,
                                 ])>{{ $label }}</span>
                                 @if (!empty($ts['issuer_type']))
                                     <div class="mt-0.5 font-mono text-[10px] uppercase text-zinc-500">{{ $ts['issuer_type'] }} · {{ $v['tls_mode'] ?? '' }}</div>
                                 @endif
+                                @if (!empty($ts['issuer']) || !empty($ts['valid_to']))
+                                    <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
+                                        @if (!empty($ts['issuer'])){{ $ts['issuer'] }}@endif
+                                        @if (!empty($ts['issuer']) && !empty($ts['valid_to'])) · @endif
+                                        @if (!empty($ts['valid_to']))exp {{ $ts['valid_to'] }}@endif
+                                    </div>
+                                @endif
                             @else
-                                {{ !empty($v['tls']) ? (($v['tls_mode'] ?? 'auto')) : 'http' }}
+                                {{ !empty($v['tls']) ? (($v['tls_mode'] ?? 'auto')) : 'No TLS' }}
                             @endif
                         </td>
                         <td class="px-4 py-3 text-right space-x-3">

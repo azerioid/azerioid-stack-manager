@@ -25,6 +25,10 @@ final class CertProbe
     {
         $pem = '';
         $lastError = null;
+        // Hostnames: dial 127.0.0.1 (SNI selects the vhost). Literal IPs (panel :3169): dial that IP —
+        // loopback may only have the plain-HTTP panel site.
+        $connectHost = filter_var($domain, FILTER_VALIDATE_IP) ? $domain : '127.0.0.1';
+        $connect = $connectHost . ':' . $port;
         // Retry briefly: ACME can finish between list loads, and a single s_client during
         // obtain/reload otherwise yields a false "No certificate captured."
         for ($attempt = 1; $attempt <= 3; $attempt++) {
@@ -32,7 +36,7 @@ final class CertProbe
                 '/usr/bin/openssl',
                 's_client',
                 '-connect',
-                '127.0.0.1:' . $port,
+                $connect,
                 '-servername',
                 $domain,
                 '-showcerts',

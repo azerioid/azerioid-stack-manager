@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\Certbot;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
 
 final class NginxDriver implements WebServerDriver
 {
@@ -79,6 +80,12 @@ final class NginxDriver implements WebServerDriver
         if (!$runtime->isDir($root)) {
             $runtime->mkdir($root, 0755);
             $runtime->chown($root, $config->phpUser, $config->phpGroup);
+        }
+        // One-time welcome page for empty php/static docroots (never on edit/reload).
+        $welcome = VhostWelcomePage::seedIfEmpty($runtime, $domain, $root, $type);
+        if ($welcome !== null) {
+            $runtime->chown($welcome, $config->phpUser, $config->phpGroup);
+            $runtime->chmod($welcome, 0664);
         }
         $this->ensureLogDir($runtime, $config);
 

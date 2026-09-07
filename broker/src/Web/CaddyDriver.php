@@ -11,6 +11,7 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\VhostUser;
+use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
 
 final class CaddyDriver implements WebServerDriver
 {
@@ -69,6 +70,8 @@ final class CaddyDriver implements WebServerDriver
         if (!$runtime->isDir($root)) {
             $runtime->mkdir($root, 0755);
         }
+        // One-time welcome page for empty php/static docroots (never on edit/reload).
+        VhostWelcomePage::seedIfEmpty($runtime, $domain, $root, $type);
         if ($type !== 'proxy') {
             VhostUser::ensure($runtime, $config, $domain, $root);
         } else {

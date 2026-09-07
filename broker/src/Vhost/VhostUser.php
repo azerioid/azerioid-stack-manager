@@ -122,10 +122,40 @@ final class VhostUser
         if (!$check->ok()) {
             $runtime->exec(['/usr/sbin/groupadd', '--system', self::GROUP], null, 30);
         }
-        $webUser = $config->webUser;
-        if ($webUser !== '' && $webUser !== 'root') {
-            $runtime->exec(['/usr/sbin/usermod', '-aG', self::GROUP, $webUser], null, 30);
+        // web_user in broker.json can lag the actual process user (e.g. www-data on a
+        // Caddy stack). Add every reader that must open docroots: configured users plus
+        // known web/PHP process users that exist on this host.
+        foreach (self::readerUsers($runtime, $config) as $user) {
+            $runtime->exec(['/usr/sbin/usermod', '-aG', self::GROUP, $user], null, 30);
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function readerUsers(Runtime $runtime, Config $config): array
+    {
+        $candidates = [
+            $config->webUser,
+            $config->phpUser,
+            'caddy',
+            'www-data',
+            'nginx',
+            'apache',
+        ];
+        $out = [];
+        foreach ($candidates as $user) {
+            $user = trim((string) $user);
+            if ($user === '' || $user === 'root' || isset($out[$user])) {
+                continue;
+            }
+            if (!self::userExists($runtime, $user)) {
+                continue;
+            }
+            $out[$user] = $user;
+        }
+
+        return array_values($out);
     }
 
     private static function userExists(Runtime $runtime, string $username): bool

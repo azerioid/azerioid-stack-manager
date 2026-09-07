@@ -73,12 +73,14 @@ class VhostCommand extends Command
                     'mode' => (string) ($ts['mode'] ?? ($row['tls_mode'] ?? 'off')),
                     'issuer_type' => (string) ($ts['issuer_type'] ?? 'none'),
                     'issuer' => $ts['issuer'] ?? null,
+                    'valid_from' => $ts['valid_from'] ?? null,
                     'valid_to' => $ts['valid_to'] ?? null,
                     'days_remaining' => $ts['days_remaining'] ?? null,
                     'ok' => (bool) ($ts['ok'] ?? false),
                     'pending' => (bool) ($ts['pending'] ?? false),
                     'failed' => (bool) ($ts['failed'] ?? false),
-                    'label' => (string) ($ts['label'] ?? (! empty($row['tls']) ? 'tls' : 'http')),
+                    'error' => $ts['error'] ?? null,
+                    'label' => (string) ($ts['label'] ?? (! empty($row['tls']) ? 'tls' : 'No TLS')),
                 ];
 
                 return $row;

@@ -54,15 +54,27 @@ CADDY;
         $this->assertSame('php', $parsed['type']);
     }
 
-    public function test_extracts_www_redirect_domains(): void
+    public function test_extracts_all_site_blocks_preferring_public_listen(): void
     {
         $contents = <<<'CADDY'
-example.com, www.example.com {
-    root * /data/www/example.com
-    php_fastcgi unix//run/php/php8.4-fpm.sock
+http://127.0.0.1:3169 {
+    bind 127.0.0.1
+    root * /usr/local/lib/azerioid-panel/web/public
+    php_fastcgi unix//run/php/azerioid-panel.sock
+    file_server {
+        index index.html
+    }
+}
+https://201.79.10.81:3169 {
+    tls internal
+    root * /usr/local/lib/azerioid-panel/web/public
+    php_fastcgi unix//run/php/azerioid-panel.sock
 }
 CADDY;
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/example.com.conf', $contents, []);
-        $this->assertSame(['example.com', 'www.example.com'], $parsed['domains']);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/azerioid-panel.conf', $contents, []);
+        $this->assertSame(['201.79.10.81:3169', '127.0.0.1:3169'], $parsed['domains']);
+        $this->assertSame('201.79.10.81:3169', $parsed['domain']);
+        $this->assertSame('internal', $parsed['tls_mode']);
+        $this->assertTrue($parsed['readonly']);
     }
 }

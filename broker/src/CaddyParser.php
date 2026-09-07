@@ -88,23 +88,38 @@ final class CaddyParser
     public static function extractDomains(string $contents): array
     {
         $contents = preg_replace('/^\s*#.*$/m', '', $contents) ?? $contents;
-        if (!preg_match('/^([^{\n]+)\{/m', $contents, $m)) {
+        // Site address lines are unindented; ignore nested blocks (file_server {, header {, …).
+        if (!preg_match_all('/^(\S[^{\n]*?)[ \t]*\{/m', $contents, $matches, PREG_SET_ORDER)) {
             return [];
         }
-        $header = trim($m[1]);
-        $parts = array_map('trim', explode(',', $header));
         $domains = [];
-        foreach ($parts as $part) {
-            if ($part === '' || $part === ':80' || $part === ':443') {
-                continue;
-            }
-            $part = preg_replace('/^https?:\/\//', '', $part) ?? $part;
-            $part = strtolower($part);
-            if ($part !== '') {
-                $domains[] = $part;
+        foreach ($matches as $m) {
+            $header = trim($m[1]);
+            $parts = array_map('trim', explode(',', $header));
+            foreach ($parts as $part) {
+                if ($part === '' || $part === ':80' || $part === ':443') {
+                    continue;
+                }
+                $part = preg_replace('/^https?:\/\//', '', $part) ?? $part;
+                $part = strtolower($part);
+                if ($part !== '') {
+                    $domains[] = $part;
+                }
             }
         }
-        return array_values(array_unique($domains));
+        $domains = array_values(array_unique($domains));
+        // Prefer non-loopback listen addresses first (panel HTTPS is often PUBLIC:port).
+        usort($domains, static function (string $a, string $b): int {
+            $aLoop = str_starts_with($a, '127.') || str_starts_with($a, 'localhost');
+            $bLoop = str_starts_with($b, '127.') || str_starts_with($b, 'localhost');
+            if ($aLoop !== $bLoop) {
+                return $aLoop ? 1 : -1;
+            }
+
+            return strcmp($a, $b);
+        });
+
+        return $domains;
     }
 
     private static function match(string $contents, string $pattern): ?string
