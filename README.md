@@ -210,23 +210,23 @@ azerioid version --json
 | Command | Description |
 |---------|-------------|
 | `azerioid vhost list [--stack=caddy\|apache\|nginx] [--json]` | List managed vhosts; JSON includes `tls_status` (issuer, expiry, pending/failed) |
-| `azerioid vhost add --domain=<d> --type=php\|static\|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls=auto\|dns\|self\|off] [--dns-provider=…] [--wildcard] [--staging]` | Create a vhost; optional TLS issuance |
+| `azerioid vhost add --domain=<d> --type=php\|static\|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls=off\|auto\|internal\|dns01] [--dns-provider=…] [--wildcard] [--staging]` | Create a vhost; optional TLS issuance |
 | `azerioid vhost edit --domain=<d> [--php=<v>] [--root=<path>] [--tls=…] [--dns-provider=…] [--wildcard] [--staging]` | Update PHP version, docroot, or TLS mode |
 | `azerioid vhost del --domain=<d>` | Delete a vhost (site files left in place) |
 
-`--tls` alone means `auto`. For `--tls=dns`, pass `--dns-provider=cloudflare|digitalocean` and set `AZERIOID_DNS_API_TOKEN` (or `DNS_API_TOKEN`) in the environment — never argv. Use `--staging` against Let’s Encrypt staging during tests.
+`--tls` alone means `auto`. Canonical modes match the broker: `off`, `auto`, `internal`, `dns01`. Aliases: `dns`→`dns01`, `self`→`internal`, `on`→`auto`. For `--tls=dns01`, pass `--dns-provider=cloudflare|digitalocean` and set `AZERIOID_DNS_API_TOKEN` (or `DNS_API_TOKEN`) in the environment — never argv. Use `--staging` against Let’s Encrypt staging during tests.
 
 ```bash
 azerioid vhost list --json
 # {"vhosts":[{"domain":"example.com","tls_status":{"issuer_type":"lets_encrypt","label":"Let's Encrypt (HTTP-01) · exp …",…},…}, …]}
 
 azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/www/app.example.com --tls=auto
-azerioid vhost edit --domain=app.example.com --tls=self
+azerioid vhost edit --domain=app.example.com --tls=internal
 azerioid vhost edit --domain=app.example.com --tls=off
 
 # DNS-01 (token via env only):
 export AZERIOID_DNS_API_TOKEN='…'
-azerioid vhost add --domain=prepoint.example.com --type=static --tls=dns --dns-provider=cloudflare --staging
+azerioid vhost add --domain=prepoint.example.com --type=static --tls=dns01 --dns-provider=cloudflare --staging
 azerioid vhost del --domain=app.example.com
 
 # Panel / readonly vhost is refused:

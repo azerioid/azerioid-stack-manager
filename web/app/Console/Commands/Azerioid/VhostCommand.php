@@ -17,9 +17,9 @@ class VhostCommand extends Command
         {--php= : PHP version for php vhosts}
         {--root= : Document root}
         {--upstream= : Upstream host:port for proxy vhosts}
-        {--tls= : auto|dns|self|off (aliases: on=auto, dns01=dns, internal=self)}
+        {--tls= : off|auto|internal|dns01 (aliases: on=auto, dns=dns01, self=internal)}
         {--tls-mode= : Alias of --tls=}
-        {--dns-provider= : cloudflare|digitalocean (for --tls=dns)}
+        {--dns-provider= : cloudflare|digitalocean (for --tls=dns01)}
         {--wildcard : Also request *.apex for DNS-01}
         {--staging : Use Let\'s Encrypt staging}
         {--stack= : Filter list by caddy|apache|nginx}
@@ -237,7 +237,7 @@ class VhostCommand extends Command
         if ($mode === TlsMode::DNS01) {
             $provider = strtolower(trim((string) $this->option('dns-provider')));
             if ($provider === '') {
-                throw new \RuntimeException('--dns-provider=cloudflare|digitalocean is required with --tls=dns.');
+                throw new \RuntimeException('--dns-provider=cloudflare|digitalocean is required with --tls=dns01.');
             }
             $payload['dns_provider'] = $provider;
             $token = (string) (getenv('AZERIOID_DNS_API_TOKEN') ?: getenv('DNS_API_TOKEN') ?: '');
@@ -271,7 +271,7 @@ class VhostCommand extends Command
             'off', '0', 'false', 'no', 'http' => TlsMode::OFF,
             'self', 'self-signed', 'selfsigned', 'internal', 'snakeoil' => TlsMode::INTERNAL,
             'dns', 'dns01', 'dns-01', 'wildcard' => TlsMode::DNS01,
-            default => throw new \RuntimeException('--tls must be auto|dns|self|off.'),
+            default => throw new \RuntimeException('--tls must be off|auto|internal|dns01 (aliases: dns, self, on).'),
         };
     }
 

@@ -31,7 +31,12 @@ final class TlsModeTest extends TestCase
         $this->assertSame(TlsMode::AUTO, TlsMode::normalize(true));
         $this->assertSame(TlsMode::OFF, TlsMode::normalize(false));
         $this->assertSame(TlsMode::INTERNAL, TlsMode::normalize('self-signed'));
+        $this->assertSame(TlsMode::INTERNAL, TlsMode::normalize('self'));
         $this->assertSame(TlsMode::DNS01, TlsMode::normalize('dns'));
+        // Every canonical enum value must round-trip (regression: 'auto' was missing from the match).
+        foreach (TlsMode::ALL as $mode) {
+            $this->assertSame($mode, TlsMode::normalize($mode), "canonical {$mode} must normalize to itself");
+        }
     }
 
     public function test_caddy_parser_detects_tls_modes(): void

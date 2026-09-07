@@ -37,10 +37,11 @@ final class TlsMode
             return $legacyTlsBool ? self::AUTO : self::OFF;
         }
         return match ($raw) {
-            '1', 'true', 'yes', 'on', 'http01', 'http-01', 'acme', 'letsencrypt', 'le' => self::AUTO,
-            '0', 'false', 'no', 'off', 'http' => self::OFF,
-            'internal', 'self-signed', 'selfsigned', 'snakeoil' => self::INTERNAL,
-            'dns01', 'dns-01', 'dns', 'wildcard' => self::DNS01,
+            // Canonical values first (must always round-trip).
+            self::AUTO, '1', 'true', 'yes', 'on', 'http01', 'http-01', 'acme', 'letsencrypt', 'le' => self::AUTO,
+            self::OFF, '0', 'false', 'no', 'http' => self::OFF,
+            self::INTERNAL, 'self', 'self-signed', 'selfsigned', 'snakeoil' => self::INTERNAL,
+            self::DNS01, 'dns-01', 'dns', 'wildcard' => self::DNS01,
             default => throw new BrokerException(
                 'tls_mode must be off|auto|internal|dns01.',
                 2

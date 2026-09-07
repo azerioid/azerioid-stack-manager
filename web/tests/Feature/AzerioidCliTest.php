@@ -91,7 +91,7 @@ class AzerioidCliTest extends TestCase
         $code = Artisan::call('azerioid:help');
         $this->assertSame(0, $code);
         $out = Artisan::output();
-        $this->assertStringContainsString('--tls=auto|dns|self|off', $out);
+        $this->assertStringContainsString('--tls=off|auto|internal|dns01', $out);
         $this->assertStringContainsString('AZERIOID_DNS_API_TOKEN', $out);
     }
 
