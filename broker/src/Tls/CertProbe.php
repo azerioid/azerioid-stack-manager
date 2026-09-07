@@ -23,23 +23,40 @@ final class CertProbe
      */
     public static function probe(Runtime $runtime, string $domain, string $tlsMode = TlsMode::AUTO, int $port = 443): array
     {
-        $raw = $runtime->exec([
-            '/usr/bin/openssl',
-            's_client',
-            '-connect',
-            '127.0.0.1:' . $port,
-            '-servername',
-            $domain,
-        ], "\n", 8);
         $pem = '';
-        if (preg_match('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $raw->stdout . $raw->stderr, $m)) {
-            $pem = $m[0];
+        $lastError = null;
+        // Retry briefly: ACME can finish between list loads, and a single s_client during
+        // obtain/reload otherwise yields a false "No certificate captured."
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $raw = $runtime->exec([
+                '/usr/bin/openssl',
+                's_client',
+                '-connect',
+                '127.0.0.1:' . $port,
+                '-servername',
+                $domain,
+                '-showcerts',
+            ], "\n", 8);
+            if (preg_match('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $raw->stdout . $raw->stderr, $m)) {
+                $pem = $m[0];
+                break;
+            }
+            $lastError = trim($raw->stderr) !== '' ? trim($raw->stderr) : 'No certificate captured.';
+            if ($attempt < 3) {
+                usleep(250_000);
+            }
         }
         if ($pem === '') {
+            $err = $lastError ?? 'No certificate captured.';
+            // Keep operator-facing text short (full openssl stderr is noisy).
+            if (strlen($err) > 120 || str_contains(strtolower($err), 'verify return')) {
+                $err = 'No certificate captured yet (ACME may still be running).';
+            }
+
             return [
                 'domain' => $domain,
                 'ok' => false,
-                'error' => 'No certificate captured.',
+                'error' => $err,
                 'issuer' => null,
                 'issuer_type' => $tlsMode === TlsMode::OFF ? 'none' : 'pending',
                 'valid_from' => null,

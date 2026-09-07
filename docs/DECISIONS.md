@@ -131,3 +131,7 @@ The uninstall path performs the same panel-scoped flush before removing the jail
 **Secrets:** DNS API tokens only via broker stdin → root-only `0600` files under `/etc/azerioid-panel/dns-credentials/`. Never argv, never logged.
 
 **UI:** Vhost create/edit offer Automatic / DNS challenge / Self-signed. List TLS column shows issuer type + expiry (from live probe), not a boolean yes/http. Settings can rotate DNS provider credentials without re-displaying the secret. CLI mirrors the same TLS flags (`--tls=auto|dns|self`, env token for DNS-01).
+
+**Scope note (panel-only Caddy):** `auto_https disable_redirects` is written **only** in the panel-only Caddyfile produced by `SitePortReleaser` when site ports are released to Nginx/Apache. It must never appear in the global multi-vhost Caddyfile — user sites still need ACME HTTP-01 on `:80`.
+
+**Operator note:** CertProbe reads the origin cert via `127.0.0.1:443` + SNI. If the domain is orange-clouded at Cloudflare, browsers may see a Cloudflare edge cert while the panel correctly shows Let's Encrypt on origin. Grey-cloud (DNS only) for HTTP-01 troubleshooting, or use CF Full (strict) once origin LE is issued.

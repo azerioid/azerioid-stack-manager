@@ -68,7 +68,7 @@ final class VhostList
                 'lets_encrypt' => 'Let\'s Encrypt (HTTP-01)',
                 'dns01' => 'Let\'s Encrypt (DNS-01)',
                 'self_signed' => 'self-signed',
-                'pending' => 'pending / failed',
+                'pending' => 'pending (obtaining or not yet served)',
                 'none' => 'http',
                 default => 'TLS (unknown)',
             };
@@ -91,7 +91,8 @@ final class VhostList
                 'renewal' => $info['renewal'],
                 'ok' => (bool) ($info['ok'] ?? false),
                 'pending' => $issuerType === 'pending',
-                'failed' => $issuerType === 'pending' && !($info['ok'] ?? false),
+                // Only mark failed when we have a concrete non-pending error; "no cert yet" is pending.
+                'failed' => $issuerType !== 'pending' && $issuerType !== 'none' && !($info['ok'] ?? false),
                 'error' => $info['error'],
                 'label' => $label,
             ];

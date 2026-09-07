@@ -138,6 +138,9 @@ final class SitePortReleaser
     {
         $import = rtrim($confD, '/') . '/azerioid-panel.conf';
 
+        // auto_https disable_redirects MUST stay in this panel-only Caddyfile only.
+        // Never put it in the global multi-vhost Caddyfile — that would suppress HTTP→HTTPS
+        // redirects (and confuse operators) for user sites that still need ACME HTTP-01 on :80.
         return <<<EOF
 # AZERIOID Stack Manager — panel Caddy only (site ports released for Nginx/Apache)
 {
