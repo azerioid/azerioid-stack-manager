@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# System-wide AZERIOID Stack Manager CLI — thin wrapper over Artisan → broker.
+set -euo pipefail
+
+PREFIX="${AZERIOID_PANEL_PREFIX:-/usr/local/lib/azerioid-panel}"
+WEB="${PREFIX}/web"
+ARTISAN="${WEB}/artisan"
+
+if [[ ! -f "${ARTISAN}" ]]; then
+    echo "azerioid: panel not installed at ${PREFIX}" >&2
+    exit 1
+fi
+
+PHP_BIN="${AZERIOID_BROKER_PHP:-}"
+if [[ -z "${PHP_BIN}" ]]; then
+    if [[ -x /usr/bin/php${PANEL_PHP_VERSION:-8.4} ]]; then
+        PHP_BIN="/usr/bin/php${PANEL_PHP_VERSION:-8.4}"
+    elif command -v php >/dev/null 2>&1; then
+        PHP_BIN="$(command -v php)"
+    else
+        PHP_BIN=/usr/bin/php
+    fi
+fi
+
+if [[ $# -lt 1 ]]; then
+    exec "${PHP_BIN}" "${ARTISAN}" azerioid:help
+fi
+
+cmd="$1"
+shift || true
+
+case "${cmd}" in
+    help|-h|--help)
+        exec "${PHP_BIN}" "${ARTISAN}" azerioid:help
+        ;;
+    status|version|audit)
+        exec "${PHP_BIN}" "${ARTISAN}" "azerioid:${cmd}" "$@"
+        ;;
+    vhost|db|component|service|process)
+        # Map user-facing --version= to Artisan --pkg-version= (Symfony reserves --version).
+        mapped=()
+        for arg in "$@"; do
+            case "${arg}" in
+                --version=*)
+                    mapped+=("--pkg-version=${arg#--version=}")
+                    ;;
+                --version)
+                    # next arg is the value — rare; leave as-is and document --version=
+                    mapped+=("${arg}")
+                    ;;
+                *)
+                    mapped+=("${arg}")
+                    ;;
+            esac
+        done
+        exec "${PHP_BIN}" "${ARTISAN}" "azerioid:${cmd}" "${mapped[@]}"
+        ;;
+    *)
+        echo "azerioid: unknown command '${cmd}'" >&2
+        echo "Try: azerioid help" >&2
+        exit 2
+        ;;
+esac

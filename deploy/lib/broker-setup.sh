@@ -18,6 +18,12 @@ install_broker() {
     chmod -R go-rwx "${PREFIX}/src"
     install -m 0750 -o root -g root "${ROOT}/broker/broker" "${PREFIX}/broker"
     install -m 0640 -o root -g root "${ROOT}/broker/broker.php" "${PREFIX}/broker.php"
+    if [[ -f "${ROOT}/VERSION" ]]; then
+        install -m 0644 -o root -g root "${ROOT}/VERSION" "${PREFIX}/VERSION"
+    fi
+    if [[ -f "${ROOT}/deploy/bin/azerioid" ]]; then
+        install -m 0755 -o root -g root "${ROOT}/deploy/bin/azerioid" /usr/local/bin/azerioid
+    fi
 
     local sudoers=/etc/sudoers.d/azerioid-panel
     cat > "${sudoers}" <<EOF

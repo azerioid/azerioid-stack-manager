@@ -134,6 +134,21 @@ Full teardown (panel + broker-managed components + added repos; still skips `/da
 sudo ./deploy/uninstall.sh --full
 ```
 
+## CLI (`azerioid`)
+
+After install, `/usr/local/bin/azerioid` wraps the same broker actions the dashboard uses:
+
+```bash
+azerioid status
+azerioid vhost list --json
+azerioid db add --engine=postgresql --name=app
+azerioid component install redis
+azerioid process list
+azerioid help
+```
+
+Mutating commands are audited like the UI (`origin=cli` in the audit args). Generated DB passwords are printed once and never accepted via argv.
+
 ## Smoke tests
 
 After install on a VM:
