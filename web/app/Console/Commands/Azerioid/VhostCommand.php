@@ -68,7 +68,9 @@ class VhostCommand extends Command
                 (string) ($v['type'] ?? ''),
                 (string) ($v['php_version'] ?? ''),
                 (string) ($v['root'] ?? ''),
-                ! empty($v['tls']) ? 'yes' : 'no',
+                ! empty($v['tls_status']['label'])
+                    ? (string) $v['tls_status']['label']
+                    : (! empty($v['tls']) ? (string) ($v['tls_mode'] ?? 'yes') : 'http'),
                 ! empty($v['readonly']) ? 'yes' : 'no',
                 (string) ($v['stack'] ?? ''),
             ];
@@ -155,15 +157,20 @@ class VhostCommand extends Command
             if ($tlsMode === '') {
                 $tlsRaw = $this->option('tls');
                 if ($tlsRaw === true || $tlsRaw === '') {
-                    $tlsMode = 'on';
+                    $tlsMode = 'auto';
                 } elseif (is_string($tlsRaw) && $tlsRaw !== '') {
                     $tlsMode = strtolower($tlsRaw);
                 }
             }
             if (in_array($tlsMode, ['on', '1', 'true', 'yes'], true)) {
+                $payload['tls_mode'] = 'auto';
                 $payload['tls'] = true;
             } elseif (in_array($tlsMode, ['off', '0', 'false', 'no'], true)) {
+                $payload['tls_mode'] = 'off';
                 $payload['tls'] = false;
+            } elseif (in_array($tlsMode, ['auto', 'internal', 'dns01'], true)) {
+                $payload['tls_mode'] = $tlsMode;
+                $payload['tls'] = $tlsMode !== 'off';
             }
 
             $res = $this->brokerCall('vhost.edit', [$domain], $payload);

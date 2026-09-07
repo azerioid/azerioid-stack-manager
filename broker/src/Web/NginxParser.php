@@ -47,6 +47,19 @@ final class NginxParser
         }
 
         $tls = (bool) preg_match('/^\s*listen\s+443\b/m', $contents);
+        $tlsCert = self::match($contents, '/^\s*ssl_certificate\s+([^;]+);/m');
+        $tlsKey = self::match($contents, '/^\s*ssl_certificate_key\s+([^;]+);/m');
+        $tlsMode = 'off';
+        if ($tls) {
+            $cert = (string) $tlsCert;
+            if (str_contains($cert, 'snakeoil') || str_contains($cert, 'ssl-cert-snakeoil')) {
+                $tlsMode = 'internal';
+            } elseif (str_contains($cert, '/etc/letsencrypt/')) {
+                $tlsMode = str_contains($contents, 'azerioid-tls-mode=dns01') ? 'dns01' : 'auto';
+            } else {
+                $tlsMode = 'auto';
+            }
+        }
 
         return [
             'domains' => $domains,
@@ -56,6 +69,9 @@ final class NginxParser
             'php_version' => $phpVersion,
             'type' => $type,
             'tls' => $tls,
+            'tls_mode' => $tlsMode,
+            'tls_cert' => $tlsCert,
+            'tls_key' => $tlsKey,
             'reverse_proxy' => $type === 'proxy' ? $proxy : null,
             'readonly' => ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
             'enabled' => $enabled,

@@ -43,13 +43,13 @@ class VhostPolicyTest extends TestCase
     {
         $this->actingAs($this->admin());
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('domain', 'shop.example.com')
+            ->set('domain', 'trav.example.com')
             ->set('root', '/data/www/../etc/passwd')
             ->set('type', 'php')
             ->set('php_version', '8.4')
             ->call('create');
         $this->assertTrue(
-            collect($this->app->make(FakeBroker::class)->vhosts)->every(fn ($v) => $v['domain'] !== 'shop.example.com')
+            collect($this->app->make(FakeBroker::class)->vhosts)->every(fn ($v) => $v['domain'] !== 'trav.example.com')
         );
     }
 
@@ -57,15 +57,15 @@ class VhostPolicyTest extends TestCase
     {
         $this->actingAs($this->admin());
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('domain', 'shop.example.com')
-            ->set('root', '/data/www/shop.example.com')
+            ->set('domain', 'newshop.example.com')
+            ->set('root', '/data/www/newshop.example.com')
             ->set('type', 'php')
             ->set('php_version', '8.4')
             ->call('create')
             ->assertSet('error', null);
 
         $domains = array_column($this->app->make(FakeBroker::class)->vhosts, 'domain');
-        $this->assertContains('shop.example.com', $domains);
+        $this->assertContains('newshop.example.com', $domains);
     }
 
     public function test_failed_caddy_validate_does_not_keep_the_vhost(): void
@@ -131,31 +131,24 @@ class VhostPolicyTest extends TestCase
     {
         $this->actingAs($this->admin());
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('domain', 'shop.example.com')
+            ->set('domain', 'outside.example.com')
             ->set('root', '/etc/passwd')
             ->set('type', 'php')
             ->set('php_version', '8.4')
             ->call('create');
-        $this->assertNotContains('shop.example.com', array_column($this->app->make(FakeBroker::class)->vhosts, 'domain'));
+        $this->assertNotContains('outside.example.com', array_column($this->app->make(FakeBroker::class)->vhosts, 'domain'));
     }
 
     public function test_editable_vhost_can_be_updated_from_ui(): void
     {
         $this->actingAs($this->admin());
         $fake = $this->app->make(FakeBroker::class);
-        Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('domain', 'shop.example.com')
-            ->set('root', '/data/www/shop.example.com')
-            ->set('type', 'php')
-            ->set('php_version', '8.4')
-            ->call('create')
-            ->assertSet('error', null);
-
+        // shop.example.com is seeded editable — edit it directly
         Livewire::test(\App\Livewire\VhostsPage::class)
             ->call('startEdit', 'shop.example.com')
             ->assertSet('editingDomain', 'shop.example.com')
             ->set('editRoot', '/data/www/shop-moved.example.com')
-            ->set('editTls', true)
+            ->set('editTlsMode', 'auto')
             ->call('saveEdit')
             ->assertSet('error', null)
             ->assertSet('flash', 'Updated shop.example.com.');

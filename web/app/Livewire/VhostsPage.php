@@ -31,7 +31,12 @@ class VhostsPage extends Component
     public string $editRoot = '';
     public string $editPhpVersion = '';
     public bool $editTls = false;
+    public string $editTlsMode = 'off';
+    public string $editDnsProvider = '';
+    public string $editDnsToken = '';
+    public bool $editAcmeStaging = false;
     public string $editType = 'php';
+    public array $dnsProviders = [];
 
     public function mount(BrokerClient $broker): void
     {
@@ -89,6 +94,10 @@ class VhostsPage extends Component
             $this->editRoot = (string) ($v['root'] ?? '');
             $this->editPhpVersion = (string) ($v['php_version'] ?? $this->php_version);
             $this->editTls = ! empty($v['tls']);
+            $this->editTlsMode = (string) ($v['tls_mode'] ?? ($this->editTls ? 'auto' : 'off'));
+            $this->editDnsProvider = '';
+            $this->editDnsToken = '';
+            $this->editAcmeStaging = false;
 
             return;
         }
@@ -97,7 +106,7 @@ class VhostsPage extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editType');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editType');
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -108,13 +117,37 @@ class VhostsPage extends Component
         $this->error = null;
         try {
             $domain = Validator::domain($this->editingDomain);
+            $mode = $this->editTlsMode;
+            if ($mode === '' || $mode === 'off') {
+                $mode = $this->editTls ? 'auto' : 'off';
+            }
             $payload = [
                 'domain' => $domain,
                 'root' => Validator::webRoot($this->editRoot, (string) config('azerioid.www_root'), new \AzerioidPanel\Broker\FakeRuntime()),
-                'tls' => $this->editTls,
+                'tls_mode' => $mode,
+                'tls' => $mode !== 'off',
             ];
             if ($this->editType === 'php') {
                 $payload['php_version'] = Validator::phpVersion($this->editPhpVersion, $this->phpVersions);
+            }
+            if ($mode === 'dns01') {
+                if ($this->editDnsProvider === '') {
+                    throw new \RuntimeException('Choose a DNS provider for DNS-01.');
+                }
+                $payload['dns_provider'] = $this->editDnsProvider;
+                if (trim($this->editDnsToken) !== '') {
+                    $store = $broker->call('tls.dns-credential.store', [], [
+                        'provider' => $this->editDnsProvider,
+                        'token' => $this->editDnsToken,
+                    ]);
+                    if (! $store->ok) {
+                        throw new \RuntimeException((string) $store->error);
+                    }
+                    $this->editDnsToken = '';
+                }
+            }
+            if ($this->editAcmeStaging) {
+                $payload['staging'] = true;
             }
             $res = $broker->call('vhost.edit', [$domain], $payload);
             if (! $res->ok) {
@@ -185,6 +218,14 @@ class VhostsPage extends Component
                     }
                 }
             } catch (BrokerCallException) {
+            }
+            try {
+                $this->dnsProviders = $broker->call('tls.dns-providers', [], [], null, false)->dataOrFail()['providers'] ?? [];
+            } catch (BrokerCallException) {
+                $this->dnsProviders = [
+                    ['id' => 'cloudflare', 'display_name' => 'Cloudflare', 'credentials_present' => false],
+                    ['id' => 'digitalocean', 'display_name' => 'DigitalOcean', 'credentials_present' => false],
+                ];
             }
         } catch (BrokerCallException $e) {
             $this->error = $e->getMessage();

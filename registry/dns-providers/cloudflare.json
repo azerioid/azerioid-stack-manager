@@ -1,0 +1,13 @@
+{
+  "id": "cloudflare",
+  "display_name": "Cloudflare",
+  "certbot_plugin": "dns-cloudflare",
+  "plugin_packages": {
+    "deb": ["python3-certbot-dns-cloudflare"],
+    "rpm": ["python3-certbot-dns-cloudflare"]
+  },
+  "credentials_flag": "--dns-cloudflare-credentials",
+  "credentials_template": "# Cloudflare API token (Zone:DNS:Edit)\ndns_cloudflare_api_token = {token}\n",
+  "token_env": "CF_API_TOKEN",
+  "notes": "Create an API token with Zone.DNS Edit for the zone."
+}

@@ -1,0 +1,13 @@
+{
+  "id": "digitalocean",
+  "display_name": "DigitalOcean",
+  "certbot_plugin": "dns-digitalocean",
+  "plugin_packages": {
+    "deb": ["python3-certbot-dns-digitalocean"],
+    "rpm": ["python3-certbot-dns-digitalocean"]
+  },
+  "credentials_flag": "--dns-digitalocean-credentials",
+  "credentials_template": "# DigitalOcean personal access token\ndns_digitalocean_token = {token}\n",
+  "token_env": "DO_API_TOKEN",
+  "notes": "Create a Personal Access Token with write access."
+}

@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\CaddyCli;
 use AzerioidPanel\Broker\CaddyParser;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 
 final class CaddyDriver implements WebServerDriver
@@ -55,7 +56,16 @@ final class CaddyDriver implements WebServerDriver
         }
         $this->assertDomainFree($runtime, $config, $domain);
 
-        $contents = $this->render($runtime, $config, $domain, $root, $type, $phpVersion, $upstream);
+        $contents = $this->render(
+            $runtime,
+            $config,
+            $domain,
+            $root,
+            $type,
+            $phpVersion,
+            $upstream,
+            TlsMode::OFF
+        );
         if (!$runtime->isDir($root)) {
             $runtime->mkdir($root, 0755);
         }
@@ -182,7 +192,9 @@ final class CaddyDriver implements WebServerDriver
             $spec['type'],
             $spec['php_version'],
             $spec['upstream'],
-            $spec['tls']
+            $spec['tls_mode'],
+            $spec['tls_cert'],
+            $spec['tls_key'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -222,7 +234,10 @@ final class CaddyDriver implements WebServerDriver
         $after = $this->editSnapshot(array_merge($parsed, [
             'root' => $spec['root'],
             'php_version' => $spec['php_version'],
-            'tls' => $spec['tls'],
+            'tls' => TlsMode::enabled($spec['tls_mode']),
+            'tls_mode' => $spec['tls_mode'],
+            'tls_cert' => $spec['tls_cert'],
+            'tls_key' => $spec['tls_key'],
             'type' => $spec['type'],
         ]));
 
@@ -233,7 +248,8 @@ final class CaddyDriver implements WebServerDriver
             'root' => $spec['root'],
             'type' => $spec['type'],
             'php_version' => $spec['php_version'],
-            'tls' => $spec['tls'],
+            'tls' => TlsMode::enabled($spec['tls_mode']),
+            'tls_mode' => $spec['tls_mode'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -317,9 +333,25 @@ final class CaddyDriver implements WebServerDriver
         string $type,
         ?string $phpVersion,
         ?string $upstream,
-        bool $tls = true,
+        string $tlsMode = TlsMode::AUTO,
+        ?string $tlsCert = null,
+        ?string $tlsKey = null,
     ): string {
-        $siteLabel = $tls ? $domain : "http://{$domain}";
+        $mode = TlsMode::effective($tlsMode, $domain);
+        if ($mode === TlsMode::OFF) {
+            $siteLabel = "http://{$domain}";
+            $tlsLine = '';
+        } else {
+            $siteLabel = $domain;
+            if ($mode === TlsMode::INTERNAL) {
+                $tlsLine = "    tls internal\n";
+            } elseif (($mode === TlsMode::DNS01 || $tlsCert !== null) && $tlsCert !== null && $tlsKey !== null) {
+                $tlsLine = "    tls {$tlsCert} {$tlsKey}\n";
+            } else {
+                // Native Caddy automatic HTTPS (Let's Encrypt HTTP-01).
+                $tlsLine = '';
+            }
+        }
         $phpBlock = '';
         $proxyBlock = '';
         if ($type === 'php' && $phpVersion !== null) {
@@ -334,7 +366,7 @@ final class CaddyDriver implements WebServerDriver
 
         return <<<EOF
 {$siteLabel} {
-    header {
+{$tlsLine}    header {
         Strict-Transport-Security "max-age=31536000; preload"
         X-Content-Type-Options nosniff
         X-Frame-Options SAMEORIGIN
@@ -352,7 +384,7 @@ final class CaddyDriver implements WebServerDriver
 EOF;
     }
 
-    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls:bool} */
+    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string} */
     private function mergeEditSpec(Runtime $runtime, Config $config, string $domain, array $parsed, array $changes): array
     {
         $type = (string) ($parsed['type'] ?? 'static');
@@ -372,25 +404,40 @@ EOF;
         if ($type === 'php' && ($phpVersion === null || $phpVersion === '')) {
             throw new BrokerException('php_version is required for PHP vhosts.', 2);
         }
-        $tls = array_key_exists('tls', $changes) ? (bool) $changes['tls'] : (bool) ($parsed['tls'] ?? true);
         $upstream = $parsed['reverse_proxy'] ?? null;
+
+        if (isset($changes['tls_mode'])) {
+            $tlsMode = TlsMode::normalize($changes['tls_mode']);
+        } elseif (array_key_exists('tls', $changes)) {
+            $tlsMode = TlsMode::normalize((bool) $changes['tls']);
+        } else {
+            $tlsMode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+        }
+        $tlsMode = TlsMode::effective($tlsMode, $domain);
+        $tlsCert = $changes['tls_cert'] ?? ($parsed['tls_cert'] ?? null);
+        $tlsKey = $changes['tls_key'] ?? ($parsed['tls_key'] ?? null);
 
         return [
             'root' => $root,
             'type' => $type,
             'php_version' => $type === 'php' ? $phpVersion : null,
             'upstream' => $type === 'proxy' ? $upstream : null,
-            'tls' => $tls,
+            'tls_mode' => $tlsMode,
+            'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
+            'tls_key' => is_string($tlsKey) ? $tlsKey : null,
         ];
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,type:string} */
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string} */
     private function editSnapshot(array $parsed): array
     {
+        $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+
         return [
             'root' => $parsed['root'] ?? null,
             'php_version' => $parsed['php_version'] ?? null,
-            'tls' => (bool) ($parsed['tls'] ?? false),
+            'tls' => TlsMode::enabled($mode),
+            'tls_mode' => $mode,
             'type' => (string) ($parsed['type'] ?? 'static'),
         ];
     }

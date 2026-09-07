@@ -6,6 +6,8 @@ namespace AzerioidPanel\Broker\Web;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Tls\Certbot;
+use AzerioidPanel\Broker\Tls\TlsMode;
 
 final class ApacheDriver implements WebServerDriver
 {
@@ -193,7 +195,9 @@ final class ApacheDriver implements WebServerDriver
             $spec['type'],
             $spec['php_version'],
             $spec['upstream'],
-            $spec['tls']
+            $spec['tls_mode'],
+            $spec['tls_cert'],
+            $spec['tls_key'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -223,7 +227,8 @@ final class ApacheDriver implements WebServerDriver
         $after = $this->editSnapshot(array_merge($parsed, [
             'root' => $spec['root'],
             'php_version' => $spec['php_version'],
-            'tls' => $spec['tls'],
+            'tls' => TlsMode::enabled($spec['tls_mode']),
+            'tls_mode' => $spec['tls_mode'],
             'type' => $spec['type'],
         ]));
 
@@ -234,7 +239,8 @@ final class ApacheDriver implements WebServerDriver
             'root' => $spec['root'],
             'type' => $spec['type'],
             'php_version' => $spec['php_version'],
-            'tls' => $spec['tls'],
+            'tls' => TlsMode::enabled($spec['tls_mode']),
+            'tls_mode' => $spec['tls_mode'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -463,8 +469,11 @@ final class ApacheDriver implements WebServerDriver
         string $type,
         ?string $phpVersion,
         ?string $upstream,
-        bool $tls = false,
+        string $tlsMode = TlsMode::OFF,
+        ?string $tlsCert = null,
+        ?string $tlsKey = null,
     ): string {
+        $mode = TlsMode::effective($tlsMode, $domain);
         $logs = $config->webLogDir;
         $phpBlock = '';
         $proxyBlock = '';
@@ -493,25 +502,47 @@ PHP;
 DIR;
         }
 
+        $acmeRoot = Certbot::WEBROOT;
+        $acmeBlock = <<<ACME
+    Alias /.well-known/acme-challenge/ {$acmeRoot}/.well-known/acme-challenge/
+    <Directory {$acmeRoot}/.well-known/acme-challenge/>
+        Options None
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+ACME;
+
         $http = <<<EOF
 <VirtualHost *:80>
     ServerName {$domain}
-{$dirBlock}{$phpBlock}{$proxyBlock}    ErrorLog  {$logs}/{$domain}-error.log
+{$dirBlock}{$acmeBlock}{$phpBlock}{$proxyBlock}    ErrorLog  {$logs}/{$domain}-error.log
     CustomLog {$logs}/{$domain}-access.log combined
 </VirtualHost>
 
 EOF;
 
-        if (!$tls) {
+        if ($mode === TlsMode::OFF) {
             return $http;
         }
 
+        if ($mode === TlsMode::INTERNAL || ($tlsCert === null || $tlsKey === null)) {
+            $cert = '/etc/ssl/certs/ssl-cert-snakeoil.pem';
+            $key = '/etc/ssl/private/ssl-cert-snakeoil.key';
+            $tag = '# azerioid-tls-mode=internal';
+        } else {
+            $cert = $tlsCert;
+            $key = $tlsKey;
+            $tag = $mode === TlsMode::DNS01 ? '# azerioid-tls-mode=dns01' : '# azerioid-tls-mode=auto';
+        }
+
         $ssl = <<<EOF
+{$tag}
 <VirtualHost *:443>
     ServerName {$domain}
     SSLEngine on
-    SSLCertificateFile /etc/ssl/certs/ssl-cert-snakeoil.pem
-    SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
+    SSLCertificateFile {$cert}
+    SSLCertificateKeyFile {$key}
 {$dirBlock}{$phpBlock}{$proxyBlock}    ErrorLog  {$logs}/{$domain}-ssl-error.log
     CustomLog {$logs}/{$domain}-ssl-access.log combined
 </VirtualHost>
@@ -521,10 +552,11 @@ EOF;
         return $http . $ssl;
     }
 
-    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls:bool} */
+    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string} */
     private function mergeEditSpec(Runtime $runtime, Config $config, array $parsed, array $changes): array
     {
         $type = (string) ($parsed['type'] ?? 'static');
+        $domain = (string) ($parsed['domain'] ?? '');
         $root = (string) ($changes['root'] ?? ($parsed['root'] ?? ''));
         if ($root === '' && $type !== 'proxy') {
             throw new BrokerException('Docroot is required for this vhost.', 2);
@@ -541,25 +573,40 @@ EOF;
         if ($type === 'php' && ($phpVersion === null || $phpVersion === '')) {
             throw new BrokerException('php_version is required for PHP vhosts.', 2);
         }
-        $tls = array_key_exists('tls', $changes) ? (bool) $changes['tls'] : (bool) ($parsed['tls'] ?? false);
         $upstream = $parsed['reverse_proxy'] ?? null;
+
+        if (isset($changes['tls_mode'])) {
+            $tlsMode = TlsMode::normalize($changes['tls_mode']);
+        } elseif (array_key_exists('tls', $changes)) {
+            $tlsMode = TlsMode::normalize((bool) $changes['tls']);
+        } else {
+            $tlsMode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+        }
+        $tlsMode = TlsMode::effective($tlsMode, $domain);
+        $tlsCert = $changes['tls_cert'] ?? ($parsed['tls_cert'] ?? null);
+        $tlsKey = $changes['tls_key'] ?? ($parsed['tls_key'] ?? null);
 
         return [
             'root' => $root,
             'type' => $type,
             'php_version' => $type === 'php' ? $phpVersion : null,
             'upstream' => $type === 'proxy' ? $upstream : null,
-            'tls' => $tls,
+            'tls_mode' => $tlsMode,
+            'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
+            'tls_key' => is_string($tlsKey) ? $tlsKey : null,
         ];
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,type:string} */
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string} */
     private function editSnapshot(array $parsed): array
     {
+        $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+
         return [
             'root' => $parsed['root'] ?? null,
             'php_version' => $parsed['php_version'] ?? null,
-            'tls' => (bool) ($parsed['tls'] ?? false),
+            'tls' => TlsMode::enabled($mode),
+            'tls_mode' => $mode,
             'type' => (string) ($parsed['type'] ?? 'static'),
         ];
     }

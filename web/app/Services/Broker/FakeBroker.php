@@ -160,9 +160,29 @@ final class FakeBroker
                 'updates.apply.security' => $this->requireConfirm($stdin, 'APPLY-SECURITY', ['action' => $action, 'exit' => 0, 'output' => 'unattended-upgrade fake ok']),
                 'updates.apply.all' => $this->requireConfirm($stdin, 'APPLY-ALL', ['action' => $action, 'exit' => 0, 'output' => 'apt-get upgrade fake ok']),
                 'tls.certs' => ['certs' => [[
-                    'domain' => 'projob.az', 'ok' => true, 'issuer' => 'C=US, O=Let\'s Encrypt', 'valid_from' => 'Aug  1 00:00:00 2026 GMT',
-                    'valid_to' => 'Oct 30 00:00:00 2026 GMT', 'days_remaining' => 63, 'renewal' => 'ok',
+                    'domain' => 'projob.az', 'ok' => true, 'issuer' => 'C=US, O=Let\'s Encrypt', 'issuer_type' => 'lets_encrypt',
+                    'valid_from' => 'Aug  1 00:00:00 2026 GMT',
+                    'valid_to' => 'Oct 30 00:00:00 2026 GMT', 'days_remaining' => 63, 'renewal' => 'ok', 'tls_mode' => 'auto',
                 ]]],
+                'tls.dns-providers' => ['providers' => [
+                    ['id' => 'cloudflare', 'display_name' => 'Cloudflare', 'credentials_present' => false],
+                    ['id' => 'digitalocean', 'display_name' => 'DigitalOcean', 'credentials_present' => false],
+                ]],
+                'tls.dns-credential.store' => [
+                    'provider' => $stdin['provider'] ?? 'cloudflare',
+                    'stored' => true,
+                    'path' => '/etc/azerioid-panel/dns-credentials/cloudflare.ini',
+                ],
+                'tls.dns-credential.status' => ['providers' => []],
+                'tls.renew.dry-run' => [
+                    'dry_run' => ['ok' => true, 'stdout' => 'fake dry-run'],
+                    'certbot_timer' => 'inactive',
+                    'hook' => '/etc/letsencrypt/renewal-hooks/deploy/azerioid-reload.sh',
+                ],
+                'tls.renew.hook-install' => [
+                    'hook' => '/etc/letsencrypt/renewal-hooks/deploy/azerioid-reload.sh',
+                    'installed' => true,
+                ],
                 'backup.db', 'backup.files', 'backup.caddy' => ['key' => 'azerioid/db/all/20260828T000000Z.bin', 'size' => 1024, 'kind' => 'db', 'name' => 'all', 'sha256' => str_repeat('a', 64)],
                 'backup.list' => ['objects' => [[
                     'key' => 'azerioid/db/all/20260828T000000Z.bin', 'size' => 1024, 'last_modified' => '2026-08-28T00:00:00Z', 'kind' => 'db', 'name' => 'all',
@@ -403,10 +423,27 @@ final class FakeBroker
             if (array_key_exists('tls', $stdin)) {
                 $v['tls'] = (bool) $stdin['tls'];
             }
+            if (isset($stdin['tls_mode'])) {
+                $v['tls_mode'] = (string) $stdin['tls_mode'];
+                $v['tls'] = $v['tls_mode'] !== 'off';
+            }
+            if (isset($stdin['tls_cert'])) {
+                $v['tls_cert'] = (string) $stdin['tls_cert'];
+            }
+            if (isset($stdin['tls_key'])) {
+                $v['tls_key'] = (string) $stdin['tls_key'];
+            }
+            $v['tls_status'] = [
+                'enabled' => ! empty($v['tls']),
+                'mode' => $v['tls_mode'] ?? ($v['tls'] ? 'auto' : 'off'),
+                'issuer_type' => ! empty($v['tls']) ? (($v['tls_mode'] ?? '') === 'internal' ? 'self_signed' : 'lets_encrypt') : 'none',
+                'label' => ! empty($v['tls']) ? (($v['tls_mode'] ?? 'auto') === 'internal' ? 'self-signed' : 'Let\'s Encrypt') : 'http',
+            ];
             $after = [
                 'root' => $v['root'] ?? null,
                 'php_version' => $v['php_version'] ?? null,
                 'tls' => (bool) ($v['tls'] ?? false),
+                'tls_mode' => $v['tls_mode'] ?? ($v['tls'] ? 'auto' : 'off'),
                 'type' => $v['type'] ?? 'static',
             ];
             $this->vhosts[$i] = $v;

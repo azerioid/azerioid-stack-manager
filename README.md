@@ -136,18 +136,145 @@ sudo ./deploy/uninstall.sh --full
 
 ## CLI (`azerioid`)
 
-After install, `/usr/local/bin/azerioid` wraps the same broker actions the dashboard uses:
+`azerioid` is the system-wide operator CLI for AZERIOID Stack Manager. Bootstrap installs it to `/usr/local/bin/azerioid` automatically — no extra step after `stack-manager.sh`.
+
+It is a **thin wrapper** over the same privileged **broker** path the dashboard uses. Every mutating command goes through the same validate → apply → rollback and audit trail as the UI (`origin=cli` in audit args), so the terminal is not a second, looser control plane.
+
+```bash
+azerioid help
+azerioid status
+azerioid vhost list --json
+```
+
+### JSON output
+
+Read commands accept **`--json`** for scripting/CI: `status`, `version`, `vhost list`, `db list`, `component list`, `process list`, and `audit tail`. Human-readable tables are the default when `--json` is omitted.
+
+### Secrets
+
+Generated database passwords are printed **once** in the command’s stdout at create/reset time, with an explicit “will not be shown again” warning. `db list` never prints passwords. The CLI **never** accepts a plaintext password as an argv flag (same reasoning as installer secrets via env, not process list). Reset always generates a new value via `--reset-password`; there is no `--password=` option.
+
+### Security guarantees (CLI = UI)
+
+- The panel’s own vhost (readonly / managed externally) **cannot** be deleted or edited via CLI — same refusal as the dashboard.
+- Supervisor processes created via CLI always run as the dedicated unprivileged supervised user (`azerioid-supervised`), **never root** — same broker rule as the Processes page.
+
+Deeper rationale: [`docs/SPEC.md`](docs/SPEC.md), [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+### Status / version
+
+| Command | Description |
+|---------|-------------|
+| `azerioid status [--json]` | Panel runtime plus controlled/observed services and component overview |
+| `azerioid version [--json]` | Panel version file plus installed stack/component versions |
 
 ```bash
 azerioid status
-azerioid vhost list --json
-azerioid db add --engine=postgresql --name=app
-azerioid component install redis
-azerioid process list
-azerioid help
+azerioid version
+# AZERIOID Stack Manager 0.2.0
+azerioid version --json
 ```
 
-Mutating commands are audited like the UI (`origin=cli` in the audit args). Generated DB passwords are printed once and never accepted via argv.
+### Virtual hosts
+
+| Command | Description |
+|---------|-------------|
+| `azerioid vhost list [--stack=caddy\|apache\|nginx] [--json]` | List managed vhosts (optional stack filter) |
+| `azerioid vhost add --domain=<d> --type=php\|static\|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>] [--tls]` | Create a vhost (TLS optional after create) |
+| `azerioid vhost edit --domain=<d> [--php=<v>] [--root=<path>] [--tls=on\|off]` | Update PHP version, docroot, or TLS |
+| `azerioid vhost del --domain=<d>` | Delete a vhost (site files left in place) |
+
+```bash
+azerioid vhost list --json
+# {"vhosts":[{"domain":"example.com","type":"php","readonly":false,...}, ...]}
+
+azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/www/app.example.com --tls
+azerioid vhost edit --domain=app.example.com --tls=off
+azerioid vhost del --domain=app.example.com
+
+# Panel / readonly vhost is refused:
+azerioid vhost del --domain=127.0.0.1:3169
+# This vhost is managed externally and cannot be deleted by the panel.
+```
+
+### Databases
+
+| Command | Description |
+|---------|-------------|
+| `azerioid db list [--engine=mariadb\|postgresql\|mongodb] [--json]` | List databases (no passwords) |
+| `azerioid db add --engine=<e> --name=<db> [--user=<u>]` | Create DB + user; password printed once |
+| `azerioid db del --engine=<e> --name=<db>` | Drop a non-protected database |
+| `azerioid db edit --engine=<e> --name=<db> --reset-password` | Generate a new password (revealed once) |
+
+```bash
+azerioid db add --engine=postgresql --name=appdb --user=appdb
+# Created database appdb (engine=postgresql, user=appdb).
+# One-time password (will not be shown again):
+# <generated-secret-shown-once>
+
+azerioid db list --engine=postgresql --json
+azerioid db edit --engine=postgresql --name=appdb --user=appdb --reset-password
+azerioid db del --engine=postgresql --name=appdb
+```
+
+### Components
+
+| Command | Description |
+|---------|-------------|
+| `azerioid component list [--json]` | Registry components and install status |
+| `azerioid component install <id> [--version=<v>] [--option=key=value]...` | Install a registry-gated component |
+| `azerioid component remove <id>` | Uninstall a panel-managed component (system components refused) |
+
+```bash
+azerioid component list --json
+azerioid component install redis
+azerioid component install not-a-real-component
+# Unknown component id.
+azerioid component remove redis
+```
+
+(`--version=` on the shell wrapper maps to Artisan `--pkg-version=`; Symfony reserves `--version` for the framework.)
+
+### Services
+
+Single named systemd unit only — there is no blanket “restart the whole stack”:
+
+```bash
+azerioid service redis-server status
+azerioid service redis-server restart
+azerioid service redis-server stop
+azerioid service redis-server start
+```
+
+### Processes (Supervisor)
+
+| Command | Description |
+|---------|-------------|
+| `azerioid process list [--json]` | List managed Supervisor programs |
+| `azerioid process create --command=<cmd> (--vhost=<domain>\|--freeform) [--name=<n>] [--directory=<path>]` | Create a program (runs as `azerioid-supervised`) |
+| `azerioid process start\|stop\|restart\|del <name>` | Control or delete a program |
+| `azerioid process logs <name> [--follow] [--lines=100]` | Stdout/stderr from the same broker log source as the UI |
+
+```bash
+azerioid process create --vhost=app.example.com --command='node server.js' --name=app-node
+# Created process app-node.
+#   runs as user: azerioid-supervised
+
+azerioid process list --json
+azerioid process logs app-node --lines=50
+azerioid process restart app-node
+azerioid process del app-node
+```
+
+### Audit
+
+```bash
+azerioid audit tail --lines=50
+azerioid audit tail --follow
+azerioid audit tail --lines=20 --json
+```
+
+Same panel audit stream the dashboard’s Audit page uses (broker `logs.tail` / `panel-audit`), including CLI-originated actions.
 
 ## Smoke tests
 

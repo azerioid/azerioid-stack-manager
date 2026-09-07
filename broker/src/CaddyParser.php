@@ -17,6 +17,9 @@ final class CaddyParser
      *   php_version: ?string,
      *   type: string,
      *   tls: bool,
+     *   tls_mode: string,
+     *   tls_cert: ?string,
+     *   tls_key: ?string,
      *   reverse_proxy: ?string,
      *   readonly: bool,
      *   source: string
@@ -28,8 +31,15 @@ final class CaddyParser
         $root = self::match($contents, '/^\s*root\s+\*\s+(\S+)/m');
         $phpSocket = self::match($contents, '/^\s*php_fastcgi\s+(\S+)/m');
         $proxy = self::match($contents, '/^\s*reverse_proxy\s+(\S+)/m');
-        $explicitHttp = (bool) preg_match('/^:80\b/m', $contents);
-        $hasTlsBlock = (bool) preg_match('/^\s*tls\b/m', $contents);
+        $explicitHttp = (bool) preg_match('/^http:\/\//m', $contents) || (bool) preg_match('/^:80\b/m', $contents);
+        $hasTlsInternal = (bool) preg_match('/^\s*tls\s+internal\b/m', $contents);
+        $tlsCert = null;
+        $tlsKey = null;
+        if (preg_match('/^\s*tls\s+(\/\S+)\s+(\/\S+)/m', $contents, $tm)) {
+            $tlsCert = $tm[1];
+            $tlsKey = $tm[2];
+        }
+        $hasTlsBlock = $hasTlsInternal || ($tlsCert !== null);
 
         $type = 'static';
         if ($proxy !== null) {
@@ -44,6 +54,17 @@ final class CaddyParser
         }
 
         $basename = basename($path, '.conf');
+        $tlsEnabled = !$explicitHttp || $hasTlsBlock;
+        $tlsMode = 'off';
+        if ($tlsEnabled) {
+            if ($hasTlsInternal) {
+                $tlsMode = 'internal';
+            } elseif ($tlsCert !== null) {
+                $tlsMode = str_contains((string) $tlsCert, '/etc/letsencrypt/') ? 'dns01' : 'dns01';
+            } else {
+                $tlsMode = 'auto';
+            }
+        }
 
         return [
             'domains' => $domains,
@@ -52,7 +73,10 @@ final class CaddyParser
             'php_socket' => $phpSocket,
             'php_version' => $phpVersion,
             'type' => $type,
-            'tls' => !$explicitHttp || $hasTlsBlock,
+            'tls' => $tlsEnabled,
+            'tls_mode' => $tlsMode,
+            'tls_cert' => $tlsCert,
+            'tls_key' => $tlsKey,
             'reverse_proxy' => $proxy,
             'readonly' => ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
             'enabled' => true,

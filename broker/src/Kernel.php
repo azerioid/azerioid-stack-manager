@@ -47,6 +47,8 @@ use AzerioidPanel\Broker\Actions\SystemReboot;
 use AzerioidPanel\Broker\Actions\SystemRebootRequired;
 use AzerioidPanel\Broker\Actions\TerminalSession;
 use AzerioidPanel\Broker\Actions\TlsCerts;
+use AzerioidPanel\Broker\Actions\TlsDnsCredential;
+use AzerioidPanel\Broker\Actions\TlsRenew;
 use AzerioidPanel\Broker\Actions\UpdatesApply;
 use AzerioidPanel\Broker\Actions\UpdatesList;
 use AzerioidPanel\Broker\Actions\VersionAll;
@@ -105,6 +107,11 @@ final class Kernel
         'updates.apply.security' => UpdatesApply::class,
         'updates.apply.all' => UpdatesApply::class,
         'tls.certs' => TlsCerts::class,
+        'tls.dns-providers' => TlsDnsCredential::class,
+        'tls.dns-credential.store' => TlsDnsCredential::class,
+        'tls.dns-credential.status' => TlsDnsCredential::class,
+        'tls.renew.dry-run' => TlsRenew::class,
+        'tls.renew.hook-install' => TlsRenew::class,
         'backup.db' => BackupRun::class,
         'backup.files' => BackupRun::class,
         'backup.caddy' => BackupRun::class,

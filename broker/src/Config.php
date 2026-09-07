@@ -61,6 +61,9 @@ final class Config
     public string $registryComponentsPath = '/usr/local/lib/azerioid-panel/registry/components';
     public string $managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
 
+    /** ACME account email for certbot (HTTP-01 / DNS-01). Empty → derived as admin@<domain>. */
+    public string $acmeEmail = '';
+
     /** @var list<string> reverse-proxy / operator-protected vhosts (detected at install) */
     public array $readonlyVhosts = [];
 
@@ -193,6 +196,11 @@ final class Config
             $cfg->mongodbPort = (int) ($mongo['port'] ?? $cfg->mongodbPort);
             $cfg->mongodbUser = (string) ($mongo['user'] ?? $cfg->mongodbUser);
             $cfg->mongodbPassword = (string) ($mongo['password'] ?? $cfg->mongodbPassword);
+        }
+        if (isset($data['acme']) && is_array($data['acme'])) {
+            $cfg->acmeEmail = (string) ($data['acme']['email'] ?? $cfg->acmeEmail);
+        } elseif (isset($data['acme_email'])) {
+            $cfg->acmeEmail = (string) $data['acme_email'];
         }
         return $cfg;
     }

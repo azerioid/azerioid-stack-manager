@@ -5,6 +5,8 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Tls\CertProbe;
+use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -15,7 +17,8 @@ final class TlsCerts
         $seen = [];
         $certs = [];
         foreach (WebServers::for($config)->listVhosts($runtime, $config) as $parsed) {
-            if (!($parsed['tls'] ?? false)) {
+            $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+            if (!TlsMode::enabled($mode)) {
                 continue;
             }
             foreach ($parsed['domains'] ?? [] as $domain) {
@@ -28,68 +31,13 @@ final class TlsCerts
                     continue;
                 }
                 $seen[$domain] = true;
-                $certs[] = $this->probe($runtime, $domain);
+                $certs[] = CertProbe::probe($runtime, $domain, $mode) + [
+                    'tls_mode' => $mode,
+                ];
             }
         }
         usort($certs, static fn ($a, $b) => ($a['days_remaining'] ?? 9999) <=> ($b['days_remaining'] ?? 9999));
-        return ['certs' => $certs];
-    }
 
-    private function probe(Runtime $runtime, string $domain): array
-    {
-        $raw = $runtime->exec([
-            '/usr/bin/openssl',
-            's_client',
-            '-connect',
-            '127.0.0.1:443',
-            '-servername',
-            $domain,
-        ], "\n", 8);
-        $pem = '';
-        if (preg_match('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $raw->stdout . $raw->stderr, $m)) {
-            $pem = $m[0];
-        }
-        if ($pem === '') {
-            return [
-                'domain' => $domain,
-                'ok' => false,
-                'error' => 'No certificate captured.',
-                'days_remaining' => null,
-            ];
-        }
-        $info = $runtime->exec([
-            '/usr/bin/openssl',
-            'x509',
-            '-noout',
-            '-issuer',
-            '-dates',
-            '-enddate',
-        ], $pem . "\n", 5);
-        $issuer = $notBefore = $notAfter = null;
-        foreach (explode("\n", $info->stdout) as $line) {
-            if (str_starts_with($line, 'issuer=')) {
-                $issuer = substr($line, 7);
-            } elseif (str_starts_with($line, 'notBefore=')) {
-                $notBefore = substr($line, 10);
-            } elseif (str_starts_with($line, 'notAfter=')) {
-                $notAfter = substr($line, 9);
-            }
-        }
-        $days = null;
-        if ($notAfter !== null) {
-            $ts = strtotime($notAfter);
-            if ($ts !== false) {
-                $days = (int) floor(($ts - time()) / 86400);
-            }
-        }
-        return [
-            'domain' => $domain,
-            'ok' => true,
-            'issuer' => $issuer,
-            'valid_from' => $notBefore,
-            'valid_to' => $notAfter,
-            'days_remaining' => $days,
-            'renewal' => $days === null ? 'unknown' : ($days < 0 ? 'expired' : ($days <= 14 ? 'expiring' : 'ok')),
-        ];
+        return ['certs' => $certs];
     }
 }

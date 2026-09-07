@@ -65,9 +65,30 @@
                     </select>
                 </label>
             @endif
+            <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">TLS mode
+                <select class="field mt-1" wire:model.live="editTlsMode">
+                    <option value="off">Off (HTTP only)</option>
+                    <option value="auto">Automatic (HTTP-01 Let's Encrypt)</option>
+                    <option value="dns01">DNS challenge (wildcard / pre-DNS)</option>
+                    <option value="internal">Self-signed</option>
+                </select>
+            </label>
+            @if ($editTlsMode === 'dns01')
+                <label class="text-xs uppercase tracking-wide text-zinc-500">DNS provider
+                    <select class="field mt-1" wire:model="editDnsProvider">
+                        <option value="">Select…</option>
+                        @foreach ($dnsProviders as $p)
+                            <option value="{{ $p['id'] }}">{{ $p['display_name'] }}{{ !empty($p['credentials_present']) ? ' (token stored)' : '' }}</option>
+                        @endforeach
+                    </select>
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">API token (stdin only — leave blank to reuse stored)
+                    <input class="field mt-1" type="password" autocomplete="new-password" wire:model="editDnsToken" placeholder="••••••••">
+                </label>
+            @endif
             <label class="flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">
-                <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="editTls">
-                Enable TLS (HTTPS)
+                <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="editAcmeStaging">
+                Use Let's Encrypt staging (for tests — avoids rate limits)
             </label>
             <div class="flex gap-3 md:col-span-2">
                 <button class="btn-primary" type="submit">Validate &amp; save</button>
@@ -103,7 +124,20 @@
                         </td>
                         <td class="px-4 py-3 font-mono text-xs text-zinc-400">{{ $v['reverse_proxy'] ?? $v['root'] }}</td>
                         <td class="px-4 py-3 font-mono">{{ $v['php_version'] ?? '—' }}</td>
-                        <td class="px-4 py-3">{{ !empty($v['tls']) ? 'yes' : 'http' }}</td>
+                        <td class="px-4 py-3 text-xs">
+                            @php
+                                $ts = $v['tls_status'] ?? null;
+                                $label = is_array($ts) ? ($ts['label'] ?? null) : null;
+                            @endphp
+                            @if ($label)
+                                <span class="font-mono text-zinc-200">{{ $label }}</span>
+                                @if (!empty($ts['issuer_type']))
+                                    <div class="mt-0.5 font-mono text-[10px] uppercase text-zinc-500">{{ $ts['issuer_type'] }} · {{ $v['tls_mode'] ?? '' }}</div>
+                                @endif
+                            @else
+                                {{ !empty($v['tls']) ? (($v['tls_mode'] ?? 'auto')) : 'http' }}
+                            @endif
+                        </td>
                         <td class="px-4 py-3 text-right space-x-3">
                             @if (!empty($supervisorByVhost[$v['domain'] ?? '']))
                                 <a href="/processes" class="text-xs text-accent" title="Supervisor processes">{{ count($supervisorByVhost[$v['domain']]) }} proc</a>

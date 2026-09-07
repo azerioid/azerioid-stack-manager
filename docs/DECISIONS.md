@@ -115,3 +115,19 @@ The uninstall path performs the same panel-scoped flush before removing the jail
 **Rationale:** A `--drop-db` reinstall previously left `auth-fail.log` intact; fail2ban re-read it on jail enable and immediately re-banned the operator's IP, causing `ERR_CONNECTION_REFUSED` on a working install. Flushing on every run prevents self-lockout from stale ban state.
 
 **Accepted tradeoff:** Ban history and accumulated failed-login records for the panel jail are wiped on each install/reinstall. An operator who reinstalls frequently loses attack-history signal in that log. This is intentional simplicity over retaining cross-reinstall ban history — do not "fix" this as a bug without an explicit ADR change.
+
+## A21 — Automatic TLS for user vhosts
+
+**Status:** Accepted (2026-09-07)  
+**Decision:**
+
+| Path | Mechanism |
+|------|-----------|
+| **Caddy + HTTP-01 (default)** | Native Caddy automatic HTTPS (no external ACME client). Bare site label in the generated Caddyfile. Non-public hostnames (IP, `.test`/`.local`/…) force `tls internal`. |
+| **Apache / Nginx + HTTP-01** | `certbot certonly --webroot` into `/var/lib/azerioid-panel/acme-webroot`. Broker owns vhost files — **never** `certbot --apache` / `--nginx` installers. |
+| **DNS-01 (all drivers)** | certbot DNS plugins via `registry/dns-providers/` (Cloudflare, DigitalOcean v1). Cert files wired as static `tls <cert> <key>` / `SSLCertificateFile` / `ssl_certificate`. |
+| **Renewal** | Caddy renews its own certs; certbot.timer + deploy-hook `azerioid-reload.sh` reloads the active driver for certbot-managed certs. |
+
+**Secrets:** DNS API tokens only via broker stdin → root-only `0600` files under `/etc/azerioid-panel/dns-credentials/`. Never argv, never logged.
+
+**UI:** Vhost list TLS column shows issuer type + expiry (from live probe), not a boolean yes/http.

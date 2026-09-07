@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Actions;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -50,12 +51,60 @@ final class VhostEdit
         if (array_key_exists('tls', $input) || isset($args[3])) {
             $changes['tls'] = self::parseTls($args[3] ?? $input['tls'] ?? null);
         }
-
-        if ($changes === []) {
-            throw new BrokerException('No editable fields provided (root, php_version, tls).', 2);
+        if (array_key_exists('tls_mode', $input)) {
+            $changes['tls_mode'] = \AzerioidPanel\Broker\Tls\TlsMode::normalize($input['tls_mode']);
+        }
+        if (array_key_exists('tls_cert', $input)) {
+            $changes['tls_cert'] = (string) $input['tls_cert'];
+        }
+        if (array_key_exists('tls_key', $input)) {
+            $changes['tls_key'] = (string) $input['tls_key'];
         }
 
-        return WebServers::for($config)->updateVhost($runtime, $config, $domain, $changes);
+        if ($changes === []) {
+            throw new BrokerException('No editable fields provided (root, php_version, tls, tls_mode).', 2);
+        }
+
+        $mode = null;
+        if (isset($changes['tls_mode'])) {
+            $mode = TlsMode::effective((string) $changes['tls_mode'], $domain);
+            $changes['tls_mode'] = $mode;
+        } elseif (isset($changes['tls'])) {
+            $mode = TlsMode::effective(
+                TlsMode::normalize((bool) $changes['tls']),
+                $domain
+            );
+            $changes['tls_mode'] = $mode;
+        }
+
+        $issuer = new \AzerioidPanel\Broker\Tls\VhostTlsIssuer($runtime, $config);
+        $issued = null;
+
+        // DNS-01: obtain cert before rewriting vhost config (needs static file paths).
+        if ($mode === TlsMode::DNS01) {
+            $issued = $issuer->ensure($domain, TlsMode::DNS01, $input);
+            if (is_array($issued)) {
+                $changes['tls_cert'] = $issued['cert'] ?? null;
+                $changes['tls_key'] = $issued['key'] ?? null;
+            }
+        }
+
+        $result = WebServers::for($config)->updateVhost($runtime, $config, $domain, $changes);
+
+        // Caddy auto is native; Apache/Nginx auto needs certbot after ACME-capable HTTP is live.
+        if ($mode === TlsMode::AUTO) {
+            $issued = $issuer->ensure($domain, TlsMode::AUTO, $input);
+        }
+
+        if ($issued !== null) {
+            $result['tls_issue'] = $issued;
+            if (isset($issued['cert'])) {
+                $result['tls_cert'] = $issued['cert'];
+            }
+            $result['tls_mode'] = $mode;
+        }
+
+        return $result;
     }
 
     private static function parseTls(mixed $value): bool
