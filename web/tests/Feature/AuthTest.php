@@ -132,6 +132,19 @@ class AuthTest extends TestCase
             ->assertRedirect(route('dashboard'));
     }
 
+    public function test_login_accepts_email_case_variants_and_trimmed_password(): void
+    {
+        config(['azerioid.require_totp' => false]);
+        $this->admin();
+
+        Livewire::test(\App\Livewire\Auth\Login::class)
+            ->set('email', 'Admin@Example.com')
+            ->set('password', ' password ')
+            ->call('authenticate')
+            ->assertHasNoErrors()
+            ->assertRedirect(route('dashboard'));
+    }
+
     public function test_login_is_password_only_when_totp_not_required_even_if_user_enrolled(): void
     {
         config(['azerioid.require_totp' => false]);

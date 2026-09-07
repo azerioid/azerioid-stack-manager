@@ -30,19 +30,23 @@ class Login extends Component
 
     public function authenticate(): void
     {
+        $this->email = strtolower(trim($this->email));
+        // Trim accidental whitespace from paste (password itself may contain spaces in the middle).
+        $this->password = trim($this->password);
+
         $this->validate([
             'email' => ['required', 'email'],
             'password' => ['required', 'string'],
         ]);
 
-        $key = 'login:' . strtolower($this->email) . '|' . request()->ip();
+        $key = 'login:' . $this->email . '|' . request()->ip();
         if (RateLimiter::tooManyAttempts($key, (int) config('azerioid.login.max_attempts', 5))) {
             throw ValidationException::withMessages([
                 'email' => 'Too many attempts. Try again shortly.',
             ]);
         }
 
-        $user = User::query()->where('email', $this->email)->first();
+        $user = User::query()->whereRaw('lower(email) = ?', [$this->email])->first();
         if ($user?->isLocked()) {
             throw ValidationException::withMessages([
                 'email' => 'This account is locked. Try again later.',

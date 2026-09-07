@@ -36,6 +36,7 @@ class SetupWizard extends Component
         if (User::query()->exists()) {
             abort(403);
         }
+        $this->email = strtolower(trim($this->email));
         $this->validate([
             'name' => ['required', 'string', 'max:80'],
             'email' => ['required', 'email', 'max:190'],

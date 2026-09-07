@@ -28,7 +28,7 @@ class CreatePanelAdmin extends Command
             return self::EXIT_ALREADY_EXISTS;
         }
 
-        $email = trim((string) ($this->option('email') ?: ''));
+        $email = strtolower(trim((string) ($this->option('email') ?: '')));
         $name = trim((string) $this->option('name'));
         $password = (string) (getenv('PANEL_INSTALL_ADMIN_PASSWORD') ?: '');
 
