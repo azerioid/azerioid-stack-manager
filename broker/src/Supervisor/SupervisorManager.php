@@ -322,7 +322,7 @@ final class SupervisorManager
         self::rejectRunUser($user);
 
         return <<<INI
-; Stack Manager — managed supervisor program (do not edit manually)
+; AZERIOID Stack Manager — managed supervisor program (do not edit manually)
 [program:{$supervisorName}]
 command={$spec['command']}
 directory={$spec['directory']}

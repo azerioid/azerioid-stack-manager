@@ -50,7 +50,7 @@ prompt_password() {
 
 run_interactive_install_prompts() {
     echo
-    echo "Stack Manager interactive setup (Enter accepts [bracketed] defaults)."
+    echo "AZERIOID Stack Manager interactive setup (Enter accepts [bracketed] defaults)."
     echo
 
     if [[ "${EXPLICIT_ACCESS:-0}" -eq 0 ]]; then

@@ -315,10 +315,10 @@ final class TerminalManager
     private function renderCaddyRoutes(array $sessions): string
     {
         if ($sessions === []) {
-            return "# Stack Manager — no active terminal sessions\n";
+            return "# AZERIOID Stack Manager — no active terminal sessions\n";
         }
         $auth = '127.0.0.1:' . $this->config->panelPort;
-        $lines = ['# Stack Manager — terminal routes (broker-managed; do not edit)'];
+        $lines = ['# AZERIOID Stack Manager — terminal routes (broker-managed; do not edit)'];
         foreach ($sessions as $session) {
             $id = (string) ($session['id'] ?? '');
             $port = (int) ($session['port'] ?? 0);

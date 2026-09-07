@@ -139,7 +139,7 @@ final class SitePortReleaser
         $import = rtrim($confD, '/') . '/azerioid-panel.conf';
 
         return <<<EOF
-# Stack Manager — panel Caddy only (site ports released for Nginx/Apache)
+# AZERIOID Stack Manager — panel Caddy only (site ports released for Nginx/Apache)
 {
     admin off
     auto_https disable_redirects

@@ -11,7 +11,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Components · Stack Manager')]
+#[Title('Components · AZERIOID Stack Manager')]
 class ComponentsPage extends Component
 {
     public array $catalog = [];

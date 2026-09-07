@@ -1,4 +1,4 @@
-# LACMP Panel web app
+# AZERIOID Stack Manager web app
 
 Laravel application that runs as `caddy` / `www-data`. It never executes `lacmp` or `systemctl` itself.
 

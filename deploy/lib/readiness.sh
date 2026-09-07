@@ -79,7 +79,7 @@ print_install_success() {
     fi
 
     echo
-    echo "Stack Manager installed."
+    echo "AZERIOID Stack Manager installed."
     echo "  Panel:     ${panel_url}"
     if [[ "${admin_created}" -eq 0 ]]; then
         echo "  Setup:     ${setup_url}  (create the admin account — required on first visit)"

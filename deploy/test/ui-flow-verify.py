@@ -205,8 +205,11 @@ def main() -> int:
     if status != 200:
         print(f"FAIL login page HTTP {status}", file=sys.stderr)
         return 1
-    if "LACMP Panel" in page:
-        print("FAIL login page still shows legacy LACMP Panel branding", file=sys.stderr)
+    if "LACMP Panel" in page or "LCMP Panel" in page:
+        print("FAIL login page still shows legacy LACMP/LCMP Panel branding", file=sys.stderr)
+        return 1
+    if "AZERIOID Stack Manager" not in page:
+        print("FAIL login page missing AZERIOID Stack Manager branding", file=sys.stderr)
         return 1
     snapshot, csrf = extract_snapshot(page)
 
@@ -251,8 +254,11 @@ def main() -> int:
             if status != 200:
                 print(f"FAIL TOTP setup page HTTP {status}", file=sys.stderr)
                 return 1
-            if "LACMP Panel" in setup_page:
-                print("FAIL TOTP setup page still shows legacy LACMP Panel branding", file=sys.stderr)
+            if "LACMP Panel" in setup_page or "LCMP Panel" in setup_page:
+                print("FAIL TOTP setup page still shows legacy LACMP/LCMP Panel branding", file=sys.stderr)
+                return 1
+            if "AZERIOID Stack Manager" not in setup_page:
+                print("FAIL TOTP setup page missing AZERIOID Stack Manager branding", file=sys.stderr)
                 return 1
             if "Authenticator code" in setup_page and "Enable 2FA" not in setup_page:
                 print("FAIL landed on verify screen instead of enroll/setup", file=sys.stderr)

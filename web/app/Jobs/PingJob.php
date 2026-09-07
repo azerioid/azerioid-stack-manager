@@ -12,6 +12,6 @@ class PingJob implements ShouldQueue
 
     public function handle(): void
     {
-        Log::info('Stack Manager PingJob processed — queue worker is healthy.');
+        Log::info('AZERIOID Stack Manager PingJob processed — queue worker is healthy.');
     }
 }

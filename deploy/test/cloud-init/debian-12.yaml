@@ -1,5 +1,5 @@
 #cloud-config
-# Stack Manager P1 smoke — Debian 12
+# AZERIOID Stack Manager P1 smoke — Debian 12
 package_update: true
 package_upgrade: true
 packages:
@@ -16,5 +16,5 @@ packages:
   - sqlite3
 runcmd:
   - mkdir -p /opt/stack-manager
-  - echo "Stack Manager smoke VM ready (Debian 12)" > /etc/motd
-final_message: "Stack Manager Debian 12 test VM ready after $UPTIME seconds"
+  - echo "AZERIOID Stack Manager smoke VM ready (Debian 12)" > /etc/motd
+final_message: "AZERIOID Stack Manager Debian 12 test VM ready after $UPTIME seconds"

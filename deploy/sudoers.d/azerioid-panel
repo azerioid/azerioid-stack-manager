@@ -1,4 +1,4 @@
-# Stack Manager — sudoers
+# AZERIOID Stack Manager — sudoers
 #
 # The web worker (caddy) may run ONLY this broker, as root, with no password.
 # Never add wildcards, never allow /bin/systemctl.

@@ -10,7 +10,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Vhost terminal · Stack Manager')]
+#[Title('Vhost terminal · AZERIOID Stack Manager')]
 class VhostTerminalPage extends Component
 {
     public string $domain = '';

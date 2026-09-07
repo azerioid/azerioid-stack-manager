@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stack Manager installer — self-contained bootstrap (Caddy + PHP 8.4 + SQLite).
+# AZERIOID Stack Manager installer — self-contained bootstrap (Caddy + PHP 8.4 + SQLite).
 # Invoked by ./stack-manager.sh or directly by advanced users.
 set -euo pipefail
 
@@ -45,7 +45,7 @@ usage() {
 Usage: stack-manager.sh [options]
        deploy/install.sh [options]
 
-Stack Manager bootstrap — installs Caddy, PHP 8.4 FPM, SQLite panel (no lcmp/lamp required).
+AZERIOID Stack Manager bootstrap — installs Caddy, PHP 8.4 FPM, SQLite panel (no lcmp/lamp required).
 
   --non-interactive       no prompts (also auto-enabled when stdin is not a TTY)
   --dry-run               print plan only
@@ -152,7 +152,7 @@ if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
 fi
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "DRY-RUN — Stack Manager bootstrap"
+    echo "DRY-RUN — AZERIOID Stack Manager bootstrap"
     echo "  prefix:    ${PREFIX}"
     echo "  php:       ${PANEL_PHP_VERSION}"
     echo "  web user:  ${WEB_USER}"
@@ -170,7 +170,7 @@ fi
     exit 1
 }
 
-echo "==> Stack Manager bootstrap into ${PREFIX}"
+echo "==> AZERIOID Stack Manager bootstrap into ${PREFIX}"
 
 setup_repos
 bootstrap_packages

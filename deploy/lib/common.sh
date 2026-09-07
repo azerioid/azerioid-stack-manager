@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for Stack Manager installer modules.
+# Shared helpers for AZERIOID Stack Manager installer modules.
 set -euo pipefail
 
 if [[ -t 1 ]]; then

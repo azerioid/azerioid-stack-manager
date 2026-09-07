@@ -12,7 +12,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.guest')]
-#[Title('Sign in · Stack Manager')]
+#[Title('Sign in · AZERIOID Stack Manager')]
 class Login extends Component
 {
     public string $email = '';

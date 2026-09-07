@@ -1,5 +1,5 @@
 #cloud-config
-# Stack Manager P1 smoke — Ubuntu 24.04
+# AZERIOID Stack Manager P1 smoke — Ubuntu 24.04
 package_update: true
 package_upgrade: true
 packages:
@@ -16,5 +16,5 @@ packages:
   - sqlite3
 runcmd:
   - mkdir -p /opt/stack-manager
-  - echo "Stack Manager smoke VM ready (Ubuntu 24.04)" > /etc/motd
-final_message: "Stack Manager Ubuntu 24.04 test VM ready after $UPTIME seconds"
+  - echo "AZERIOID Stack Manager smoke VM ready (Ubuntu 24.04)" > /etc/motd
+final_message: "AZERIOID Stack Manager Ubuntu 24.04 test VM ready after $UPTIME seconds"

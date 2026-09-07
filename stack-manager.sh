@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# stack-manager.sh — Stack Manager bootstrap entrypoint.
+# stack-manager.sh — AZERIOID Stack Manager bootstrap entrypoint.
 # Self-contained install: Caddy + PHP 8.4 FPM + SQLite panel.
 # No lcmp/lamp prerequisite.
 #

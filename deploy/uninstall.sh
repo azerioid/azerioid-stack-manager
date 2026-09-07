@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reverse Stack Manager bootstrap. Never touches /data/www or user site data by default.
+# Reverse AZERIOID Stack Manager bootstrap. Never touches /data/www or user site data by default.
 set -euo pipefail
 
 if [[ ${EUID} -ne 0 ]]; then
@@ -220,7 +220,7 @@ if [[ "${PURGE_PACKAGE_DATA}" -eq 1 ]]; then
     purge_engine_data_dirs
 fi
 
-echo "Stack Manager panel artifacts removed."
+echo "AZERIOID Stack Manager panel artifacts removed."
 if [[ "${PURGE_MANAGED}" -eq 0 ]]; then
     echo "  Managed components (MariaDB, Redis, Nginx, …) were left installed."
     echo "  Re-run with --purge-managed or --full to remove them via the broker."

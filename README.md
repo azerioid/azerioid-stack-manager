@@ -1,4 +1,4 @@
-# Stack Manager
+# AZERIOID Stack Manager
 
 Self-contained Linux stack manager and web control panel. On a supported host with no pre-existing web stack, one installer command bootstraps **Caddy**, **PHP 8.4 FPM**, and a **SQLite**-backed admin UI. Everything else — web servers, databases, cache, and extra runtimes — is installed on demand from the **Components** page using packages from official upstream repositories (Caddy, Sury/Remi, MongoDB, NodeSource, distro packages). **No third-party base stack is required** — you do not need LCMP, LAMP, or any external install script before running this project.
 
@@ -9,7 +9,7 @@ For operators who want a single host they can bootstrap from scratch and then ex
 **Requirements:** root on a [supported OS](#supported-operating-systems), outbound HTTPS, `git`.
 
 ```bash
-git clone <repo-url> stack-manager && cd stack-manager
+git clone https://github.com/azerioid/azerioid-stack-manager.git stack-manager && cd stack-manager
 chmod +x stack-manager.sh
 sudo ./stack-manager.sh --non-interactive
 ```
@@ -168,7 +168,7 @@ python3 deploy/test/ui-flow-verify.py
 
 ## Background
 
-This project evolved from an earlier **LACMP Panel** that assumed a pre-built LCMP/LAMP host. Stack Manager replaces that model with a self-contained bootstrap and registry-driven component installs. Internal install paths and namespaces use **`azerioid-panel`**; the user-facing product name is **Stack Manager**.
+This project evolved from an earlier **LACMP Panel** that assumed a pre-built LCMP/LAMP host. AZERIOID Stack Manager replaces that model with a self-contained bootstrap and registry-driven component installs. Internal install paths and namespaces use **`azerioid-panel`**; the user-facing product name is **AZERIOID Stack Manager**.
 
 ## License
 

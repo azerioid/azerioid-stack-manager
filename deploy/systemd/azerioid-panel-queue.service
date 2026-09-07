@@ -1,5 +1,5 @@
 [Unit]
-Description=Stack Manager Laravel queue worker
+Description=AZERIOID Stack Manager Laravel queue worker
 After=network.target
 
 [Service]

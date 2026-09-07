@@ -21,7 +21,7 @@ final class SchedulerInstall
         if (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user)) {
             throw new BrokerException('Invalid web user.', 2);
         }
-        $body = "# LACMP Panel — Laravel scheduler (idempotent)\n"
+        $body = "# AZERIOID Stack Manager — Laravel scheduler (idempotent)\n"
             . "SHELL=/bin/sh\n"
             . "PATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
             . "* * * * * {$user} /usr/bin/php {$artisan} schedule:run >/dev/null 2>&1\n";

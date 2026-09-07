@@ -13,7 +13,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Settings · Stack Manager')]
+#[Title('Settings · AZERIOID Stack Manager')]
 class SettingsPage extends Component
 {
     public string $name = '';

@@ -1,6 +1,6 @@
 # Architecture Decision Log
 
-ADR-style record of locked decisions for Stack Manager.
+ADR-style record of locked decisions for AZERIOID Stack Manager.
 
 ## A19 — Clean history
 
@@ -64,8 +64,22 @@ ADR-style record of locked decisions for Stack Manager.
 
 ## Product naming
 
-**Status:** Accepted  
-**Decision:** User-facing name "Stack Manager". Entrypoint `stack-manager.sh`. Drop "LACMP Panel" from P1 user-facing copy.
+**Status:** Accepted (superseded 2026-09-07 by A19 branding closure)  
+**Decision (original):** User-facing name "Stack Manager". Entrypoint `stack-manager.sh`. Drop "LACMP Panel" from P1 user-facing copy.
+
+## A19 branding closure — AZERIOID Stack Manager
+
+**Status:** Accepted (operator decision, 2026-09-07)  
+**Decision:**
+
+1. **Display brand (long form):** `AZERIOID Stack Manager` — README title, page `<title>` tags, login/setup headers, CLI/installer copy, docs.
+2. **Short form (space-constrained UI only):** `AZERIOID` — sidebar brand mark; subtitle may say `stack manager`. Do not mix alternate short forms.
+3. **Technical slug stays `azerioid-panel`:** install paths, systemd units, sudoers, sockets, config dirs (`/usr/local/lib/azerioid-panel`, `azerioid-panel-queue.service`, `/etc/azerioid-panel/`, `/var/lib/azerioid-panel/`, etc.) are **not renamed**. No host migration path is planned for a path-level rename.
+4. **GitHub repository:** rename outward-facing repo to `azerioid/azerioid-stack-manager` (GitHub redirects the old name). Existing clones must update `origin` explicitly after rename.
+
+**Rationale:** Closes the branding item from the gap analysis (A19) without repeating the predecessor's half-measure path rename (LCMP→LACMP). User-facing identity matches the product; installed-system identity stays stable.
+
+**Out of scope / deliberately unchanged:** encrypted backup magic (`LACMP1`/`LCMP1`), `LACMP_*` env fallbacks, and `deploy/relocate-from-lacmp.sh` (historical migrate-from tool).
 
 ## Panel database
 
@@ -80,7 +94,7 @@ ADR-style record of locked decisions for Stack Manager.
 ## A20 — fail2ban flush on every install/reinstall
 
 **Status:** Accepted (operator decision, 2026-09-02)  
-**Decision:** On every Stack Manager install or reinstall (not scoped to fresh-install-only), the installer:
+**Decision:** On every AZERIOID Stack Manager install or reinstall (not scoped to fresh-install-only), the installer:
 
 1. Unbans all IPs in the **`azerioid-panel` fail2ban jail only** (never touches other jails such as `sshd`).
 2. Truncates **`/var/log/azerioid-panel/auth-fail.log`** only.

@@ -76,7 +76,7 @@ expect {
         }
         exp_continue
     }
-    "Stack Manager installed." {
+    "AZERIOID Stack Manager installed." {
         exp_continue
     }
     eof {

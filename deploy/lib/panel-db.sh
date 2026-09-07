@@ -19,7 +19,7 @@ configure_panel_db() {
     if [[ ! -f "${PREFIX}/web/.env" ]]; then
         cp "${ROOT}/web/.env.example" "${PREFIX}/web/.env"
     fi
-    env_set "${PREFIX}/web/.env" APP_NAME "Stack Manager"
+    env_set "${PREFIX}/web/.env" APP_NAME "AZERIOID Stack Manager"
     env_set "${PREFIX}/web/.env" DB_CONNECTION sqlite
     env_set "${PREFIX}/web/.env" DB_DATABASE "${PANEL_DB_PATH}"
     env_set "${PREFIX}/web/.env" BROKER_DRIVER sudo

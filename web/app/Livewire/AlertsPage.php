@@ -11,7 +11,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Alerts · Stack Manager')]
+#[Title('Alerts · AZERIOID Stack Manager')]
 class AlertsPage extends Component
 {
     public bool $service_down = true;
@@ -97,7 +97,7 @@ class AlertsPage extends Component
 
     public function testTelegram(TelegramNotifier $telegram): void
     {
-        if ($telegram->send('Stack Manager test message')) {
+        if ($telegram->send('AZERIOID Stack Manager test message')) {
             $this->flash = 'Test message sent.';
             $this->error = null;
         } else {

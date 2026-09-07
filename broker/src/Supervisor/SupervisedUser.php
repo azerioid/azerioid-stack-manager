@@ -26,7 +26,7 @@ final class SupervisedUser
             '--system',
             '--home-dir', self::HOME,
             '--shell', '/usr/sbin/nologin',
-            '--comment', 'Stack Manager supervised processes',
+            '--comment', 'AZERIOID Stack Manager supervised processes',
             self::USERNAME,
         ], null, 30);
         $runtime->mkdir(self::HOME, 0750);

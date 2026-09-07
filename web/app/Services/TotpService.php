@@ -33,7 +33,7 @@ final class TotpService
 
     public function qrSvg(string $email, string $secret): string
     {
-        $url = $this->google2fa->getQRCodeUrl(config('app.name', 'Stack Manager'), $email, $secret);
+        $url = $this->google2fa->getQRCodeUrl(config('app.name', 'AZERIOID Stack Manager'), $email, $secret);
         $writer = new Writer(new ImageRenderer(new RendererStyle(220), new SvgImageBackEnd()));
         return $writer->writeString($url);
     }

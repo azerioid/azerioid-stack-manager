@@ -8,7 +8,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Updates · Stack Manager')]
+#[Title('Updates · AZERIOID Stack Manager')]
 class UpdatesPage extends Component
 {
     public int $total = 0;

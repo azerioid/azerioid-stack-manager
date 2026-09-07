@@ -11,7 +11,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Processes · Stack Manager')]
+#[Title('Processes · AZERIOID Stack Manager')]
 class ProcessesPage extends Component
 {
     public array $programs = [];

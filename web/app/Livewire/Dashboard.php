@@ -10,7 +10,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Overview · Stack Manager')]
+#[Title('Overview · AZERIOID Stack Manager')]
 class Dashboard extends Component
 {
     public array $status = [];

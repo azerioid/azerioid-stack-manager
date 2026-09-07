@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * Stack Manager privileged broker.
+ * AZERIOID Stack Manager privileged broker.
  *
  * Enumerated actions only. Arguments are re-validated here. Commands are
  * executed as argv arrays via proc_open — never interpolated into a shell.

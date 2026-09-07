@@ -55,7 +55,7 @@ final class VhostUser
                 '--home-dir', $root,
                 '--shell', '/bin/bash',
                 '--gid', self::GROUP,
-                '--comment', 'Stack Manager vhost user for ' . $domain,
+                '--comment', 'AZERIOID Stack Manager vhost user for ' . $domain,
                 $username,
             ], null, 30);
         }

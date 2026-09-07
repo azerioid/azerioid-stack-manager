@@ -23,7 +23,7 @@ done
 pass() { echo "[PASS] $*"; }
 fail() { echo "[FAIL] $*" >&2; FAILURES=$((FAILURES + 1)); }
 
-echo "==> Stack Manager P1 smoke test (port ${PANEL_PORT})"
+echo "==> AZERIOID Stack Manager P1 smoke test (port ${PANEL_PORT})"
 
 # 1. Panel HTTP responds
 if curl -fsSI "http://127.0.0.1:${PANEL_PORT}" 2>/dev/null | head -n1 | grep -qE 'HTTP/[0-9.]+ (200|302|301)'; then

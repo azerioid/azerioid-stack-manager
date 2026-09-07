@@ -1,6 +1,6 @@
 # Port Ownership Matrix (A9)
 
-Stack Manager enforces **one web server instance per type** on a host. The panel always uses a dedicated Caddy vhost snippet — never a second Caddy process.
+AZERIOID Stack Manager enforces **one web server instance per type** on a host. The panel always uses a dedicated Caddy vhost snippet — never a second Caddy process.
 
 ## Scenarios
 

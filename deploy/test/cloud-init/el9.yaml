@@ -1,5 +1,5 @@
 #cloud-config
-# Stack Manager P1 smoke — EL 9 (SELinux enforcing)
+# AZERIOID Stack Manager P1 smoke — EL 9 (SELinux enforcing)
 package_update: true
 packages:
   - git
@@ -15,5 +15,5 @@ packages:
 runcmd:
   - setenforce 1 || true
   - mkdir -p /opt/stack-manager
-  - echo "Stack Manager smoke VM ready (EL 9, SELinux enforcing)" > /etc/motd
-final_message: "Stack Manager EL 9 test VM ready after $UPTIME seconds"
+  - echo "AZERIOID Stack Manager smoke VM ready (EL 9, SELinux enforcing)" > /etc/motd
+final_message: "AZERIOID Stack Manager EL 9 test VM ready after $UPTIME seconds"

@@ -10,7 +10,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Services · Stack Manager')]
+#[Title('Services · AZERIOID Stack Manager')]
 class ServicesPage extends Component
 {
     public array $controlled = [];

@@ -1,6 +1,6 @@
-# Stack Manager — Master Specification
+# AZERIOID Stack Manager — Master Specification
 
-Working title: **Stack Manager** (formerly LACMP Panel). A self-contained host control plane for managing web stacks on Linux.
+Working title: **AZERIOID Stack Manager** (formerly LACMP Panel). A self-contained host control plane for managing web stacks on Linux.
 
 ## Architecture
 

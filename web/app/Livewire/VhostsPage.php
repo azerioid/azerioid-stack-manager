@@ -10,7 +10,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.app')]
-#[Title('Virtual hosts · Stack Manager')]
+#[Title('Virtual hosts · AZERIOID Stack Manager')]
 class VhostsPage extends Component
 {
     public array $vhosts = [];

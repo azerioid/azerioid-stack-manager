@@ -223,7 +223,7 @@ final class Validator
             throw new BrokerException('Invalid service name.', 2);
         }
         if (!in_array($name, $allowed, true)) {
-            throw new BrokerException('Service is not in the LACMP control allowlist.', 3);
+            throw new BrokerException('Service is not in the AZERIOID control allowlist.', 3);
         }
         return $name;
     }

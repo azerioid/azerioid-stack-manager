@@ -10,7 +10,7 @@ use Livewire\Attributes\Title;
 use Livewire\Component;
 
 #[Layout('layouts.guest')]
-#[Title('Enable 2FA · Stack Manager')]
+#[Title('Enable 2FA · AZERIOID Stack Manager')]
 class TwoFactorSetup extends Component
 {
     public string $code = '';

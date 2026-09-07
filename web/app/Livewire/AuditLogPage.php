@@ -9,7 +9,7 @@ use Livewire\Component;
 use Livewire\WithPagination;
 
 #[Layout('layouts.app')]
-#[Title('Audit · Stack Manager')]
+#[Title('Audit · AZERIOID Stack Manager')]
 class AuditLogPage extends Component
 {
     use WithPagination;
