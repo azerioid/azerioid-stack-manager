@@ -24,17 +24,60 @@ detect_public_ip() {
 
 ensure_caddy_imports_conf() {
     install -d -m 0755 /etc/caddy "${CADDY_CONFD}"
-    if [[ ! -f "${CADDYFILE}" ]]; then
-        cat > "${CADDYFILE}" <<EOF
-{
+    # Panel uses tls internal (self-signed) on public IP mode. Chrome often accepts the
+    # warning for the document request over h2, then retries /livewire/update over HTTP/3
+    # (alt-svc) and fails with net::ERR_CERT_AUTHORITY_INVALID — login never completes.
+    # Force h1/h2 only so Livewire stays same-connection as the page the operator trusted.
+    local desired=$'{
     admin off
+    servers {
+        protocols h1 h2
+    }
 }
-import ${CADDY_CONFD}/*.conf
-EOF
+import '"${CADDY_CONFD}"'/*.conf
+'
+    if [[ ! -f "${CADDYFILE}" ]]; then
+        printf '%s' "${desired}" > "${CADDYFILE}"
         chown root:root "${CADDYFILE}"
         return 0
     fi
-    if ! grep -qE 'import[[:space:]]+.*conf\.d' "${CADDYFILE}"; then
+    if ! grep -qE 'protocols[[:space:]]+h1[[:space:]]+h2' "${CADDYFILE}"; then
+        # Rewrite / merge global options without dropping an existing import line.
+        if grep -qE 'import[[:space:]]+.*conf\.d' "${CADDYFILE}"; then
+            # Replace leading global block if present; otherwise prepend.
+            if grep -qE '^[[:space:]]*\{' "${CADDYFILE}"; then
+                python3 - "${CADDYFILE}" "${CADDY_CONFD}" <<'PY'
+import pathlib, re, sys
+path, confd = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+global_block = """{
+    admin off
+    servers {
+        protocols h1 h2
+    }
+}
+"""
+# Drop existing top-level {...} global options only (first brace group).
+m = re.match(r'(?s)^\s*\{.*?\n\}\s*', text)
+rest = text[m.end():] if m else text
+if not re.search(r'import\s+.*conf\.d', rest):
+    rest = f"import {confd}/*.conf\n" + rest
+path.write_text(global_block + rest.lstrip("\n"))
+PY
+            else
+                printf '%s\n' "${desired%$'\n'}" > "${CADDYFILE}.new"
+                # Keep previous body after ensuring import once
+                if ! grep -qE 'import[[:space:]]+.*conf\.d' "${CADDYFILE}"; then
+                    echo "import ${CADDY_CONFD}/*.conf" >> "${CADDYFILE}.new"
+                fi
+                cat "${CADDYFILE}" >> "${CADDYFILE}.new"
+                mv "${CADDYFILE}.new" "${CADDYFILE}"
+            fi
+        else
+            printf '%s' "${desired}" > "${CADDYFILE}"
+        fi
+        chown root:root "${CADDYFILE}"
+    elif ! grep -qE 'import[[:space:]]+.*conf\.d' "${CADDYFILE}"; then
         cat >> "${CADDYFILE}" <<EOF
 
 # AZERIOID Stack Manager — load managed vhost snippets
@@ -66,6 +109,11 @@ configure_panel_caddy() {
     if [[ "${ACCESS:-tunnel}" == "public" ]]; then
         if [[ -z "${public_domain}" && -z "${public_ip}" ]]; then
             public_ip="$(detect_public_ip || true)"
+            # Keep installer / APP_URL in sync when IP was only detected here.
+            if [[ -n "${public_ip}" ]]; then
+                PANEL_PUBLIC_IP="${public_ip}"
+                export PANEL_PUBLIC_IP
+            fi
         fi
         [[ -n "${public_domain}" || -n "${public_ip}" ]] \
             || die "Could not detect public IP for --access=public (set --domain= or confirm IP in interactive setup)"
@@ -73,6 +121,16 @@ configure_panel_caddy() {
             echo "==> Public panel HTTPS on ${public_domain}:${PANEL_PORT}"
         else
             echo "==> Public panel HTTPS on ${public_ip}:${PANEL_PORT}"
+        fi
+        # Re-assert APP_URL after IP detection (configure_panel_db may have run with empty IP).
+        if [[ -f "${PREFIX}/web/.env" ]]; then
+            local app_url
+            if [[ -n "${public_domain}" ]]; then
+                app_url="https://${public_domain}:${PANEL_PORT}"
+            else
+                app_url="https://${public_ip}:${PANEL_PORT}"
+            fi
+            env_set "${PREFIX}/web/.env" APP_URL "${app_url}"
         fi
     fi
 
@@ -91,6 +149,7 @@ common = f"""    encode gzip zstd
         X-Frame-Options DENY
         Referrer-Policy no-referrer
         -Server
+        -Alt-Svc
     }}
     log {{
         output file /var/log/caddy/access_azerioid-panel.log {{

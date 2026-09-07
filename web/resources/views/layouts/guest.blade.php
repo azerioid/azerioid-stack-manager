@@ -30,8 +30,10 @@
                 $panelUrl = parse_url((string) config('app.url'));
                 $bindHost = $panelUrl['host'] ?? '127.0.0.1';
                 $bindPort = $panelUrl['port'] ?? null;
+                $isPublic = ($panelUrl['scheme'] ?? 'http') === 'https' && $bindHost !== '127.0.0.1';
             @endphp
-            Bind: {{ $bindHost }}@if ($bindPort):{{ $bindPort }}@endif · access via SSH tunnel
+            Bind: {{ $bindHost }}@if ($bindPort):{{ $bindPort }}@endif
+            · {{ $isPublic ? 'public HTTPS (accept the certificate warning once)' : 'access via SSH tunnel' }}
         </p>
     </div>
     @livewireScripts

@@ -28,6 +28,14 @@ configure_panel_db() {
     env_set "${PREFIX}/web/.env" APP_DEBUG false
     local app_url="http://127.0.0.1:${PANEL_PORT:-3169}"
     if [[ "${ACCESS:-tunnel}" == "public" ]]; then
+        if [[ -z "${PANEL_PUBLIC_DOMAIN:-}" && -z "${PANEL_PUBLIC_IP:-}" ]]; then
+            # Same detection as configure_panel_caddy — APP_URL must match the browsed origin
+            # or Vite emits absolute asset URLs to 127.0.0.1 that remote browsers cannot load.
+            if declare -F detect_public_ip >/dev/null 2>&1; then
+                PANEL_PUBLIC_IP="$(detect_public_ip || true)"
+                export PANEL_PUBLIC_IP
+            fi
+        fi
         if [[ -n "${PANEL_PUBLIC_DOMAIN:-}" ]]; then
             app_url="https://${PANEL_PUBLIC_DOMAIN}:${PANEL_PORT}"
         elif [[ -n "${PANEL_PUBLIC_IP:-}" ]]; then
