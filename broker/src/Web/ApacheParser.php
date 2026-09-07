@@ -15,7 +15,9 @@ final class ApacheParser
      */
     public static function parseFile(string $path, string $contents, array $readonlyVhosts, bool $enabled = true): array
     {
-        $domain = self::match($contents, '/^\s*ServerName\s+(\S+)/m') ?? basename($path, '.conf');
+        $serverName = self::match($contents, '/^\s*ServerName\s+(\S+)/m');
+        $active = is_string($serverName) && $serverName !== '';
+        $domain = $active ? $serverName : '';
         $aliases = [];
         if (preg_match_all('/^\s*ServerAlias\s+(.+)$/m', $contents, $am)) {
             foreach ($am[1] as $line) {
@@ -26,7 +28,7 @@ final class ApacheParser
                 }
             }
         }
-        $domains = array_values(array_unique(array_merge([$domain], $aliases)));
+        $domains = $active ? array_values(array_unique(array_merge([$domain], $aliases))) : [];
         $root = self::match($contents, '/^\s*DocumentRoot\s+(\S+)/m');
         if (is_string($root)) {
             $root = trim($root, '"\'');
@@ -80,8 +82,9 @@ final class ApacheParser
             'tls_cert' => $tlsCert,
             'tls_key' => $tlsKey,
             'reverse_proxy' => $type === 'proxy' ? $proxy : null,
-            'readonly' => ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
+            'readonly' => $active && ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
             'enabled' => $enabled,
+            'active' => $active,
             'source' => $path,
         ];
     }

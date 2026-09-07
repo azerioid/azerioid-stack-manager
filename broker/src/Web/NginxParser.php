@@ -11,17 +11,20 @@ final class NginxParser
      */
     public static function parseFile(string $path, string $contents, array $readonlyVhosts, bool $enabled = true): array
     {
-        $domain = self::match($contents, '/^\s*server_name\s+([^;]+);/m') ?? basename($path, '.conf');
-        $domain = preg_split('/\s+/', trim($domain))[0] ?? $domain;
+        $serverNameRaw = self::match($contents, '/^\s*server_name\s+([^;]+);/m');
+        $active = is_string($serverNameRaw) && trim($serverNameRaw) !== '';
+        $domain = '';
         $aliases = [];
-        if (preg_match('/^\s*server_name\s+([^;]+);/m', $contents, $m)) {
-            foreach (preg_split('/\s+/', trim($m[1])) ?: [] as $alias) {
+        if ($active) {
+            $parts = preg_split('/\s+/', trim($serverNameRaw)) ?: [];
+            $domain = $parts[0] ?? '';
+            foreach ($parts as $alias) {
                 if ($alias !== '' && $alias !== $domain) {
                     $aliases[] = $alias;
                 }
             }
         }
-        $domains = array_values(array_unique(array_merge([$domain], $aliases)));
+        $domains = $active ? array_values(array_unique(array_merge([$domain], $aliases))) : [];
         $root = self::match($contents, '/^\s*root\s+([^;]+);/m');
         if (is_string($root)) {
             $root = trim($root, " \t\n\r\0\x0B\"'");
@@ -73,8 +76,9 @@ final class NginxParser
             'tls_cert' => $tlsCert,
             'tls_key' => $tlsKey,
             'reverse_proxy' => $type === 'proxy' ? $proxy : null,
-            'readonly' => ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
+            'readonly' => $active && ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
             'enabled' => $enabled,
+            'active' => $active,
             'source' => $path,
         ];
     }

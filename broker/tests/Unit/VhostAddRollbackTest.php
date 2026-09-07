@@ -161,6 +161,23 @@ final class VhostAddRollbackTest extends TestCase
         $this->assertNotSame(0, $code);
     }
 
+    public function test_recreates_over_leftover_docroot_and_orphan_conf(): void
+    {
+        $this->rt->dirs['/data/www/let.az'] = true;
+        $this->rt->files['/data/www/let.az/index.php'] = '<?php echo "kept";';
+        // Orphan conf with no site address — must not count as registration.
+        $this->rt->files['/etc/caddy/conf.d/let.az.conf'] = "# leftover orphan\n";
+        $this->rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
+
+        ob_start();
+        $code = $this->kernel->run(['broker', 'vhost.add', 'let.az', '/data/www/let.az', 'php', '8.4'], []);
+        $out = ob_get_clean();
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString('let.az {', $this->rt->files['/etc/caddy/conf.d/let.az.conf']);
+        // Existing non-empty docroot must not get a second welcome index overwrite.
+        $this->assertSame('<?php echo "kept";', $this->rt->files['/data/www/let.az/index.php']);
+    }
+
     public function test_rejects_path_traversal_root(): void
     {
         ob_start();

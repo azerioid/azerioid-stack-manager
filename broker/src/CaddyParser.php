@@ -28,6 +28,14 @@ final class CaddyParser
     public static function parseFile(string $path, string $contents, array $readonlyVhosts): array
     {
         $domains = self::extractDomains($contents);
+        // Port-only listens (:80 / :443) have no hostname in the header — keep filename identity
+        // so distro "default" sites stay listed/readonly. Comment-only orphan files stay inactive.
+        if ($domains === []) {
+            $stripped = preg_replace('/^\s*#.*$/m', '', $contents) ?? $contents;
+            if (preg_match('/^:(?:80|443)\b/m', $stripped)) {
+                $domains = [strtolower(basename($path, '.conf'))];
+            }
+        }
         $root = self::match($contents, '/^\s*root\s+\*\s+(\S+)/m');
         $phpSocket = self::match($contents, '/^\s*php_fastcgi\s+(\S+)/m');
         $proxy = self::match($contents, '/^\s*reverse_proxy\s+(\S+)/m');
@@ -54,6 +62,7 @@ final class CaddyParser
         }
 
         $basename = basename($path, '.conf');
+        $active = $domains !== [];
         $tlsEnabled = !$explicitHttp || $hasTlsBlock;
         $tlsMode = 'off';
         if ($tlsEnabled) {
@@ -68,7 +77,8 @@ final class CaddyParser
 
         return [
             'domains' => $domains,
-            'domain' => $domains[0] ?? $basename,
+            // Never invent a domain from the filename — orphan/leftover files are not registrations.
+            'domain' => $domains[0] ?? '',
             'root' => $root,
             'php_socket' => $phpSocket,
             'php_version' => $phpVersion,
@@ -78,9 +88,11 @@ final class CaddyParser
             'tls_cert' => $tlsCert,
             'tls_key' => $tlsKey,
             'reverse_proxy' => $proxy,
-            'readonly' => ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
+            'readonly' => $active && ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
             'enabled' => true,
+            'active' => $active,
             'source' => $path,
+            'basename' => $basename,
         ];
     }
 

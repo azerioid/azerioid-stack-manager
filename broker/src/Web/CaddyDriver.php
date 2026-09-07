@@ -10,6 +10,7 @@ use AzerioidPanel\Broker\CaddyParser;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
 
@@ -37,7 +38,11 @@ final class CaddyDriver implements WebServerDriver
             } catch (\Throwable) {
                 continue;
             }
-            $sites[] = CaddyParser::parseFile($file, $contents, $config->readonlyVhosts);
+            $parsed = CaddyParser::parseFile($file, $contents, $config->readonlyVhosts);
+            if (!VhostRegistration::isActive($parsed)) {
+                continue;
+            }
+            $sites[] = $parsed;
         }
         usort($sites, static fn ($a, $b) => strcmp((string) $a['domain'], (string) $b['domain']));
         return $sites;
@@ -52,10 +57,12 @@ final class CaddyDriver implements WebServerDriver
         $upstream = $spec['upstream'] ?? null;
 
         $confPath = rtrim($config->caddyConfD, '/') . '/' . $domain . '.conf';
-        if ($runtime->fileExists($confPath)) {
-            throw new BrokerException("A vhost for {$domain} already exists.", 3);
-        }
+        // Duplicate = active registration (parsed site config), never docroot existence.
         $this->assertDomainFree($runtime, $config, $domain);
+        // Leftover/orphan conf.d file for this name with no active site block — replace it.
+        if ($runtime->fileExists($confPath)) {
+            $runtime->deleteFile($confPath);
+        }
 
         $contents = $this->render(
             $runtime,
@@ -302,14 +309,14 @@ final class CaddyDriver implements WebServerDriver
 
     private function assertDomainFree(Runtime $runtime, Config $config, string $domain): void
     {
-        foreach ($this->listVhosts($runtime, $config) as $parsed) {
-            if ($parsed['readonly'] && (in_array($domain, $parsed['domains'] ?? [], true) || ($parsed['domain'] ?? '') === $domain)) {
-                throw new BrokerException("{$domain} is managed externally and can't be edited.", 3);
-            }
-            if (in_array($domain, $parsed['domains'] ?? [], true) || ($parsed['domain'] ?? '') === $domain) {
-                throw new BrokerException("A vhost for {$domain} already exists.", 3);
-            }
+        $parsed = VhostRegistration::findDomain($this->listVhosts($runtime, $config), $domain);
+        if ($parsed === null) {
+            return;
         }
+        if (!empty($parsed['readonly'])) {
+            throw new BrokerException("{$domain} is managed externally and can't be edited.", 3);
+        }
+        throw new BrokerException("A vhost for {$domain} already exists.", 3);
     }
 
     private function ensureAccessLog(Runtime $runtime, Config $config, string $domain): void

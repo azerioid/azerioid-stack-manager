@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\Certbot;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
 
 final class ApacheDriver implements WebServerDriver
@@ -43,8 +44,11 @@ final class ApacheDriver implements WebServerDriver
                 continue;
             }
             $parsed = ApacheParser::parseFile($entry['path'], $contents, $config->readonlyVhosts, $entry['enabled']);
+            if (!VhostRegistration::isActive($parsed)) {
+                continue;
+            }
             $key = strtolower((string) $parsed['domain']);
-            if (isset($seenDomain[$key])) {
+            if ($key === '' || isset($seenDomain[$key])) {
                 continue;
             }
             $seenDomain[$key] = true;
@@ -63,9 +67,7 @@ final class ApacheDriver implements WebServerDriver
         $upstream = $spec['upstream'] ?? null;
 
         $confPath = $this->siteAvailablePath($config, $domain);
-        if ($runtime->fileExists($confPath)) {
-            throw new BrokerException("A vhost for {$domain} already exists.", 3);
-        }
+        // Duplicate = active registration, never docroot / orphan file existence.
         foreach ($this->listVhosts($runtime, $config) as $parsed) {
             if (($parsed['domain'] ?? '') === $domain || in_array($domain, $parsed['domains'] ?? [], true)) {
                 throw new BrokerException(
@@ -75,6 +77,9 @@ final class ApacheDriver implements WebServerDriver
                     3
                 );
             }
+        }
+        if ($runtime->fileExists($confPath)) {
+            $runtime->deleteFile($confPath);
         }
 
         $contents = $this->render($runtime, $config, $domain, $root, $type, $phpVersion, $upstream);
