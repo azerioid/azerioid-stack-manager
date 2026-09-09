@@ -52,7 +52,8 @@ final class BackupRestore
         if ($overwrite) {
             Validator::typedConfirm((string) ($input['confirm'] ?? ''), 'OVERWRITE');
         }
-        $existing = $runtime->dbQuery('SHOW DATABASES LIKE ?', [$target]);
+        // MariaDB rejects bound parameters for SHOW DATABASES LIKE; dbName is already allowlisted.
+        $existing = $runtime->dbQuery('SHOW DATABASES LIKE \'' . $target . '\'');
         if ($existing !== [] && !$overwrite) {
             throw new BrokerException('Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.', 3);
         }
