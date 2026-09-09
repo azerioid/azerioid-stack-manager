@@ -88,6 +88,16 @@ fpm_unit() {
     echo "php${PANEL_PHP_VERSION}-fpm"
 }
 
+# Panel UI FPM. On EL the distro php-fpm master is httpd_t; sudo to the broker
+# is denied (often dontaudit). A dedicated unit runs unconfined_service_t.
+panel_fpm_unit() {
+    if [[ "${DISTRO_FAMILY:-}" == "el" ]]; then
+        echo "azerioid-panel-php-fpm"
+        return
+    fi
+    fpm_unit
+}
+
 php_bin() {
     if command -v "php${PANEL_PHP_VERSION}" >/dev/null 2>&1; then
         command -v "php${PANEL_PHP_VERSION}"
@@ -150,11 +160,14 @@ PY
 
 write_runtime_json() {
     install -d -m 0750 -o root -g root /etc/azerioid-panel
+    local panel_unit
+    panel_unit="$(panel_fpm_unit)"
     cat > /etc/azerioid-panel/runtime.json <<EOF
 {
     "panel_php_version": "${PANEL_PHP_VERSION}",
     "fpm_socket": "/run/php/azerioid-panel.sock",
     "fpm_pool": "azerioid-panel",
+    "fpm_unit": "${panel_unit}",
     "queue_unit": "azerioid-panel-queue.service"
 }
 EOF

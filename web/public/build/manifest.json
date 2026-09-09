@@ -1,6 +1,6 @@
 {
   "resources/css/app.css": {
-    "file": "assets/app-8Ek1Z_bW.css",
+    "file": "assets/app-tBIsDD5h.css",
     "src": "resources/css/app.css",
     "isEntry": true
   },
@@ -8,6 +8,12 @@
     "file": "assets/app-DMsN-rLE.js",
     "name": "app",
     "src": "resources/js/app.js",
+    "isEntry": true
+  },
+  "resources/js/vhost-files.js": {
+    "file": "assets/vhost-files-Bnku3I63.js",
+    "name": "vhost-files",
+    "src": "resources/js/vhost-files.js",
     "isEntry": true
   }
 }

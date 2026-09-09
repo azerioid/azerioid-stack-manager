@@ -9,6 +9,7 @@ final class AuditLog
         'password', 'passwd', 'secret', 'token', 'mysql_password',
         'passphrase', 'bot_token', 'access_key', 'access_key_id',
         'secret_access_key', 'spaces_key', 'spaces_secret', 'aws_secret_access_key',
+        'content', 'content_base64', 'body', 'bytes',
     ];
 
     public function __construct(private readonly Config $config, private readonly Runtime $runtime)

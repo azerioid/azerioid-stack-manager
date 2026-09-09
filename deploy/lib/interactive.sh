@@ -60,7 +60,7 @@ run_interactive_install_prompts() {
     fi
 
     if [[ "${ACCESS}" == "public" && "${EXPLICIT_PUBLIC_DOMAIN:-0}" -eq 0 ]]; then
-        PANEL_PUBLIC_DOMAIN="$(prompt_line "Domain for automatic HTTPS (blank = IP / self-signed)" "")"
+        PANEL_PUBLIC_DOMAIN="$(prompt_line "Panel hostname on :443 (blank = IP:port self-signed; tunnel always kept)" "")"
     fi
 
     if [[ "${ACCESS}" == "public" && -z "${PANEL_PUBLIC_DOMAIN}" && "${EXPLICIT_PUBLIC_IP:-0}" -eq 0 ]]; then

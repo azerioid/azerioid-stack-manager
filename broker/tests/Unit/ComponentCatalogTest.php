@@ -52,10 +52,11 @@ final class ComponentCatalogTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertTrue($json['ok']);
         $this->assertSame('ubuntu', $json['data']['distro_key']);
-        $this->assertCount(13, $json['data']['components']);
+        $this->assertCount(14, $json['data']['components']);
         $ids = array_column($json['data']['components'], 'id');
         $this->assertContains('redis', $ids);
         $this->assertContains('caddy', $ids);
+        $this->assertContains('mongodb', $ids);
     }
 
     public function test_clean_host_marks_non_system_components_not_installed(): void

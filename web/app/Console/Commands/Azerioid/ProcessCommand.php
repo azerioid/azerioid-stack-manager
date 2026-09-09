@@ -97,7 +97,7 @@ class ProcessCommand extends Command
                 ];
             } else {
                 $name = $nameOpt !== '' ? $nameOpt : 'app-' . substr(bin2hex(random_bytes(4)), 0, 8);
-                $directory = $directory !== '' ? $directory : (SupervisedUser::HOME . '/apps');
+                $directory = $directory !== '' ? $directory : SupervisedUser::APPS_DIR;
                 $payload = [
                     'name' => Validator::supervisorProgramName((string) $name),
                     'command' => Validator::supervisorCommand($command),

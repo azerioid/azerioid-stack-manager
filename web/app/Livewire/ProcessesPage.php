@@ -80,7 +80,7 @@ class ProcessesPage extends Component
     {
         $this->resetForm();
         $this->formMode = 'freeform';
-        $this->directory = SupervisedUser::HOME . '/apps';
+        $this->directory = SupervisedUser::APPS_DIR;
     }
 
     public function openVhostTied(): void

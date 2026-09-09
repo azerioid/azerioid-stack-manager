@@ -5,8 +5,11 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Network\SiteHttpFirewall;
+use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Web\VhostEngine;
 use AzerioidPanel\Broker\Web\WebServers;
 
 final class VhostAdd
@@ -31,12 +34,21 @@ final class VhostAdd
             throw new BrokerException("{$domain} is managed externally and can't be edited.", 3);
         }
 
+        (new SiteHttpFirewall($runtime))->ensure();
+        (new SitePhpTimeouts())->ensureSitePools($runtime, $config);
+
+        $engine = Validator::vhostEngine((string) ($input['engine'] ?? VhostEngine::CADDY));
+        if ($type === 'proxy') {
+            $engine = VhostEngine::CADDY;
+        }
+
         return WebServers::for($config)->addVhost($runtime, $config, [
             'domain' => $domain,
             'root' => $root,
             'type' => $type,
             'php_version' => $phpVersion,
             'upstream' => $upstream,
+            'engine' => $engine,
         ]);
     }
 }

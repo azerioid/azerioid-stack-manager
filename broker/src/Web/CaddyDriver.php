@@ -10,6 +10,7 @@ use AzerioidPanel\Broker\CaddyParser;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
@@ -55,6 +56,10 @@ final class CaddyDriver implements WebServerDriver
         $type = $spec['type'];
         $phpVersion = $spec['php_version'] ?? null;
         $upstream = $spec['upstream'] ?? null;
+        $engine = VhostEngine::normalize($spec['engine'] ?? VhostEngine::CADDY);
+        if ($type === 'proxy') {
+            $engine = VhostEngine::CADDY;
+        }
 
         $confPath = rtrim($config->caddyConfD, '/') . '/' . $domain . '.conf';
         // Duplicate = active registration (parsed site config), never docroot existence.
@@ -72,7 +77,10 @@ final class CaddyDriver implements WebServerDriver
             $type,
             $phpVersion,
             $upstream,
-            TlsMode::OFF
+            TlsMode::OFF,
+            null,
+            null,
+            $engine,
         );
         if (!$runtime->isDir($root)) {
             $runtime->mkdir($root, 0755);
@@ -128,6 +136,7 @@ final class CaddyDriver implements WebServerDriver
             'type' => $type,
             'php_version' => $phpVersion,
             'upstream' => $upstream,
+            'engine' => $engine,
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -205,6 +214,7 @@ final class CaddyDriver implements WebServerDriver
             $spec['tls_mode'],
             $spec['tls_cert'],
             $spec['tls_key'],
+            $spec['engine'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -249,6 +259,7 @@ final class CaddyDriver implements WebServerDriver
             'tls_cert' => $spec['tls_cert'],
             'tls_key' => $spec['tls_key'],
             'type' => $spec['type'],
+            'engine' => $spec['engine'],
         ]));
 
         return [
@@ -260,6 +271,7 @@ final class CaddyDriver implements WebServerDriver
             'php_version' => $spec['php_version'],
             'tls' => TlsMode::enabled($spec['tls_mode']),
             'tls_mode' => $spec['tls_mode'],
+            'engine' => $spec['engine'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -291,8 +303,7 @@ final class CaddyDriver implements WebServerDriver
 
     public function version(Runtime $runtime, Config $config): array
     {
-        $bin = $runtime->fileExists($config->caddyBin) ? $config->caddyBin : '/usr/bin/caddy';
-        $r = $runtime->exec([$bin, 'version']);
+        $r = $runtime->exec(CaddyCli::argv($runtime, $config, ['version']));
         $line = trim(explode("\n", $r->stdout)[0] ?? '');
         $version = $line;
         if (preg_match('/v?(\d+\.\d+\.\d+\S*)/', $line, $m)) {
@@ -346,7 +357,12 @@ final class CaddyDriver implements WebServerDriver
         string $tlsMode = TlsMode::AUTO,
         ?string $tlsCert = null,
         ?string $tlsKey = null,
+        string $engine = VhostEngine::CADDY,
     ): string {
+        $engine = VhostEngine::normalize($engine);
+        if ($type === 'proxy') {
+            $engine = VhostEngine::CADDY;
+        }
         $mode = TlsMode::effective($tlsMode, $domain);
         if ($mode === TlsMode::OFF) {
             $siteLabel = "http://{$domain}";
@@ -362,20 +378,40 @@ final class CaddyDriver implements WebServerDriver
                 $tlsLine = '';
             }
         }
+        $phpPart = $phpVersion !== null && $phpVersion !== '' ? " php={$phpVersion}" : '';
+        $rootPart = $root !== '' ? " root={$root}" : '';
+        $managed = "# azerioid-managed engine={$engine} type={$type}{$phpPart}{$rootPart}\n";
+
         $phpBlock = '';
         $proxyBlock = '';
-        if ($type === 'php' && $phpVersion !== null) {
-            $sock = $config->phpFpmSocket($phpVersion, $runtime);
-            $phpBlock = "    php_fastcgi {$sock}\n";
+        $rootBlock = '';
+        $fileServer = '';
+        if (VhostEngine::isBackend($engine)) {
+            $upstreamAddr = VhostEngine::backendAddress($config, $engine);
+            $proxyBlock = <<<PROXY
+    reverse_proxy {$upstreamAddr} {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+PROXY;
+        } else {
+            if ($type === 'php' && $phpVersion !== null) {
+                $sock = $config->phpFpmSocket($phpVersion, $runtime);
+                $phpBlock = SitePhpTimeouts::caddyPhpFastcgiBlock($sock);
+            }
+            if ($type === 'proxy' && $upstream !== null) {
+                $proxyBlock = "    reverse_proxy {$upstream}\n";
+            }
+            $rootBlock = $type === 'proxy' ? '' : "    root * {$root}\n";
+            $fileServer = $type === 'proxy' ? '' : "    file_server {\n        index index.html index.php\n    }\n";
         }
-        if ($type === 'proxy' && $upstream !== null) {
-            $proxyBlock = "    reverse_proxy {$upstream}\n";
-        }
-        $rootBlock = $type === 'proxy' ? '' : "    root * {$root}\n";
-        $fileServer = $type === 'proxy' ? '' : "    file_server {\n        index index.html index.php\n    }\n";
 
         return <<<EOF
-{$siteLabel} {
+{$managed}{$siteLabel} {
 {$tlsLine}    header {
         Strict-Transport-Security "max-age=31536000; preload"
         X-Content-Type-Options nosniff
@@ -394,7 +430,7 @@ final class CaddyDriver implements WebServerDriver
 EOF;
     }
 
-    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string} */
+    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string,engine:string} */
     private function mergeEditSpec(Runtime $runtime, Config $config, string $domain, array $parsed, array $changes): array
     {
         $type = (string) ($parsed['type'] ?? 'static');
@@ -415,6 +451,10 @@ EOF;
             throw new BrokerException('php_version is required for PHP vhosts.', 2);
         }
         $upstream = $parsed['reverse_proxy'] ?? null;
+        $internal = VhostEngine::inferFromProxy(is_string($upstream) ? $upstream : null, $config);
+        if ($internal !== null) {
+            $upstream = $parsed['type'] === 'proxy' ? $upstream : null;
+        }
 
         if (isset($changes['tls_mode'])) {
             $tlsMode = TlsMode::normalize($changes['tls_mode']);
@@ -426,6 +466,12 @@ EOF;
         $tlsMode = TlsMode::effective($tlsMode, $domain);
         $tlsCert = $changes['tls_cert'] ?? ($parsed['tls_cert'] ?? null);
         $tlsKey = $changes['tls_key'] ?? ($parsed['tls_key'] ?? null);
+        $engine = isset($changes['engine'])
+            ? VhostEngine::normalize($changes['engine'])
+            : VhostEngine::normalize($parsed['engine'] ?? VhostEngine::CADDY);
+        if ($type === 'proxy') {
+            $engine = VhostEngine::CADDY;
+        }
 
         return [
             'root' => $root,
@@ -435,10 +481,11 @@ EOF;
             'tls_mode' => $tlsMode,
             'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
             'tls_key' => is_string($tlsKey) ? $tlsKey : null,
+            'engine' => $engine,
         ];
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string} */
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string} */
     private function editSnapshot(array $parsed): array
     {
         $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
@@ -449,6 +496,7 @@ EOF;
             'tls' => TlsMode::enabled($mode),
             'tls_mode' => $mode,
             'type' => (string) ($parsed['type'] ?? 'static'),
+            'engine' => VhostEngine::normalize($parsed['engine'] ?? VhostEngine::CADDY),
         ];
     }
 

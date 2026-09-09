@@ -120,16 +120,26 @@ final class VhostWelcomePageTest extends TestCase
         $rt->dirs['/etc/apache2/sites-available'] = true;
         $rt->dirs['/etc/apache2/sites-enabled'] = true;
         $rt->dirs['/var/log/apache2'] = true;
+        $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
+        $rt->files['/etc/apache2/ports.conf'] = "Listen 80\n";
         $rt->files['/usr/sbin/apachectl'] = '';
         $rt->files['/usr/sbin/a2ensite'] = '';
+        $rt->files['/usr/sbin/a2enmod'] = '';
+        $rt->files['/usr/sbin/a2dissite'] = '';
+        $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
         $rt->script(['/usr/sbin/apachectl', '-t'], 0, 'Syntax OK');
         $rt->script(['/usr/sbin/a2ensite', 'lamp.example.com'], 0);
         $rt->script(['/usr/bin/systemctl', 'reload', 'apache2'], 0);
+        $rt->script(['/usr/bin/systemctl', 'restart', 'apache2'], 0);
         $rt->script(['/usr/bin/systemctl', 'is-active', 'apache2'], 0, "active\n");
+        $rt->script(['/usr/bin/systemctl', 'restart', 'caddy'], 0);
 
         $kernel = new Kernel($cfg, $rt);
         ob_start();
-        $code = $kernel->run(['broker', 'vhost.add', 'lamp.example.com', '/data/www/lamp.example.com', 'php', '8.4'], []);
+        $code = $kernel->run(
+            ['broker', 'vhost.add', 'lamp.example.com', '/data/www/lamp.example.com', 'php', '8.4'],
+            ['engine' => 'apache']
+        );
         ob_end_clean();
         $this->assertSame(0, $code);
         $this->assertArrayHasKey('/data/www/lamp.example.com/index.php', $rt->files);
@@ -155,16 +165,23 @@ final class VhostWelcomePageTest extends TestCase
         $rt->dirs['/etc/nginx/sites-available'] = true;
         $rt->dirs['/etc/nginx/sites-enabled'] = true;
         $rt->dirs['/var/log/nginx'] = true;
+        $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
         $rt->files['/usr/sbin/nginx'] = '';
+        $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
         $rt->script(['/usr/sbin/nginx', '-t'], 0, 'syntax is ok');
         $rt->script(['/usr/bin/systemctl', 'reload', 'nginx'], 0);
+        $rt->script(['/usr/bin/systemctl', 'restart', 'nginx'], 0);
         $rt->script(['/usr/bin/systemctl', 'is-active', 'nginx'], 0, "active\n");
+        $rt->script(['/usr/bin/systemctl', 'restart', 'caddy'], 0);
         $rt->script(['/usr/bin/ln', '-sf', '/etc/nginx/sites-available/ngx.example.com.conf', '/etc/nginx/sites-enabled/ngx.example.com.conf'], 0);
         $rt->files['/usr/bin/ln'] = '';
 
         $kernel = new Kernel($cfg, $rt);
         ob_start();
-        $code = $kernel->run(['broker', 'vhost.add', 'ngx.example.com', '/data/www/ngx.example.com', 'static'], []);
+        $code = $kernel->run(
+            ['broker', 'vhost.add', 'ngx.example.com', '/data/www/ngx.example.com', 'static'],
+            ['engine' => 'nginx']
+        );
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
         $this->assertArrayHasKey('/data/www/ngx.example.com/index.html', $rt->files);

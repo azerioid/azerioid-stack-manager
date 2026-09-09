@@ -54,7 +54,7 @@ final class ComponentPreflight
             'component_id' => $id,
             'ok' => $issues === [],
             'issues' => $issues,
-            'remediations' => $this->remediations($definition, $issues),
+            'remediations' => [],
             'disk_gb_var' => $disk,
             'ram_mb_available' => $ramMb,
             'distro_key' => $this->os->distroKey,
@@ -63,41 +63,7 @@ final class ComponentPreflight
 
     private function conflictMessage(string $componentId, string $conflictId): string
     {
-        if ($conflictId === 'caddy' && in_array($componentId, ['nginx', 'apache'], true)) {
-            return 'Panel Caddy is listening on :80/:443. Release site ports before installing '
-                . $componentId . ' (the panel stays on its own port).';
-        }
-
         return "Conflicts with {$conflictId}, which is already present on this host.";
-    }
-
-    /**
-     * @param list<string> $issues
-     * @return list<array<string, string>>
-     */
-    private function remediations(array $definition, array $issues): array
-    {
-        $id = (string) ($definition['id'] ?? '');
-        if (!in_array($id, ['nginx', 'apache'], true) || $issues === []) {
-            return [];
-        }
-
-        $ownership = new PortOwnership($this->config, $this->runtime, $this->os);
-        if (!$ownership->conflictPresent('caddy')) {
-            return [];
-        }
-
-        foreach ($issues as $issue) {
-            if (str_contains($issue, ':80/:443')) {
-                return [[
-                    'action' => 'web.release-site-ports',
-                    'label' => 'Release :80/:443 from panel Caddy',
-                    'detail' => 'Keeps the panel on its configured port (e.g. 3169). Site traffic can use Nginx or Apache.',
-                ]];
-            }
-        }
-
-        return [];
     }
 
     /** @param array<string, mixed> $definition @return list<string> */

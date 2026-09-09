@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseManager;
+use AzerioidPanel\Broker\Database\DbAccessApply;
 use AzerioidPanel\Broker\Runtime;
 
 final class DbList
@@ -14,10 +15,11 @@ final class DbList
         $manager = new DatabaseManager($config, $runtime);
         $engine = $manager->resolveEngine((string) ($input['engine'] ?? ''));
         $driver = $manager->driver($engine);
+        $databases = (new DbAccessApply($config, $runtime))->annotate($engine, $driver->list());
 
         return [
             'engine' => $engine,
-            'databases' => $driver->list(),
+            'databases' => $databases,
         ];
     }
 }

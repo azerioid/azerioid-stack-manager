@@ -30,5 +30,7 @@ class AppServiceProvider extends ServiceProvider
             $max = (int) config('azerioid.login.max_attempts', 5);
             return Limit::perMinute($max)->by(strtolower((string) $request->input('email')) . '|' . $request->ip());
         });
+
+        config(['livewire.temporary_file_upload.rules' => ['file', 'max:20480']]);
     }
 }

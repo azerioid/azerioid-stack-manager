@@ -6,9 +6,10 @@ namespace AzerioidPanel\Broker\Vhost;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 
 /**
- * Per-vhost Linux identity for terminal sessions (and future per-vhost supervisor).
+ * Per-vhost Linux identity for terminal sessions and the file manager.
  *
  * Permission model (v1):
  * - Vhost user owns the docroot tree (user:azerioid-vhosts).
@@ -73,10 +74,10 @@ final class VhostUser
         }
         $path = dirname($config->managedComponentsPath) . '/vhost-users.json';
         $meta = self::load($runtime, $path);
-        if (!isset($meta['users'][$domain])) {
-            return;
+        $username = (string) ($meta['users'][$domain]['username'] ?? '');
+        if ($username === '') {
+            $username = self::username($domain);
         }
-        $username = (string) $meta['users'][$domain]['username'];
         if ($username !== '' && self::userExists($runtime, $username)) {
             $runtime->exec(['/usr/sbin/userdel', '--force', $username], null, 30);
         }
@@ -125,8 +126,23 @@ final class VhostUser
         // web_user in broker.json can lag the actual process user (e.g. www-data on a
         // Caddy stack). Add every reader that must open docroots: configured users plus
         // known web/PHP process users that exist on this host.
+        $changed = false;
         foreach (self::readerUsers($runtime, $config) as $user) {
+            if (self::userInGroup($runtime, $user, self::GROUP)) {
+                continue;
+            }
             $runtime->exec(['/usr/sbin/usermod', '-aG', self::GROUP, $user], null, 30);
+            $changed = true;
+        }
+        if ($changed) {
+            // Supplementary groups are copied at process start; FPM/apache/nginx
+            // otherwise keep serving 404 "File not found" until restart.
+            foreach (array_unique([$config->panelFpmUnit, 'php8.4-fpm', 'php-fpm', 'apache2', 'nginx', 'httpd']) as $unit) {
+                if ($unit === '') {
+                    continue;
+                }
+                $runtime->exec(['/usr/bin/systemctl', 'try-restart', $unit], null, 30);
+            }
         }
     }
 
@@ -142,6 +158,7 @@ final class VhostUser
             'www-data',
             'nginx',
             'apache',
+            SupervisedUser::USERNAME,
         ];
         $out = [];
         foreach ($candidates as $user) {
@@ -161,6 +178,17 @@ final class VhostUser
     private static function userExists(Runtime $runtime, string $username): bool
     {
         return $runtime->exec(['/usr/bin/id', '-u', $username], null, 10)->ok();
+    }
+
+    private static function userInGroup(Runtime $runtime, string $username, string $group): bool
+    {
+        $r = $runtime->exec(['/usr/bin/id', '-nG', $username], null, 10);
+        if (!$r->ok()) {
+            return false;
+        }
+        $groups = preg_split('/\s+/', trim($r->stdout)) ?: [];
+
+        return in_array($group, $groups, true);
     }
 
     /**

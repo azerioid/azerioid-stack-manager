@@ -35,7 +35,7 @@ final class ComponentPreflightConflictTest extends TestCase
         $this->assertSame([], $result['issues']);
     }
 
-    public function test_nginx_preflight_offers_release_remediation_when_caddy_on_80(): void
+    public function test_nginx_preflight_ok_when_caddy_owns_80(): void
     {
         $rt = new FakeRuntime();
         $rt->files['/etc/os-release'] = "ID=ubuntu\nVERSION_ID=\"24.04\"\n";
@@ -55,8 +55,8 @@ final class ComponentPreflightConflictTest extends TestCase
         $definition = json_decode($rt->files[$cfg->registryComponentsPath . '/nginx.json'], true);
         $result = (new ComponentPreflight($cfg, $rt, $os))->check($definition);
 
-        $this->assertFalse($result['ok']);
-        $this->assertNotEmpty($result['remediations']);
-        $this->assertSame('web.release-site-ports', $result['remediations'][0]['action']);
+        $this->assertTrue($result['ok']);
+        $this->assertSame([], $result['issues']);
+        $this->assertSame([], $result['remediations']);
     }
 }

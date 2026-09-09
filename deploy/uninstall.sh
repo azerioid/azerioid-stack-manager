@@ -88,7 +88,10 @@ purge_panel_repos() {
         /etc/apt/sources.list.d/php.list \
         /etc/apt/sources.list.d/mongodb-org-*.list \
         /etc/apt/sources.list.d/nodesource*.list \
-        /etc/yum.repos.d/caddy.repo 2>/dev/null || true
+        /etc/yum.repos.d/caddy.repo \
+        /etc/yum.repos.d/_copr:*caddy*.repo \
+        /etc/yum.repos.d/mongodb-org-*.repo 2>/dev/null || true
+    dnf -y copr remove @caddy/caddy >/dev/null 2>&1 || true
     rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
         /usr/share/keyrings/php-sury-archive-keyring.gpg \
         /usr/share/keyrings/mongodb-server-*.gpg 2>/dev/null || true
@@ -98,15 +101,82 @@ purge_panel_repos() {
 
 purge_engine_data_dirs() {
     echo "==> Removing panel-provisioned engine data directories"
-    systemctl stop mariadb postgresql mongod redis-server memcached nginx 2>/dev/null || true
-    rm -rf /var/lib/mysql /var/lib/mongodb /var/lib/postgresql \
+    systemctl stop mariadb postgresql mongod redis-server memcached nginx httpd 2>/dev/null || true
+    rm -rf /var/lib/mysql /var/lib/mongodb /var/lib/pgsql /var/lib/postgresql \
         /var/log/mysql /var/log/mongodb /var/log/postgresql 2>/dev/null || true
+}
+
+purge_firewall_rules() {
+    echo "==> Removing panel firewalld/ufw rules"
+    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+        local port rule
+        for port in 3169 3306 5432 27017; do
+            firewall-cmd --permanent --remove-port="${port}/tcp" >/dev/null 2>&1 || true
+        done
+        while IFS= read -r rule; do
+            [[ -n "${rule}" ]] || continue
+            if echo "${rule}" | grep -Eq 'port="(3169|3306|5432|27017|8081|8082)"'; then
+                firewall-cmd --permanent --remove-rich-rule="${rule}" >/dev/null 2>&1 || true
+            fi
+        done < <(firewall-cmd --permanent --list-rich-rules 2>/dev/null || true)
+        firewall-cmd --permanent --remove-rich-rule='rule family=ipv4 port port=8081 protocol=tcp drop' >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-rich-rule='rule family=ipv4 port port=8082 protocol=tcp drop' >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force delete allow 3169/tcp >/dev/null 2>&1 || true
+        ufw --force delete deny 8081/tcp >/dev/null 2>&1 || true
+        ufw --force delete deny 8082/tcp >/dev/null 2>&1 || true
+        ufw --force delete allow 3306/tcp >/dev/null 2>&1 || true
+        ufw --force delete allow 5432/tcp >/dev/null 2>&1 || true
+        ufw --force delete allow 27017/tcp >/dev/null 2>&1 || true
+    fi
 }
 
 purge_released_caddy_state() {
     rm -rf /var/lib/azerioid-panel/staging/released-caddy-vhosts-* 2>/dev/null || true
     rm -f /var/lib/azerioid-panel/staging/caddyfile.pre-release-*.bak 2>/dev/null || true
 }
+
+purge_vhost_identities() {
+    echo "==> Removing per-vhost users (az-vh-*) and supervised process user"
+    local meta=/var/lib/azerioid-panel/vhost-users.json
+    if [[ -f "${meta}" ]]; then
+        while IFS= read -r user; do
+            [[ -n "${user}" ]] || continue
+            userdel --force "${user}" 2>/dev/null || true
+        done < <(python3 - "${meta}" <<'PY' 2>/dev/null || true
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+data = json.loads(p.read_text())
+for row in (data.get("users") or {}).values():
+    name = (row or {}).get("username") or ""
+    if name.startswith("az-vh-"):
+        print(name)
+PY
+)
+        rm -f "${meta}"
+    fi
+    getent passwd | awk -F: '$1 ~ /^az-vh-/ {print $1}' | while read -r user; do
+        userdel --force "${user}" 2>/dev/null || true
+    done
+    if getent passwd azerioid-supervised >/dev/null 2>&1; then
+        userdel --force azerioid-supervised 2>/dev/null || true
+    fi
+    rm -rf /var/lib/azerioid-supervised /var/log/azerioid-supervised
+    if getent group azerioid-vhosts >/dev/null 2>&1; then
+        groupdel azerioid-vhosts 2>/dev/null || true
+    fi
+}
+
+purge_backend_dropins() {
+    echo "==> Removing Caddy-front-router backend drop-ins"
+    rm -f /etc/apache2/conf-available/azerioid-backend.conf \
+        /etc/apache2/conf-enabled/azerioid-backend.conf \
+        /etc/httpd/conf.d/azerioid-backend.conf \
+        /etc/nginx/conf.d/00-azerioid-backend.conf 2>/dev/null || true
+}
+
 
 remove_bootstrap_packages() {
     local bootstrap="/etc/azerioid-panel/bootstrap.json"
@@ -121,10 +191,14 @@ PY
     fi
     echo "==> Removing bootstrap-installed Caddy/PHP (per bootstrap.json)"
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get -y remove --purge caddy "php${PANEL_PHP_VERSION}-fpm" "php${PANEL_PHP_VERSION}-cli" 2>/dev/null || true
+        apt-get -y remove --purge caddy "php${PANEL_PHP_VERSION}-fpm" "php${PANEL_PHP_VERSION}-cli" \
+            "php${PANEL_PHP_VERSION}-common" "php${PANEL_PHP_VERSION}-"* php-common 2>/dev/null || true
         apt-get -y autoremove --purge 2>/dev/null || true
     elif command -v dnf >/dev/null 2>&1; then
-        dnf -y remove caddy php-fpm php-cli 2>/dev/null || true
+        dnf -y remove caddy php-fpm php-cli php-common php-process php-mysqlnd php-pgsql \
+            php-mbstring php-xml php-curl php-zip php-bcmath php-sqlite3 \
+            php-pdo php-json php-opcache 2>/dev/null || true
+        dnf -y remove 'php-*' postgresql postgresql-server postgresql-contrib 2>/dev/null || true
     fi
     rm -f "${bootstrap}"
     rm -f /etc/caddy/conf.d/*.conf 2>/dev/null || true
@@ -145,6 +219,7 @@ id -u "${WEB_USER}" >/dev/null 2>&1 || WEB_USER=apache
 
 if [[ "${PURGE_MANAGED}" -eq 1 ]]; then
     purge_managed_components
+    purge_backend_dropins
     if command -v apt-get >/dev/null 2>&1; then
         apt-get -y autoremove --purge 2>/dev/null || true
     fi
@@ -158,6 +233,7 @@ systemctl daemon-reload
 rm -f /etc/sudoers.d/azerioid-panel
 visudo -c >/dev/null 2>&1 || echo "Warning: visudo -c failed after removing panel sudoers." >&2
 rm -f /etc/cron.d/azerioid-panel
+rm -f /usr/local/bin/azerioid
 
 if command -v fail2ban-client >/dev/null 2>&1 \
     && fail2ban-client status azerioid-panel >/dev/null 2>&1; then
@@ -180,6 +256,15 @@ if [[ -f "${SNIPPET}" ]]; then
     systemctl reload caddy 2>/dev/null || true
 fi
 purge_released_caddy_state
+
+systemctl stop azerioid-panel-php-fpm.service 2>/dev/null || true
+systemctl disable azerioid-panel-php-fpm.service 2>/dev/null || true
+rm -f /etc/systemd/system/azerioid-panel-php-fpm.service
+rm -f /etc/azerioid-panel/php-fpm.conf
+rm -rf /etc/azerioid-panel/php-fpm.d
+rm -f /run/azerioid-panel-php-fpm.pid
+semodule -r azerioid_panel_fpm 2>/dev/null || true
+semanage fcontext -d -t bin_t '/usr/local/lib/azerioid-panel/sbin(/.*)?' 2>/dev/null || true
 
 POOL=""
 [[ -d "/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d" ]] && POOL="/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d"
@@ -205,11 +290,10 @@ if [[ "${REMOVE_BOOTSTRAP}" -eq 1 ]]; then
 fi
 
 if [[ "${DROP_DB}" -eq 1 ]]; then
+    purge_vhost_identities
     rm -f /var/lib/azerioid-panel/panel.sqlite /var/lib/azerioid-panel/panel.sqlite-wal /var/lib/azerioid-panel/panel.sqlite-shm
-    rm -rf /var/lib/azerioid-panel/staging
-    rm -f /etc/azerioid-panel/broker.json /etc/azerioid-panel/web.env /etc/azerioid-panel/bootstrap.json
-    rmdir /etc/azerioid-panel 2>/dev/null || true
-    rmdir /var/lib/azerioid-panel 2>/dev/null || true
+    rm -rf /var/lib/azerioid-panel
+    rm -rf /etc/azerioid-panel
 fi
 
 if [[ "${PURGE_REPOS}" -eq 1 ]]; then
@@ -218,6 +302,10 @@ fi
 
 if [[ "${PURGE_PACKAGE_DATA}" -eq 1 ]]; then
     purge_engine_data_dirs
+fi
+
+if [[ "${DROP_DB}" -eq 1 ]]; then
+    purge_firewall_rules
 fi
 
 echo "AZERIOID Stack Manager panel artifacts removed."

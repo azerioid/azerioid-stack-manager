@@ -18,8 +18,8 @@ bootstrap_packages() {
             ;;
         dnf)
             dnf -y install caddy sqlite curl ca-certificates gnupg2 unzip git rsync \
-                php-fpm php-cli php-sqlite3 php-mysqlnd php-pgsql php-mbstring php-xml php-curl \
-                php-zip php-bcmath policycoreutils-python-utils >/dev/null
+                php-fpm php-cli php-process php-sqlite3 php-mysqlnd php-pgsql php-mbstring php-xml php-curl \
+                php-zip php-bcmath policycoreutils-python-utils checkpolicy >/dev/null
             ;;
     esac
 

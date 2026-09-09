@@ -31,6 +31,15 @@ final class Format
         return "{$m}m";
     }
 
+    public static function timestamp(int $unix): string
+    {
+        if ($unix <= 0) {
+            return '—';
+        }
+
+        return gmdate('Y-m-d H:i', $unix);
+    }
+
     public static function password(): string
     {
         return rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');

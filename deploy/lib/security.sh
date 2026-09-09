@@ -51,11 +51,40 @@ EOF
 
     if [[ "${DO_FIREWALL:-false}" == "true" ]]; then
         echo "==> Firewall rule for panel port ${PANEL_PORT}"
+        case "${PKG_MGR}" in
+            apt-get)
+                if ! command -v ufw >/dev/null 2>&1; then
+                    echo "==> Installing ufw (not present on this Debian/Ubuntu image)"
+                    export DEBIAN_FRONTEND=noninteractive
+                    apt-get -o DPkg::Lock::Timeout=120 install -y ufw >/dev/null
+                fi
+                ;;
+            dnf)
+                if ! command -v firewall-cmd >/dev/null 2>&1; then
+                    echo "==> Installing firewalld (not present on this EL image)"
+                    dnf -y install firewalld >/dev/null
+                fi
+                if ! systemctl is-active firewalld >/dev/null 2>&1; then
+                    echo "==> Enabling firewalld"
+                    systemctl enable --now firewalld >/dev/null
+                fi
+                ;;
+        esac
         if command -v ufw >/dev/null 2>&1; then
+            # Allow SSH before enabling default-deny, or a remote install locks itself out.
+            ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp comment 'azerioid-ssh' >/dev/null 2>&1 || true
+            ufw allow 80/tcp comment 'azerioid-http' >/dev/null 2>&1 || true
+            ufw allow 443/tcp comment 'azerioid-https' >/dev/null 2>&1 || true
             ufw allow "${PANEL_PORT}/tcp" comment 'stack-manager' >/dev/null 2>&1 || true
+            ufw --force enable >/dev/null 2>&1 || true
         elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+            firewall-cmd --permanent --add-service=ssh >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-service=http >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-port="${PANEL_PORT}/tcp" >/dev/null
             firewall-cmd --reload >/dev/null
+        else
+            echo "Warning: --firewall=true but neither ufw nor firewalld is available." >&2
         fi
     fi
 

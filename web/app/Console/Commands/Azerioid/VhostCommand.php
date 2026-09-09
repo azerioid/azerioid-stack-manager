@@ -11,7 +11,8 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del}
+        {action : list|add|edit|del|files}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files)}
         {--domain= : Vhost domain}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -22,8 +23,12 @@ class VhostCommand extends Command
         {--dns-provider= : cloudflare|digitalocean (for --tls=dns01)}
         {--wildcard : Also request *.apex for DNS-01}
         {--staging : Use Let\'s Encrypt staging}
-        {--stack= : Filter list by caddy|apache|nginx}
-        {--json : JSON output (list)}';
+        {--engine= : caddy|apache|nginx (add/edit; also filters list). Proxy vhosts always use Caddy}
+        {--stack= : Alias of --engine= when listing}
+        {--path= : Relative path inside the vhost (files)}
+        {--dest= : Destination relative path (files rename)}
+        {--recursive : Recursive delete of a directory (files delete)}
+        {--json : JSON output (list / files list)}';
 
     protected $description = 'Manage virtual hosts via broker vhost.* actions';
 
@@ -34,6 +39,7 @@ class VhostCommand extends Command
             'add' => $this->addVhost(),
             'edit' => $this->editVhost(),
             'del', 'delete', 'rm' => $this->delVhost(),
+            'files' => $this->files(),
             default => $this->invalidAction(),
         };
     }
@@ -47,15 +53,18 @@ class VhostCommand extends Command
         }
 
         $vhosts = $data['vhosts'] ?? [];
-        $stackFilter = strtolower(trim((string) $this->option('stack')));
+        $stackFilter = strtolower(trim((string) $this->option('engine')));
+        if ($stackFilter === '') {
+            $stackFilter = strtolower(trim((string) $this->option('stack')));
+        }
         if ($stackFilter !== '') {
             $vhosts = array_values(array_filter($vhosts, function ($v) use ($stackFilter) {
-                $stack = strtolower((string) ($v['stack'] ?? $v['web_server'] ?? ''));
+                $engine = strtolower((string) ($v['engine'] ?? $v['stack'] ?? $v['web_server'] ?? 'caddy'));
 
                 return match ($stackFilter) {
-                    'caddy' => in_array($stack, ['caddy', 'lcmp', ''], true) || str_contains((string) ($v['source'] ?? ''), 'caddy'),
-                    'apache' => in_array($stack, ['apache', 'lamp'], true),
-                    'nginx' => $stack === 'nginx',
+                    'caddy' => in_array($engine, ['caddy', 'lcmp', ''], true),
+                    'apache' => in_array($engine, ['apache', 'lamp', 'httpd'], true),
+                    'nginx' => $engine === 'nginx',
                     default => true,
                 };
             }));
@@ -100,11 +109,11 @@ class VhostCommand extends Command
                     ? (string) $v['tls_status']['label']
                     : (! empty($v['tls']) ? (string) ($v['tls_mode'] ?? 'yes') : 'http'),
                 ! empty($v['readonly']) ? 'yes' : 'no',
-                (string) ($v['stack'] ?? ''),
+                (string) ($v['engine'] ?? $v['stack'] ?? 'caddy'),
             ];
         }
 
-        return $this->emitTable(['domain', 'type', 'php', 'root', 'tls', 'readonly', 'stack'], $rows);
+        return $this->emitTable(['domain', 'type', 'php', 'root', 'tls', 'readonly', 'engine'], $rows);
     }
 
     private function addVhost(): int
@@ -138,7 +147,8 @@ class VhostCommand extends Command
                 $args[] = $upstream;
             }
 
-            $res = $this->brokerCall('vhost.add', $args);
+            $engine = $type === 'proxy' ? 'caddy' : Validator::vhostEngine((string) ($this->option('engine') ?: 'caddy'));
+            $res = $this->brokerCall('vhost.add', $args, ['engine' => $engine]);
             if (! $res->ok) {
                 throw new \RuntimeException((string) $res->error);
             }
@@ -177,11 +187,14 @@ class VhostCommand extends Command
             if ($this->option('php')) {
                 $payload['php_version'] = (string) $this->option('php');
             }
+            if ($this->option('engine')) {
+                $payload['engine'] = Validator::vhostEngine((string) $this->option('engine'));
+            }
             $tlsPayload = $this->buildTlsPayload($domain);
             if ($tlsPayload !== null) {
                 $payload = array_merge($payload, $tlsPayload);
-            } elseif (! $this->option('root') && ! $this->option('php')) {
-                throw new \RuntimeException('Nothing to edit. Pass --root=, --php=, and/or --tls=.');
+            } elseif (! $this->option('root') && ! $this->option('php') && ! $this->option('engine')) {
+                throw new \RuntimeException('Nothing to edit. Pass --root=, --php=, --engine=, and/or --tls=.');
             }
 
             $res = $this->brokerCall('vhost.edit', [$domain], $payload);
@@ -310,9 +323,97 @@ class VhostCommand extends Command
         }
     }
 
+    private function files(): int
+    {
+        $op = strtolower(trim((string) $this->argument('filesOp')));
+        if (! in_array($op, ['list', 'read', 'write', 'delete', 'mkdir', 'rename'], true)) {
+            $this->error('Unknown files operation. Use: list|read|write|delete|mkdir|rename');
+            $this->line('Upload/download is UI-only — binary transfer does not map cleanly to a single CLI invocation.');
+
+            return self::INVALID;
+        }
+        try {
+            $domain = Validator::domain((string) $this->option('domain'));
+            $path = (string) $this->option('path');
+            $input = ['path' => $path, 'admin_user_id' => 'cli'];
+            $timeout = $op === 'write' ? 120 : 60;
+            if ($op === 'write') {
+                $input['content_base64'] = base64_encode($this->stdinBytes());
+            }
+            if ($op === 'rename') {
+                $dest = trim((string) $this->option('dest'));
+                if ($dest === '') {
+                    throw new \RuntimeException('--dest is required for files rename.');
+                }
+                $input['dest'] = $dest;
+            }
+            if ($op === 'delete' && $this->option('recursive')) {
+                $input['recursive'] = true;
+            }
+            $res = $this->brokerCall('vhost.files.' . $op, [$domain], $input, $timeout);
+            if (! $res->ok) {
+                throw new \RuntimeException((string) $res->error);
+            }
+            $data = is_array($res->data) ? $res->data : [];
+            if ($op === 'read') {
+                $bytes = base64_decode((string) ($data['content_base64'] ?? ''), true);
+                if ($bytes === false) {
+                    throw new \RuntimeException('Invalid file payload from broker.');
+                }
+                if ($this->wantsJson()) {
+                    return $this->emitData($data);
+                }
+                $this->output->write($bytes);
+
+                return self::SUCCESS;
+            }
+            if ($this->wantsJson() || $op === 'list') {
+                if ($op === 'list' && ! $this->wantsJson()) {
+                    $rows = [];
+                    foreach ((array) ($data['entries'] ?? []) as $row) {
+                        if (! is_array($row)) {
+                            continue;
+                        }
+                        $rows[] = [
+                            (string) ($row['name'] ?? ''),
+                            (string) ($row['type'] ?? ''),
+                            (string) ($row['size'] ?? ''),
+                            ! empty($row['escaped']) ? 'outside' : '',
+                        ];
+                    }
+
+                    return $this->emitTable(['name', 'type', 'size', 'note'], $rows);
+                }
+
+                return $this->emitData($data);
+            }
+            $this->line(match ($op) {
+                'write' => 'Wrote ' . (string) ($data['path'] ?? $path),
+                'mkdir' => 'Created ' . (string) ($data['path'] ?? $path),
+                'delete' => 'Deleted ' . (string) ($data['path'] ?? $path),
+                'rename' => 'Renamed to ' . (string) ($data['path'] ?? ''),
+                default => json_encode($data, JSON_UNESCAPED_SLASHES) ?: '',
+            });
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    private function stdinBytes(): string
+    {
+        if (! defined('STDIN') || ! is_resource(STDIN)) {
+            return '';
+        }
+        $raw = stream_get_contents(STDIN);
+
+        return $raw === false ? '' : $raw;
+    }
+
     private function invalidAction(): int
     {
-        $this->error('Unknown vhost action. Use: list|add|edit|del');
+        $this->error('Unknown vhost action. Use: list|add|edit|del|files');
 
         return self::INVALID;
     }

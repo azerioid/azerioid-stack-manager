@@ -23,6 +23,10 @@ final class BrokerClient
         Validator::action($action);
         $this->assertSafeArgs($args);
 
+        if (! array_key_exists('origin', $stdin)) {
+            $stdin['origin'] = Auth::check() ? 'ui' : 'internal';
+        }
+
         $driver = (string) config('azerioid.broker.driver', 'fake');
         try {
             $response = match ($driver) {
@@ -86,11 +90,7 @@ final class BrokerClient
         }
         $process->run();
 
-        $decoded = json_decode(trim($process->getOutput()), true);
-        if (! is_array($decoded)) {
-            return new BrokerResponse(false, null, 'Broker returned non-JSON output.', 1);
-        }
-        return BrokerResponse::fromArray($decoded);
+        return $this->decodeBrokerOutput($process->getOutput(), $process->getErrorOutput());
     }
 
     private function viaInProcess(string $action, array $args, array $stdin): BrokerResponse
@@ -102,10 +102,44 @@ final class BrokerClient
         ob_start();
         $kernel->run(array_merge(['broker', $action], $args), $stdin);
         $out = ob_get_clean();
-        $decoded = json_decode(trim((string) $out), true);
-        if (! is_array($decoded)) {
-            return new BrokerResponse(false, null, 'In-process broker returned non-JSON output.', 1);
+
+        return $this->decodeBrokerOutput((string) $out, '');
+    }
+
+    private function decodeBrokerOutput(string $stdout, string $stderr): BrokerResponse
+    {
+        $stdout = trim($stdout);
+        $decoded = json_decode($stdout, true);
+        if (! is_array($decoded) && $stdout !== '') {
+            $start = strpos($stdout, '{');
+            $end = strrpos($stdout, '}');
+            if ($start !== false && $end !== false && $end > $start) {
+                $decoded = json_decode(substr($stdout, $start, $end - $start + 1), true);
+            }
         }
-        return BrokerResponse::fromArray($decoded);
+        if (is_array($decoded)) {
+            return BrokerResponse::fromArray($decoded);
+        }
+
+        $snippet = $this->safeOutputSnippet($stdout !== '' ? $stdout : $stderr);
+
+        return new BrokerResponse(
+            false,
+            null,
+            'Broker returned non-JSON output.'.($snippet !== '' ? ' '.$snippet : ''),
+            1
+        );
+    }
+
+    private function safeOutputSnippet(string $raw): string
+    {
+        $raw = preg_replace('/[^\P{C}\n\t]/u', '', $raw) ?? $raw;
+        $raw = preg_replace('/(?i)(password|secret|token|passwd)\s*[:=]\s*\S+/', '$1=[redacted]', $raw) ?? $raw;
+        $raw = trim(preg_replace('/\s+/', ' ', $raw) ?? $raw);
+        if ($raw === '') {
+            return '';
+        }
+
+        return '(' . mb_substr($raw, 0, 240) . ')';
     }
 }

@@ -25,7 +25,10 @@ final class PosixRuntimeIoFailureTest extends TestCase
         $this->assertNotSame('', $env['HOME'] ?? '');
         $this->assertArrayHasKey('PATH', $env);
         $this->assertArrayHasKey('XDG_CONFIG_HOME', $env);
-        if (getenv('HOME') !== false && getenv('HOME') !== '') {
+        if (getenv('HOME') === '/root') {
+            $this->assertNotSame('/root', $env['HOME']);
+            $this->assertStringNotContainsString('/root', $env['XDG_DATA_HOME'] ?? '');
+        } elseif (getenv('HOME') !== false && getenv('HOME') !== '') {
             $this->assertSame(getenv('HOME'), $env['HOME']);
         }
     }

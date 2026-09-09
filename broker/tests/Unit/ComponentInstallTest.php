@@ -81,4 +81,62 @@ final class ComponentInstallTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertTrue($json['data']['ok']);
     }
+
+    public function test_apache_install_masks_unit_before_packages_and_binds_loopback(): void
+    {
+        $rt = $this->ubuntuRuntime();
+        $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
+        $rt->dirs['/etc/caddy'] = true;
+        $rt->dirs['/etc/caddy/conf.d'] = true;
+        $rt->dirs['/etc/apache2'] = true;
+        $rt->dirs['/etc/apache2/sites-available'] = true;
+        $rt->dirs['/etc/apache2/sites-enabled'] = true;
+        $rt->dirs['/etc/apache2/conf-available'] = true;
+        $rt->dirs['/etc/apache2/conf-enabled'] = true;
+        $rt->files['/etc/apache2/ports.conf'] = "Listen 80\n";
+        $rt->files['/usr/sbin/apache2ctl'] = '';
+        $rt->files['/usr/sbin/a2enmod'] = '';
+        $rt->files['/usr/sbin/a2enconf'] = '';
+        $rt->files['/usr/sbin/a2dissite'] = '';
+        $rt->script(['/usr/sbin/apache2ctl', '-t'], 0, 'Syntax OK');
+        $rt->script(['/usr/bin/systemctl', 'reload', 'apache2'], 0);
+        $rt->script(['/usr/bin/systemctl', 'restart', 'apache2'], 0);
+        $rt->script(['/usr/bin/systemctl', 'is-active', 'apache2'], 0, "active\n");
+        $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
+
+        $cfg = new Config();
+        $cfg->registryComponentsPath = $this->registryPath;
+        $cfg->stagingDir = sys_get_temp_dir() . '/azerioid-apache-install-' . getmypid();
+        $cfg->managedComponentsPath = $cfg->stagingDir . '/managed-components.json';
+        @mkdir($cfg->stagingDir . '/operations', 0750, true);
+        $rt->dirs[$cfg->stagingDir] = true;
+        $rt->dirs[$cfg->stagingDir . '/operations'] = true;
+
+        $kernel = new Kernel($cfg, $rt);
+        [$code, $json] = $this->capture($kernel, ['broker', 'component.install', 'apache'], ['operation_id' => 'op-apache-1']);
+        $this->assertSame(0, $code, (string) json_encode($json));
+
+        $cmds = array_map(static fn (array $row): string => implode(' ', $row['command']), $rt->execLog);
+        $maskAt = null;
+        $aptAt = null;
+        $unmaskAt = null;
+        foreach ($cmds as $i => $cmd) {
+            if ($maskAt === null && str_contains($cmd, 'systemctl mask apache2')) {
+                $maskAt = $i;
+            }
+            if ($aptAt === null && str_contains($cmd, 'apt-get') && str_contains($cmd, 'install')) {
+                $aptAt = $i;
+            }
+            if (str_contains($cmd, 'systemctl unmask apache2') && $unmaskAt === null) {
+                $unmaskAt = $i;
+            }
+        }
+        $this->assertNotNull($maskAt);
+        $this->assertNotNull($aptAt);
+        $this->assertNotNull($unmaskAt);
+        $this->assertLessThan($aptAt, $maskAt, 'apache2 must be masked before apt so postinst cannot bind :80');
+        $this->assertGreaterThan($aptAt, $unmaskAt);
+        $this->assertStringContainsString('Listen 127.0.0.1:8081', $rt->files['/etc/apache2/ports.conf']);
+        $this->assertStringNotContainsString("\nListen 80", "\n" . $rt->files['/etc/apache2/ports.conf']);
+    }
 }

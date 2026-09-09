@@ -62,6 +62,46 @@
         @endif
     </section>
 
+    <form wire:submit="savePanelDomain" class="panel grid gap-4 p-5">
+        <h2 class="text-sm font-medium">Panel domain</h2>
+        <p class="text-sm text-zinc-500">Optional white-label hostname on :443 with Let's Encrypt. <span class="font-mono">IP:{{ $panelRuntime['public_ip'] ?? 'host' }}:3169</span> and the SSH tunnel always keep working. Unrelated site domains never match the panel port.</p>
+        <p class="font-mono text-xs text-zinc-500">
+            Current:
+            @if (!empty($panelRuntime['domain']))
+                https://{{ $panelRuntime['domain'] }}
+            @else
+                not set (IP / tunnel)
+            @endif
+        </p>
+        @if (!empty($panelRuntime['fallback_urls']))
+            <p class="font-mono text-[11px] text-zinc-600">Fallback: {{ implode(' · ', $panelRuntime['fallback_urls']) }}</p>
+        @endif
+        @php $ts = $panelRuntime['tls_status'] ?? null; @endphp
+        @if (is_array($ts))
+            <p class="text-xs uppercase tracking-wide {{ !empty($ts['ok']) ? 'text-good' : 'text-warn' }}">
+                TLS {{ $ts['issuer_type'] ?? $panelTlsMode }} @if (!empty($ts['error'])) · {{ $ts['error'] }} @endif
+            </p>
+        @endif
+        <label class="text-xs uppercase tracking-wide text-zinc-500">Hostname
+            <input class="field mt-1 max-w-md" wire:model="panelDomain" placeholder="panel.example.com">
+        </label>
+        <label class="text-xs uppercase tracking-wide text-zinc-500">TLS
+            <select class="field mt-1 max-w-xs" wire:model="panelTlsMode">
+                <option value="auto">Let's Encrypt (HTTP-01)</option>
+                <option value="dns01">DNS-01</option>
+                <option value="internal">Self-signed</option>
+            </select>
+        </label>
+        @error('panelDomain') <p class="text-sm text-bad">{{ $message }}</p> @enderror
+        @if ($panelDomainError)
+            <p class="text-sm text-bad">{{ $panelDomainError }}</p>
+        @endif
+        <div class="flex flex-wrap gap-2">
+            <button class="btn-primary" type="submit">Save domain</button>
+            <button class="btn-ghost" type="button" wire:click="clearPanelDomain">Clear</button>
+        </div>
+    </form>
+
     <form wire:submit="savePanel" class="panel grid gap-4 p-5">
         <h2 class="text-sm font-medium">Session &amp; access</h2>
         <label class="text-xs uppercase tracking-wide text-zinc-500">Idle timeout (minutes)

@@ -6,7 +6,7 @@ namespace AzerioidPanel\Broker\Web;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
-use AzerioidPanel\Broker\Tls\Certbot;
+use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
@@ -137,6 +137,91 @@ final class NginxDriver implements WebServerDriver
             'source' => $confPath,
             'apply' => $applied,
         ];
+    }
+
+    /**
+     * HTTP-only vhost on the shared loopback port. Idempotent; used by the Caddy front router.
+     *
+     * @param  array{domain:string,root:string,type:string,php_version:?string,upstream:?string}  $spec
+     * @return array<string,mixed>
+     */
+    public function upsertBackendVhost(Runtime $runtime, Config $config, array $spec): array
+    {
+        $domain = $spec['domain'];
+        $root = $spec['root'];
+        $type = $spec['type'];
+        $phpVersion = $spec['php_version'] ?? null;
+        $upstream = $spec['upstream'] ?? null;
+        $confPath = $this->siteAvailablePath($config, $domain);
+        $old = $runtime->fileExists($confPath) ? $runtime->readFile($confPath) : null;
+        $contents = $this->render($runtime, $config, $domain, $root, $type, $phpVersion, $upstream);
+        if ($root !== '' && $type !== 'proxy' && !$runtime->isDir($root)) {
+            $runtime->mkdir($root, 0755);
+        }
+        $this->ensureLogDir($runtime, $config);
+        $dir = dirname($confPath);
+        if (!$runtime->isDir($dir)) {
+            $runtime->mkdir($dir, 0755);
+        }
+        $tmp = $confPath . '.lacmp-tmp';
+        $runtime->writeFile($tmp, $contents, 0644);
+        try {
+            $runtime->rename($tmp, $confPath);
+        } catch (BrokerException $e) {
+            $runtime->deleteFile($tmp);
+            throw $e;
+        }
+        $enabled = false;
+        try {
+            $this->enableSite($runtime, $config, $domain, $confPath);
+            $enabled = true;
+            $this->validate($runtime);
+            $applied = $this->reload($runtime, $config, 'auto');
+        } catch (BrokerException $e) {
+            if ($old !== null) {
+                $runtime->writeFile($confPath, $old, 0644);
+            } else {
+                if ($enabled) {
+                    $this->disableSite($runtime, $config, $domain);
+                }
+                $runtime->deleteFile($confPath);
+            }
+            try {
+                $this->reload($runtime, $config, 'auto');
+            } catch (BrokerException) {
+            }
+            throw new BrokerException(
+                'Nginx rejected the backend config. The change was rolled back. Existing sites were left serving. ' . $e->getMessage(),
+                1
+            );
+        }
+
+        return [
+            'domain' => $domain,
+            'root' => $root,
+            'type' => $type,
+            'php_version' => $phpVersion,
+            'upstream' => $upstream,
+            'source' => $confPath,
+            'apply' => $applied,
+            'backend' => true,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function removeBackendVhost(Runtime $runtime, Config $config, string $domain): array
+    {
+        if ($this->existingPath($runtime, $config, $domain) === null) {
+            return ['domain' => $domain, 'deleted' => false];
+        }
+        try {
+            return $this->removeVhost($runtime, $config, $domain) + ['deleted' => true];
+        } catch (BrokerException $e) {
+            if (str_contains($e->getMessage(), 'does not exist')) {
+                return ['domain' => $domain, 'deleted' => false];
+            }
+            throw $e;
+        }
     }
 
     public function removeVhost(Runtime $runtime, Config $config, string $domain): array
@@ -473,11 +558,11 @@ final class NginxDriver implements WebServerDriver
         ?string $tlsCert = null,
         ?string $tlsKey = null,
     ): string {
-        $mode = TlsMode::effective($tlsMode, $domain);
         $logs = rtrim($config->webLogDir, '/');
         $location = '';
         if ($type === 'php' && $phpVersion !== null) {
             $sock = $config->phpFpmUnixPath($phpVersion, $runtime);
+            $timeouts = SitePhpTimeouts::nginxFastcgiTimeouts();
             $location = <<<PHP
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
@@ -486,8 +571,10 @@ final class NginxDriver implements WebServerDriver
     location ~ \.php$ {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTPS \$azerioid_https;
+        fastcgi_param REQUEST_SCHEME \$azerioid_scheme;
         fastcgi_pass unix:{$sock};
-    }
+{$timeouts}    }
 
 PHP;
         } elseif ($type === 'proxy' && $upstream !== null) {
@@ -510,62 +597,22 @@ PROXY;
 STATIC;
         }
 
-        $acmeRoot = Certbot::WEBROOT;
-        $acmeLocation = <<<ACME
-    location ^~ /.well-known/acme-challenge/ {
-        root {$acmeRoot};
-        default_type "text/plain";
-        allow all;
-    }
+        $listen = $config->backendBind . ':' . $config->nginxBackendPort;
 
-ACME;
-
-        $http = <<<EOF
+        return <<<EOF
+# azerioid-backend engine=nginx
+# TLS is terminated by Caddy on :443; this vhost is HTTP-only on loopback.
 server {
-    listen 80;
-    listen [::]:80;
+    listen {$listen};
     server_name {$domain};
     root {$root};
     index index.php index.html;
 
-{$acmeLocation}{$location}    access_log {$logs}/{$domain}-access.log;
+{$location}    access_log {$logs}/{$domain}-access.log;
     error_log {$logs}/{$domain}-error.log;
 }
 
 EOF;
-
-        if ($mode === TlsMode::OFF) {
-            return $http;
-        }
-
-        if ($mode === TlsMode::INTERNAL || ($tlsCert === null || $tlsKey === null)) {
-            $cert = '/etc/ssl/certs/ssl-cert-snakeoil.pem';
-            $key = '/etc/ssl/private/ssl-cert-snakeoil.key';
-            $tag = '# azerioid-tls-mode=internal';
-        } else {
-            $cert = $tlsCert;
-            $key = $tlsKey;
-            $tag = $mode === TlsMode::DNS01 ? '# azerioid-tls-mode=dns01' : '# azerioid-tls-mode=auto';
-        }
-
-        $ssl = <<<EOF
-{$tag}
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name {$domain};
-    root {$root};
-    index index.php index.html;
-    ssl_certificate {$cert};
-    ssl_certificate_key {$key};
-
-{$location}    access_log {$logs}/{$domain}-ssl-access.log;
-    error_log {$logs}/{$domain}-ssl-error.log;
-}
-
-EOF;
-
-        return $http . $ssl;
     }
 
     /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string} */

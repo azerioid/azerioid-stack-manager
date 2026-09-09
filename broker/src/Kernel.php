@@ -17,6 +17,8 @@ use AzerioidPanel\Broker\Actions\BackupPrune;
 use AzerioidPanel\Broker\Actions\BackupRestore;
 use AzerioidPanel\Broker\Actions\BackupRun;
 use AzerioidPanel\Broker\Actions\CronManage;
+use AzerioidPanel\Broker\Actions\DbAccessSet;
+use AzerioidPanel\Broker\Actions\DbAccessShow;
 use AzerioidPanel\Broker\Actions\DbAdd;
 use AzerioidPanel\Broker\Actions\DbDel;
 use AzerioidPanel\Broker\Actions\DbDump;
@@ -32,10 +34,12 @@ use AzerioidPanel\Broker\Actions\MariadbBindFix;
 use AzerioidPanel\Broker\Actions\MariadbBindRollback;
 use AzerioidPanel\Broker\Actions\MariadbBindStatus;
 use AzerioidPanel\Broker\Actions\MetricsSystem;
+use AzerioidPanel\Broker\Actions\PanelDomainSet;
 use AzerioidPanel\Broker\Actions\PanelRuntime;
 use AzerioidPanel\Broker\Actions\PhpIniGet;
 use AzerioidPanel\Broker\Actions\PhpIniSet;
 use AzerioidPanel\Broker\Actions\PhpOpcache;
+use AzerioidPanel\Broker\Actions\PhpTimeoutsEnsure;
 use AzerioidPanel\Broker\Actions\PhpVersions;
 use AzerioidPanel\Broker\Actions\SchedulerInstall;
 use AzerioidPanel\Broker\Actions\ServiceControl;
@@ -55,7 +59,9 @@ use AzerioidPanel\Broker\Actions\VersionAll;
 use AzerioidPanel\Broker\Actions\VhostAdd;
 use AzerioidPanel\Broker\Actions\VhostDel;
 use AzerioidPanel\Broker\Actions\VhostEdit;
+use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
+use AzerioidPanel\Broker\Actions\WebFrontRouterMigrate;
 use AzerioidPanel\Broker\Actions\WebReleaseSitePorts;
 
 final class Kernel
@@ -64,6 +70,8 @@ final class Kernel
     public const ACTIONS = [
         'status.all' => StatusAll::class,
         'panel.runtime' => PanelRuntime::class,
+        'panel.domain.set' => PanelDomainSet::class,
+        'panel.domain.show' => PanelDomainSet::class,
         'component.list' => ComponentList::class,
         'component.status' => ComponentStatus::class,
         'component.preflight' => ComponentPreflightAction::class,
@@ -84,15 +92,19 @@ final class Kernel
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,
+        'web.front-router.migrate' => WebFrontRouterMigrate::class,
         'db.list' => DbList::class,
         'db.add' => DbAdd::class,
         'db.del' => DbDel::class,
         'db.resetpw' => DbResetpw::class,
         'db.engine' => DbEngine::class,
         'db.dump' => DbDump::class,
+        'db.access.show' => DbAccessShow::class,
+        'db.access.set' => DbAccessSet::class,
         'logs.tail' => LogsTail::class,
         'logs.search' => LogsSearch::class,
         'php.versions' => PhpVersions::class,
+        'php.timeouts.ensure' => PhpTimeoutsEnsure::class,
         'php.ini.get' => PhpIniGet::class,
         'php.ini.set' => PhpIniSet::class,
         'php.opcache.stats' => PhpOpcache::class,
@@ -141,6 +153,13 @@ final class Kernel
         'terminal.session.list' => TerminalSession::class,
         'terminal.session.status' => TerminalSession::class,
         'terminal.session.cleanup' => TerminalSession::class,
+        'vhost.files.list' => VhostFilesAction::class,
+        'vhost.files.read' => VhostFilesAction::class,
+        'vhost.files.write' => VhostFilesAction::class,
+        'vhost.files.mkdir' => VhostFilesAction::class,
+        'vhost.files.rename' => VhostFilesAction::class,
+        'vhost.files.move' => VhostFilesAction::class,
+        'vhost.files.delete' => VhostFilesAction::class,
     ];
 
     public function __construct(
@@ -185,20 +204,36 @@ final class Kernel
     }
 
     /** @return array<string,mixed> */
+    public static function decodeStdinString(string $raw): array
+    {
+        $trim = trim($raw);
+        if ($trim === '') {
+            return [];
+        }
+        $decoded = json_decode($trim, true);
+        if (is_array($decoded) && str_starts_with($trim, '{')) {
+            return $decoded;
+        }
+        // Accidental pipes (installer heredocs, `ssh bash -s`) are not JSON objects.
+        if (! str_starts_with($trim, '{')) {
+            return [];
+        }
+
+        throw new BrokerException('Stdin must be a JSON object when provided.', 2);
+    }
+
+    /** @return array<string,mixed> */
     private function readStdinJson(): array
     {
         if (!defined('STDIN') || !is_resource(STDIN)) {
             return [];
         }
         $raw = stream_get_contents(STDIN);
-        if ($raw === false || trim($raw) === '') {
+        if ($raw === false) {
             return [];
         }
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
-            throw new BrokerException('Stdin must be a JSON object when provided.', 2);
-        }
-        return $decoded;
+
+        return self::decodeStdinString($raw);
     }
 
     private function audit(string $action, array $args, bool $ok, int $code, ?string $error): void

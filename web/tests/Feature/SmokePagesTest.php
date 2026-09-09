@@ -30,7 +30,9 @@ class SmokePagesTest extends TestCase
         $this->get('/databases')->assertOk()->assertSee('lacmp_panel', false);
         $this->get('/services')->assertOk()->assertSee('observed', false);
         $this->get('/logs')->assertOk()->assertSee('Web server access', false);
-        $this->get('/settings')->assertOk()->assertSee('Idle timeout', false);
+        $this->get('/settings')->assertOk()
+            ->assertSee('Idle timeout', false)
+            ->assertSee('Panel domain', false);
         $this->get('/audit')->assertOk()->assertSee('Audit', false);
         $this->get('/alerts')->assertOk()->assertSee('Telegram', false);
         $this->get('/updates')->assertOk()

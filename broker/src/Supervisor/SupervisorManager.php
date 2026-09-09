@@ -393,7 +393,23 @@ INI;
 
     private function confPath(string $name): string
     {
-        return self::CONF_DIR . '/' . self::CONF_PREFIX . $name . '.conf';
+        [$dir, $ext] = $this->confDirAndExt();
+        if (!$this->runtime->isDir($dir)) {
+            $this->runtime->mkdir($dir, 0755);
+        }
+
+        return $dir . '/' . self::CONF_PREFIX . $name . $ext;
+    }
+
+    /** @return array{0:string,1:string} */
+    private function confDirAndExt(): array
+    {
+        // EL: /etc/supervisord.conf includes supervisord.d/*.ini
+        if ($this->runtime->fileExists('/etc/supervisord.conf') && $this->runtime->isDir('/etc/supervisord.d')) {
+            return ['/etc/supervisord.d', '.ini'];
+        }
+
+        return [self::CONF_DIR, '.conf'];
     }
 
     /**

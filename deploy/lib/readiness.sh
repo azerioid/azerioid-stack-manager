@@ -54,7 +54,7 @@ panel_public_url() {
         return 1
     fi
     if [[ -n "${PANEL_PUBLIC_DOMAIN:-}" ]]; then
-        echo "https://${PANEL_PUBLIC_DOMAIN}:${PANEL_PORT}"
+        echo "https://${PANEL_PUBLIC_DOMAIN}"
         return 0
     fi
     local ip="${PANEL_PUBLIC_IP:-}"

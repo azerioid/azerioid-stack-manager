@@ -1,0 +1,17 @@
+# Installed by deploy/lib/fpm.sh on EL only (SELinux).
+# ExecStart is a bin_t copy of php-fpm under PREFIX/sbin — the distro
+# /usr/sbin/php-fpm is httpd_exec_t and cannot be started as
+# unconfined_service_t (systemd 203/EXEC).
+
+[Unit]
+Description=AZERIOID panel PHP-FPM
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/lib/azerioid-panel/sbin/php-fpm --nodaemonize --fpm-config /etc/azerioid-panel/php-fpm.conf
+ExecReload=/bin/kill -USR2 $MAINPID
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

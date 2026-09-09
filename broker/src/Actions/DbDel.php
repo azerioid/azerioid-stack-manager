@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseManager;
+use AzerioidPanel\Broker\Database\DbAccessApply;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 
@@ -18,6 +19,10 @@ final class DbDel
         $user = Validator::userName((string) ($args[1] ?? ($input['user'] ?? $name)));
 
         $result = $manager->driver($engine)->delete($name, $user);
+        try {
+            (new DbAccessApply($config, $runtime))->forgetAndSync($engine, $name);
+        } catch (\Throwable) {
+        }
 
         return $result + ['engine' => $engine];
     }

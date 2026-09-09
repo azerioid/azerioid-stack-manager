@@ -39,6 +39,9 @@ final class FakeRuntime implements Runtime
     /** @var list<string> */
     public array $dbExecLog = [];
 
+    /** @var (callable(string, array): list<array<string,mixed>>)|null */
+    public $dbQueryFn = null;
+
     public function __construct()
     {
         $this->defaultExec = new ExecResult(['true'], 0, '', '');
@@ -191,6 +194,9 @@ final class FakeRuntime implements Runtime
     public function dbQuery(string $sql, array $params = []): array
     {
         $this->dbExecLog[] = $sql;
+        if ($this->dbQueryFn !== null) {
+            return ($this->dbQueryFn)($sql, $params);
+        }
         return $this->dbRows;
     }
 

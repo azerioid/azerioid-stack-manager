@@ -24,23 +24,21 @@ $runtime = new PosixRuntime();
 $config = Config::load($configPath, $runtime);
 $kernel = new Kernel($config, $runtime);
 
-$stdin = null;
+$stdin = [];
 if (defined('STDIN') && is_resource(STDIN)) {
     $raw = stream_get_contents(STDIN);
-    if (is_string($raw) && trim($raw) !== '') {
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
+    if (is_string($raw)) {
+        try {
+            $stdin = Kernel::decodeStdinString($raw);
+        } catch (\AzerioidPanel\Broker\BrokerException $e) {
             fwrite(STDOUT, json_encode([
                 'ok' => false,
                 'data' => null,
-                'error' => 'Stdin must be a JSON object when provided.',
-                'code' => 2,
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
             ], JSON_UNESCAPED_SLASHES) . "\n");
-            exit(2);
+            exit($e->errorCode);
         }
-        $stdin = $decoded;
-    } else {
-        $stdin = [];
     }
 }
 

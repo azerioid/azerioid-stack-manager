@@ -12,9 +12,44 @@ apply_selinux() {
 
     semanage port -a -t http_port_t -p tcp "${PANEL_PORT}" 2>/dev/null \
         || semanage port -m -t http_port_t -p tcp "${PANEL_PORT}" 2>/dev/null || true
+    # Default EL policy labels 8081 as transproxy_port_t and 8082 as us_cli_port_t;
+    # httpd_t/nginx cannot bind those. Relabel as http_port_t (A3 / A9 backends).
+    for backend_port in 8081 8082; do
+        semanage port -a -t http_port_t -p tcp "${backend_port}" 2>/dev/null \
+            || semanage port -m -t http_port_t -p tcp "${backend_port}" 2>/dev/null || true
+    done
     semanage fcontext -a -t httpd_sys_content_t '/data/www(/.*)?' 2>/dev/null || true
     semanage fcontext -a -t httpd_sys_rw_content_t '/var/lib/azerioid-panel(/.*)?' 2>/dev/null || true
+    # Site PHP-FPM stays httpd_t (php-fpm binary is httpd_exec_t). Panel UI FPM
+    # is a dedicated unconfined_service_t unit (see configure_panel_fpm).
+    # Without these fcontexts, Laravel 500s writing sessions/logs under lib_t
+    # with no AVC (dontaudit) and empty bodies.
+    semanage fcontext -a -t httpd_sys_content_t '/usr/local/lib/azerioid-panel/web(/.*)?' 2>/dev/null || true
+    semanage fcontext -a -t httpd_sys_rw_content_t '/usr/local/lib/azerioid-panel/web/storage(/.*)?' 2>/dev/null || true
+    semanage fcontext -a -t httpd_sys_rw_content_t '/usr/local/lib/azerioid-panel/web/bootstrap/cache(/.*)?' 2>/dev/null || true
+    semanage fcontext -a -t bin_t '/usr/local/lib/azerioid-panel/sbin(/.*)?' 2>/dev/null || true
     install -d -m 0755 /data/www
-    restorecon -Rv /data/www /var/lib/azerioid-panel 2>/dev/null || true
+    restorecon -Rv /data/www /var/lib/azerioid-panel /usr/local/lib/azerioid-panel 2>/dev/null || true
     setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+    setsebool -P httpd_unified 1 2>/dev/null || true
+    install_panel_fpm_selinux_module
+}
+
+install_panel_fpm_selinux_module() {
+    local te="${ROOT}/deploy/selinux/azerioid_panel_fpm.te"
+    [[ -f "${te}" ]] || {
+        echo "missing ${te}" >&2
+        return 1
+    }
+    command -v checkmodule >/dev/null 2>&1 || dnf -y install checkpolicy >/dev/null 2>&1 || true
+    command -v checkmodule >/dev/null 2>&1 || {
+        echo "checkmodule not found; cannot load azerioid_panel_fpm SELinux module" >&2
+        return 1
+    }
+    local work
+    work="$(mktemp -d)"
+    checkmodule -M -m -o "${work}/azerioid_panel_fpm.mod" "${te}"
+    semodule_package -o "${work}/azerioid_panel_fpm.pp" -m "${work}/azerioid_panel_fpm.mod"
+    semodule -i "${work}/azerioid_panel_fpm.pp"
+    rm -rf "${work}"
 }

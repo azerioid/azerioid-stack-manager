@@ -3,11 +3,14 @@
 #
 # 1. LACMP's CLI php.ini often sets open_basedir / disable_functions. Clear
 #    both so this process can write Caddy config and spawn argv (no shell).
-# 2. PHP-FPM runs with ProtectSystem=full. sudo keeps that mount namespace,
-#    so /etc is EROFS even as root. Re-exec via systemd-run so PID 1 starts
-#    us in a normal namespace. The FPM drop-in only punches holes for panel
-#    storage (ProtectSystem=full remounts /usr). It must never list missing
-#    web-server dirs (/etc/caddy on LAMP → 226/NAMESPACE).
+# 2. Debian/Ubuntu PHP-FPM uses ProtectSystem=full. sudo keeps that mount
+#    namespace, so /etc is EROFS even as root. Re-exec via systemd-run so
+#    PID 1 starts us in a normal namespace. EL php-fpm has no ProtectSystem
+#    (only PrivateTmp); systemd-run from that service fails with
+#    "Failed to start transient service unit: Remote peer disconnected"
+#    and the UI sees empty stdout as "Broker returned non-JSON output."
+#    Skip the re-exec when /etc is already writable. If systemd-run cannot
+#    start the unit, fall through to a direct php exec.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="${ROOT}/broker"
@@ -23,11 +26,28 @@ if [[ -z "${PHP_BIN}" || ! -x "${PHP_BIN}" ]]; then
     PHP_BIN=/usr/bin/php
 fi
 
+# Always pin XDG to the Caddy (or panel) data dir. sudo leaves HOME=/root;
+# Caddy prefers XDG_DATA_HOME over HOME, so an inherited /root/.local/share
+# makes `runuser -u caddy caddy validate` open root-owned PKI (EACCES).
+export HOME="${BROKER_HOME}"
+export XDG_CONFIG_HOME="${BROKER_HOME}/.config"
+export XDG_DATA_HOME="${BROKER_HOME}/.local/share"
+
+run_php() {
+    exec "${PHP_BIN}" \
+        -d open_basedir= \
+        -d disable_functions= \
+        "${ROOT}/broker.php" "$@"
+}
+
 if [[ -z "${AZERIOID_BROKER_UNSANDBOXED:-${LACMP_BROKER_UNSANDBOXED:-}}" ]] \
     && [[ -d /run/systemd/system ]] \
-    && command -v systemd-run >/dev/null 2>&1; then
+    && command -v systemd-run >/dev/null 2>&1 \
+    && [[ ! -w /etc ]]; then
     export AZERIOID_BROKER_UNSANDBOXED=1
-    exec systemd-run --quiet --wait --pipe --collect \
+    err="$(mktemp)"
+    set +e
+    systemd-run --quiet --wait --pipe --collect \
         --working-directory="${ROOT}" \
         -E AZERIOID_BROKER_UNSANDBOXED=1 \
         -E AZERIOID_BROKER_PHP="${PHP_BIN}" \
@@ -36,10 +56,17 @@ if [[ -z "${AZERIOID_BROKER_UNSANDBOXED:-${LACMP_BROKER_UNSANDBOXED:-}}" ]] \
         -E HOME="${BROKER_HOME}" \
         -E XDG_CONFIG_HOME="${BROKER_HOME}/.config" \
         -E XDG_DATA_HOME="${BROKER_HOME}/.local/share" \
-        -- "${SELF}" "$@"
+        -- "${SELF}" "$@" 2>"${err}"
+    rc=$?
+    set -e
+    if grep -q 'Failed to start transient service unit' "${err}" 2>/dev/null; then
+        cat "${err}" >&2
+        rm -f "${err}"
+        run_php "$@"
+    fi
+    cat "${err}" >&2
+    rm -f "${err}"
+    exit "${rc}"
 fi
 
-exec "${PHP_BIN}" \
-    -d open_basedir= \
-    -d disable_functions= \
-    "${ROOT}/broker.php" "$@"
+run_php "$@"

@@ -4,10 +4,12 @@ declare(strict_types=1);
 namespace AzerioidPanel\Broker;
 
 /**
- * Run Caddy CLI as the systemd service user and keep /var/lib/caddy owned by
- * that user. `tls internal` provisions an internal CA under the process HOME;
- * invoking `caddy` as root with HOME=/var/lib/caddy leaves root-owned PKI the
- * service cannot read.
+ * Run Caddy CLI as the systemd service user with that user's data dir.
+ *
+ * `tls internal` provisions an internal CA under XDG_DATA_HOME (then HOME).
+ * `runuser -u caddy` resets HOME from passwd but **keeps** the caller's
+ * XDG_* vars. PosixRuntime::childEnv() inherits sudo's HOME=/root, so the
+ * CLI would open /root/.local/share/caddy/pki/... as user caddy → EACCES.
  */
 final class CaddyCli
 {
@@ -19,7 +21,7 @@ final class CaddyCli
      */
     public static function argv(Runtime $runtime, Config $config, array $caddyArgs): array
     {
-        $cmd = array_merge([$config->caddyBin], $caddyArgs);
+        $cmd = array_merge(self::dataEnvPrefix($runtime), [$config->caddyBin], $caddyArgs);
         $user = self::serviceUser($runtime);
         if ($user === null) {
             return $cmd;
@@ -29,6 +31,32 @@ final class CaddyCli
             return $cmd;
         }
         return array_merge($wrapper, $cmd);
+    }
+
+    /**
+     * Force Caddy's PKI/data dir even when the parent env is root's XDG_*.
+     *
+     * @return list<string>
+     */
+    public static function dataEnvPrefix(Runtime $runtime): array
+    {
+        if (!$runtime->isDir(self::DATA_DIR)) {
+            return [];
+        }
+        $envBin = '/usr/bin/env';
+        if (!$runtime->fileExists($envBin)) {
+            $envBin = '/bin/env';
+        }
+        if (!$runtime->fileExists($envBin)) {
+            $envBin = 'env';
+        }
+
+        return [
+            $envBin,
+            'HOME=' . self::DATA_DIR,
+            'XDG_CONFIG_HOME=' . self::DATA_DIR . '/.config',
+            'XDG_DATA_HOME=' . self::DATA_DIR . '/.local/share',
+        ];
     }
 
     public static function validate(Runtime $runtime, Config $config, string $caddyfile): ExecResult

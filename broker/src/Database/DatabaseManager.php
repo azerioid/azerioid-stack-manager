@@ -10,7 +10,7 @@ use AzerioidPanel\Broker\Validator;
 
 final class DatabaseManager
 {
-    public const ENGINES = ['mariadb', 'postgresql'];
+    public const ENGINES = ['mariadb', 'postgresql', 'mongodb'];
 
     public function __construct(
         private readonly Config $config,
@@ -28,10 +28,12 @@ final class DatabaseManager
                 $engine = 'mariadb';
             } elseif ($this->config->postgresqlPassword !== '') {
                 $engine = 'postgresql';
+            } elseif ($this->config->mongodbPassword !== '') {
+                $engine = 'mongodb';
             }
         }
         if ($engine === '') {
-            throw new BrokerException('No database engine is configured. Install MariaDB or PostgreSQL from Components.', 3);
+            throw new BrokerException('No database engine is configured. Install MariaDB, PostgreSQL, or MongoDB from Components.', 3);
         }
         if (!in_array($engine, self::ENGINES, true)) {
             throw new BrokerException('Unknown database engine.', 2);
@@ -50,6 +52,7 @@ final class DatabaseManager
         return match ($engine) {
             'mariadb' => new MariaDBDriver($this->config, $this->config->runtimeWithDb($this->runtime)),
             'postgresql' => new PostgreSQLDriver($this->config, $this->runtime),
+            'mongodb' => new MongoDriver($this->config, $this->runtime),
             default => throw new BrokerException('Unknown database engine.', 2),
         };
     }
@@ -58,7 +61,7 @@ final class DatabaseManager
     public function engines(): array
     {
         $active = $this->config->databaseEngine;
-        $labels = ['mariadb' => 'MariaDB', 'postgresql' => 'PostgreSQL'];
+        $labels = ['mariadb' => 'MariaDB', 'postgresql' => 'PostgreSQL', 'mongodb' => 'MongoDB'];
         $list = [];
         foreach (self::ENGINES as $id) {
             $driver = $this->driver($id);

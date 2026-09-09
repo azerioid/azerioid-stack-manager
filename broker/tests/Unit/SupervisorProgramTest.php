@@ -97,6 +97,32 @@ final class SupervisorProgramTest extends TestCase
         $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-bad.conf', $this->rt->files);
     }
 
+    public function test_create_ensures_default_apps_directory(): void
+    {
+        unset($this->rt->dirs['/var/lib/azerioid-supervised/apps']);
+        [$code] = $this->capture(['broker', 'supervisor.program.create'], [
+            'name' => 'apps-dir',
+            'command' => '/usr/bin/sleep 1',
+            'directory' => '/var/lib/azerioid-supervised/apps',
+        ]);
+        $this->assertSame(0, $code);
+        $this->assertTrue($this->rt->dirs['/var/lib/azerioid-supervised/apps'] ?? false);
+    }
+
+    public function test_el_writes_ini_into_supervisord_d(): void
+    {
+        $this->rt->files['/etc/supervisord.conf'] = "[include]\nfiles = supervisord.d/*.ini\n";
+        $this->rt->dirs['/etc/supervisord.d'] = true;
+        [$code] = $this->capture(['broker', 'supervisor.program.create'], [
+            'name' => 'elini',
+            'command' => '/usr/bin/sleep 5',
+            'directory' => '/var/lib/azerioid-supervised/apps',
+        ]);
+        $this->assertSame(0, $code);
+        $this->assertArrayHasKey('/etc/supervisord.d/azerioid-elini.ini', $this->rt->files);
+        $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-elini.conf', $this->rt->files);
+    }
+
     public function test_delete_removes_config_and_metadata(): void
     {
         $this->capture(['broker', 'supervisor.program.create'], [

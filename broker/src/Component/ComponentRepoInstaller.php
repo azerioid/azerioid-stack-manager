@@ -85,9 +85,16 @@ final class ComponentRepoInstaller
                 120
             );
             $suite = $os->distroKey === 'debian' ? 'debian' : 'ubuntu';
+            $codename = $os->codename;
+            // MongoDB 8.0 publishes debian server packages under bookworm only.
+            // The trixie path exists but currently ships mongosh, not mongodb-org.
+            if ($os->distroKey === 'debian' && ($codename === 'trixie' || version_compare($os->versionId, '13', '>='))) {
+                $codename = 'bookworm';
+            }
+            $component = $os->distroKey === 'debian' ? 'main' : 'multiverse';
             $this->runtime->writeFile(
                 $list,
-                "deb [ signed-by={$keyring} ] https://repo.mongodb.org/apt/{$suite} {$os->codename}/mongodb-org/{$version} multiverse\n",
+                "deb [ signed-by={$keyring} ] https://repo.mongodb.org/apt/{$suite} {$codename}/mongodb-org/{$version} {$component}\n",
                 0644
             );
             $this->aptUpdate($log);
@@ -100,9 +107,12 @@ final class ComponentRepoInstaller
             return;
         }
         $log->info('Adding MongoDB yum repository.');
+        // MongoDB publishes RHEL repos under the major version only (redhat/9/,
+        // not redhat/9.8/). AlmaLinux/Rocky VERSION_ID is often "9.x".
+        $elMajor = explode('.', $os->versionId)[0] ?: '9';
         $this->runtime->writeFile(
             $repo,
-            "[mongodb-org-8.0]\nname=MongoDB Repository\nbaseurl=https://repo.mongodb.org/yum/redhat/{$os->versionId}/mongodb-org/8.0/x86_64/\ngpgcheck=1\nenabled=1\ngpgkey=https://www.mongodb.org/static/pgp/server-8.0.asc\n",
+            "[mongodb-org-8.0]\nname=MongoDB Repository\nbaseurl=https://repo.mongodb.org/yum/redhat/{$elMajor}/mongodb-org/8.0/x86_64/\ngpgcheck=1\nenabled=1\ngpgkey=https://www.mongodb.org/static/pgp/server-8.0.asc\n",
             0644
         );
         $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);

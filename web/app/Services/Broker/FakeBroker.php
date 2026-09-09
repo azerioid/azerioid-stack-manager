@@ -2,6 +2,11 @@
 
 namespace App\Services\Broker;
 
+use AzerioidPanel\Broker\BrokerException;
+use AzerioidPanel\Broker\Database\DbAccessPolicy;
+use AzerioidPanel\Broker\Files\VhostPath;
+use AzerioidPanel\Broker\Validator;
+
 /**
  * Local / test stand-in. Mirrors broker JSON shapes so the UI can be
  * developed on a Mac without sudo or a live panel host.
@@ -14,9 +19,17 @@ final class FakeBroker
     /** @var array<int, array<string, mixed>> */
     public array $databases;
 
+    /** @var array<int, array<string, mixed>> */
+    public array $mongoDatabases;
+
     public string $databaseEngine = 'mariadb';
 
     public bool $postgresqlConfigured = false;
+
+    public bool $mongodbConfigured = false;
+
+    /** @var array<string, array<string, array{mode:string,ips:list<string>}>> */
+    public array $dbAccess = [];
 
     public bool $refuseReadonlyDeletes = true;
 
@@ -38,8 +51,22 @@ final class FakeBroker
     /** @var array<string, array<string, mixed>> */
     public array $terminalSessions = [];
 
+    /**
+     * In-memory per-vhost file trees for the file manager (tests / local UI).
+     * Keyed by domain, then relative path ('' = root dir).
+     *
+     * @var array<string, array<string, array<string, mixed>>>
+     */
+    public array $vhostFiles = [];
+
+    public int $vhostFilesMaxBytes = 20971520;
+
     /** @var array<string, bool> provider id => credentials present */
     public array $dnsCredentialsPresent = [];
+
+    public ?string $panelDomain = null;
+
+    public string $panelDomainTlsMode = 'auto';
 
     public function __construct()
     {
@@ -55,9 +82,14 @@ final class FakeBroker
         $this->fakeObservedComponents = [];
         $this->supervisorPrograms = [];
         $this->terminalSessions = [];
+        $this->vhostFiles = [];
         $this->dnsCredentialsPresent = [];
+        $this->panelDomain = null;
+        $this->panelDomainTlsMode = 'auto';
         $this->databaseEngine = 'mariadb';
         $this->postgresqlConfigured = false;
+        $this->mongodbConfigured = false;
+        $this->dbAccess = [];
         $this->vhosts = [
             [
                 'domains' => ['shop.example.com'],
@@ -81,6 +113,7 @@ final class FakeBroker
                     'label' => "Let's Encrypt (HTTP-01) · exp 2026-10-30T00:00",
                 ],
                 'reverse_proxy' => null,
+                'engine' => 'caddy',
                 'readonly' => false,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/shop.example.com.conf',
@@ -104,6 +137,7 @@ final class FakeBroker
                     'label' => "Let's Encrypt (HTTP-01)",
                 ],
                 'reverse_proxy' => '127.0.0.1:3000',
+                'engine' => 'caddy',
                 'readonly' => true,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/projob.az.conf',
@@ -127,6 +161,7 @@ final class FakeBroker
                     'label' => 'http',
                 ],
                 'reverse_proxy' => null,
+                'engine' => 'caddy',
                 'readonly' => true,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/default.conf',
@@ -137,6 +172,24 @@ final class FakeBroker
             ['name' => 'lacmp_panel', 'size_bytes' => 80_000, 'table_count' => 6, 'users' => [['user' => 'lacmp_panel', 'host' => 'localhost']], 'protected' => true],
             ['name' => 'projob', 'size_bytes' => 42_000_000, 'table_count' => 48, 'users' => [['user' => 'projob', 'host' => 'localhost']], 'protected' => false],
         ];
+        $this->mongoDatabases = [
+            ['name' => 'admin', 'size_bytes' => 1_000, 'table_count' => 0, 'users' => [['user' => 'azerioid_panel_admin', 'host' => 'instance']], 'protected' => true],
+            ['name' => 'config', 'size_bytes' => 500, 'table_count' => 0, 'users' => [['user' => 'azerioid_panel_admin', 'host' => 'instance']], 'protected' => true],
+            ['name' => 'local', 'size_bytes' => 500, 'table_count' => 0, 'users' => [['user' => 'azerioid_panel_admin', 'host' => 'instance']], 'protected' => true],
+            ['name' => 'shop', 'size_bytes' => 5_000, 'table_count' => 0, 'users' => [['user' => 'azerioid_panel_admin', 'host' => 'instance']], 'protected' => false],
+        ];
+        $this->seedShopFiles();
+    }
+
+    private function seedShopFiles(): void
+    {
+        $now = time();
+        $this->vhostFiles['shop.example.com'] = [
+            '' => ['type' => 'dir', 'mtime' => $now],
+            'index.php' => ['type' => 'file', 'content' => "<?php echo 'shop';\n", 'mtime' => $now],
+            'public' => ['type' => 'dir', 'mtime' => $now],
+            'public/hello.txt' => ['type' => 'file', 'content' => "hello\n", 'mtime' => $now],
+        ];
     }
 
     public function handle(string $action, array $args, array $stdin): BrokerResponse
@@ -144,17 +197,9 @@ final class FakeBroker
         try {
             $data = match ($action) {
                 'status.all' => $this->statusAll(),
-                'panel.runtime' => [
-                    'php_version' => '8.4',
-                    'fpm_socket' => '/run/php/azerioid-panel.sock',
-                    'fpm_pool' => 'azerioid-panel',
-                    'fpm_service' => 'php8.4-fpm',
-                    'queue_unit' => 'azerioid-panel-queue.service',
-                    'queue_active' => true,
-                    'queue_status' => $this->svc('azerioid-panel-queue'),
-                    'system' => true,
-                    'removable' => false,
-                ],
+                'panel.runtime' => $this->panelRuntime(),
+                'panel.domain.show' => $this->panelDomainShow(),
+                'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'component.list' => $this->componentList(),
                 'component.status' => $this->componentStatus((string) ($args[0] ?? '')),
                 'component.preflight' => $this->componentPreflight((string) ($args[0] ?? '')),
@@ -174,14 +219,39 @@ final class FakeBroker
                 'vhost.add' => $this->vhostAdd($args, $stdin),
                 'vhost.edit' => $this->vhostEdit($args, $stdin),
                 'vhost.del' => $this->vhostDel($args, $stdin),
-                'db.list' => ['engine' => $this->databaseEngine, 'databases' => $this->databases],
+                'web.release-site-ports' => [
+                    'released' => false,
+                    'deprecated' => true,
+                    'panel_port' => 3169,
+                    'note' => 'Caddy is the permanent front router on :80/:443. Apache and Nginx listen only on loopback backend ports.',
+                ],
+                'web.front-router.migrate' => [
+                    'ensured' => [],
+                    'migrated' => [],
+                    'note' => 'Caddy remains on :80/:443.',
+                ],
+                'db.list' => $this->dbList($stdin),
                 'db.engine' => $this->dbEngine(),
                 'db.dump' => $this->dbDump($args),
                 'db.add' => $this->dbAdd($args, $stdin),
-                'db.del' => $this->dbDel($args),
+                'db.del' => $this->dbDel($args, $stdin),
                 'db.resetpw' => ['user' => $args[0] ?? '', 'reset' => true],
+                'db.access.show' => $this->dbAccessShow($args, $stdin),
+                'db.access.set' => $this->dbAccessSet($args, $stdin),
                 'logs.tail' => $this->logs($args),
                 'php.versions' => $this->phpVersions(),
+                'php.timeouts.ensure' => [
+                    'timeouts' => [
+                        'pools' => [],
+                        'ini' => [],
+                        'vhosts' => [],
+                        'reloaded' => [],
+                        'max_execution_time' => 30,
+                        'request_terminate_timeout' => 30,
+                        'proxy_read_timeout' => 35,
+                    ],
+                    'http_firewall' => ['backend' => 'none', 'applied' => false, 'detail' => 'fake'],
+                ],
                 'php.ini.get' => ['php_version' => $args[0] ?? '8.4', 'path' => '/etc/php/8.4/fpm/php.ini', 'values' => ['memory_limit' => '128M', 'upload_max_filesize' => '128M', 'post_max_size' => '128M', 'max_execution_time' => '300', 'max_input_time' => '300', 'max_file_uploads' => '20', 'expose_php' => 'Off']],
                 'php.ini.set' => ['php_version' => $args[0] ?? '8.4', 'key' => $args[1] ?? '', 'value' => $args[2] ?? ''],
                 'mariadb.bind.status' => ['listening_public' => true, 'bind_address_config' => '0.0.0.0', 'config_path' => '/etc/mysql/mariadb.conf.d/50-server.cnf'],
@@ -243,12 +313,91 @@ final class FakeBroker
                 'terminal.session.list' => $this->terminalSessionList(),
                 'terminal.session.status' => $this->terminalSessionStatus($args),
                 'terminal.session.cleanup' => $this->terminalSessionCleanup(),
+                'vhost.files.list' => $this->vhostFilesOp('list', $args, $stdin),
+                'vhost.files.read' => $this->vhostFilesOp('read', $args, $stdin),
+                'vhost.files.write' => $this->vhostFilesOp('write', $args, $stdin),
+                'vhost.files.mkdir' => $this->vhostFilesOp('mkdir', $args, $stdin),
+                'vhost.files.rename' => $this->vhostFilesOp('rename', $args, $stdin),
+                'vhost.files.move' => $this->vhostFilesOp('move', $args, $stdin),
+                'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
                 default => throw new BrokerCallException('Unknown action.', 2),
             };
             return new BrokerResponse(true, $data, null, 0);
         } catch (BrokerCallException $e) {
             return new BrokerResponse(false, null, $e->getMessage(), $e->errorCode);
         }
+    }
+
+    /** @return array<string, mixed> */
+    private function panelRuntime(): array
+    {
+        return [
+            'php_version' => '8.4',
+            'fpm_socket' => '/run/php/azerioid-panel.sock',
+            'fpm_pool' => 'azerioid-panel',
+            'fpm_service' => 'php8.4-fpm',
+            'queue_unit' => 'azerioid-panel-queue.service',
+            'queue_active' => true,
+            'queue_status' => $this->svc('azerioid-panel-queue'),
+            'system' => true,
+            'removable' => false,
+        ] + $this->panelDomainShow();
+    }
+
+    /** @return array<string, mixed> */
+    private function panelDomainShow(): array
+    {
+        $fallback = ['http://127.0.0.1:3169', 'https://203.0.113.10:3169'];
+        $appUrl = $this->panelDomain !== null
+            ? 'https://'.$this->panelDomain
+            : 'https://203.0.113.10:3169';
+
+        return [
+            'domain' => $this->panelDomain,
+            'tls_mode' => $this->panelDomainTlsMode,
+            'tls_status' => $this->panelDomain === null ? null : [
+                'domain' => $this->panelDomain,
+                'ok' => $this->panelDomainTlsMode === 'internal',
+                'issuer_type' => $this->panelDomainTlsMode === 'internal' ? 'self_signed' : 'pending',
+                'label' => $this->panelDomainTlsMode === 'internal' ? 'self-signed' : 'pending',
+                'pending' => $this->panelDomainTlsMode !== 'internal',
+                'failed' => false,
+                'error' => null,
+            ],
+            'app_url' => $appUrl,
+            'fallback_urls' => $fallback,
+            'catch_all' => true,
+            'public_ip' => '203.0.113.10',
+            'note' => 'IP/tunnel fallback always remains. Unrelated Host headers on the panel port receive 421.',
+        ];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function panelDomainSet(array $args, array $stdin): array
+    {
+        if (! empty($stdin['clear']) || (array_key_exists('domain', $stdin) && trim((string) $stdin['domain']) === '')) {
+            $this->panelDomain = null;
+            $this->panelDomainTlsMode = 'auto';
+
+            return $this->panelDomainShow();
+        }
+        $domain = strtolower(trim((string) ($stdin['domain'] ?? $args[0] ?? '')));
+        if ($domain === '') {
+            return $this->panelDomainShow();
+        }
+        if (collect($this->vhosts)->contains(fn ($v) => strtolower((string) ($v['domain'] ?? '')) === $domain)) {
+            throw new BrokerCallException($domain.' is already a site vhost; choose a different panel domain.', 3);
+        }
+        $this->panelDomain = Validator::domain($domain);
+        if (isset($stdin['tls_mode']) || isset($stdin['tls'])) {
+            $this->panelDomainTlsMode = (string) ($stdin['tls_mode'] ?? $stdin['tls'] ?? 'auto');
+        }
+
+        return $this->panelDomainShow();
     }
 
     private function statusAll(): array
@@ -458,11 +607,19 @@ final class FakeBroker
                 'label' => 'http',
             ],
             'reverse_proxy' => ($args[2] ?? '') === 'proxy' ? ($args[3] ?? null) : null,
+            'engine' => ($args[2] ?? '') === 'proxy'
+                ? 'caddy'
+                : (string) ($stdin['engine'] ?? 'caddy'),
             'readonly' => false,
             'enabled' => true,
             'source' => '/etc/caddy/conf.d/' . $domain . '.conf',
         ];
         $this->vhosts[] = $row;
+        $now = time();
+        $this->vhostFiles[$domain] = [
+            '' => ['type' => 'dir', 'mtime' => $now],
+        ];
+
         return $row;
     }
 
@@ -504,6 +661,13 @@ final class FakeBroker
                 $v['tls_mode'] = (string) $stdin['tls_mode'];
                 $v['tls'] = $v['tls_mode'] !== 'off';
             }
+            if (isset($stdin['engine'])) {
+                $engine = strtolower(trim((string) $stdin['engine']));
+                if (! in_array($engine, ['caddy', 'apache', 'nginx'], true)) {
+                    throw new BrokerCallException('engine must be caddy, apache, or nginx.', 2);
+                }
+                $v['engine'] = ($v['type'] ?? '') === 'proxy' ? 'caddy' : $engine;
+            }
             if (isset($stdin['tls_cert'])) {
                 $v['tls_cert'] = (string) $stdin['tls_cert'];
             }
@@ -538,6 +702,7 @@ final class FakeBroker
                 'tls' => (bool) ($v['tls'] ?? false),
                 'tls_mode' => $v['tls_mode'] ?? ($v['tls'] ? 'auto' : 'off'),
                 'type' => $v['type'] ?? 'static',
+                'engine' => $v['engine'] ?? 'caddy',
             ];
             $this->vhosts[$i] = $v;
 
@@ -549,6 +714,7 @@ final class FakeBroker
                 'type' => $v['type'],
                 'php_version' => $v['php_version'] ?? null,
                 'tls' => (bool) ($v['tls'] ?? false),
+                'engine' => $v['engine'] ?? 'caddy',
                 'source' => $v['source'],
                 'apply' => ['path' => 'restart', 'address' => '', 'admin_spec' => 'n/a', 'admin_enabled' => false],
             ];
@@ -584,6 +750,8 @@ final class FakeBroker
             }
             unset($this->vhosts[$i]);
             $this->vhosts = array_values($this->vhosts);
+            unset($this->vhostFiles[$domain]);
+
             return ['domain' => $domain, 'deleted' => $v['source'], 'web_root_preserved' => $v['root']];
         }
         throw new BrokerCallException('Vhost config does not exist.', 3);
@@ -595,30 +763,50 @@ final class FakeBroker
             $this->failNextDbAdd = false;
             throw new BrokerCallException('Database already exists.', 3);
         }
+        $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
         $name = $args[0] ?? '';
         $user = $args[1] ?? $name;
-        $this->databases[] = [
+        $host = $engine === 'mongodb' ? 'auth' : 'localhost';
+        $row = [
             'name' => $name,
             'size_bytes' => 0,
             'table_count' => 0,
-            'users' => [['user' => $user, 'host' => 'localhost']],
+            'users' => [['user' => $user, 'host' => $host]],
             'protected' => false,
         ];
-        return ['name' => $name, 'user' => $user, 'hosts' => ['localhost', '127.0.0.1']];
+        if ($engine === 'mongodb') {
+            $this->mongoDatabases[] = $row;
+        } else {
+            $this->databases[] = $row;
+        }
+
+        return [
+            'name' => $name,
+            'user' => $user,
+            'hosts' => $engine === 'mongodb' ? ['auth'] : ['localhost', '127.0.0.1'],
+        ];
     }
 
-    private function dbDel(array $args): array
+    private function dbDel(array $args, array $stdin = []): array
     {
+        $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
         $name = $args[0] ?? '';
-        foreach ($this->databases as $i => $db) {
+        $list = $engine === 'mongodb' ? $this->mongoDatabases : $this->databases;
+        foreach ($list as $i => $db) {
             if ($db['name'] !== $name) {
                 continue;
             }
             if ($db['protected']) {
                 throw new BrokerCallException('Refusing to mutate a protected system database.', 3);
             }
-            unset($this->databases[$i]);
-            $this->databases = array_values($this->databases);
+            if ($engine === 'mongodb') {
+                unset($this->mongoDatabases[$i]);
+                $this->mongoDatabases = array_values($this->mongoDatabases);
+            } else {
+                unset($this->databases[$i]);
+                $this->databases = array_values($this->databases);
+            }
+
             return ['name' => $name, 'user' => $args[1] ?? $name, 'dropped' => true];
         }
         throw new BrokerCallException('Database does not exist.', 3);
@@ -848,8 +1036,120 @@ final class FakeBroker
             'engines' => [
                 ['id' => 'mariadb', 'label' => 'MariaDB', 'configured' => true, 'active' => $this->databaseEngine === 'mariadb'],
                 ['id' => 'postgresql', 'label' => 'PostgreSQL', 'configured' => $this->postgresqlConfigured, 'active' => $this->databaseEngine === 'postgresql'],
+                ['id' => 'mongodb', 'label' => 'MongoDB', 'configured' => $this->mongodbConfigured, 'active' => $this->databaseEngine === 'mongodb'],
             ],
         ];
+    }
+
+    /** @param  array<string, mixed>  $stdin */
+    private function dbList(array $stdin): array
+    {
+        $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
+        $databases = $engine === 'mongodb' ? $this->mongoDatabases : $this->databases;
+        $instance = $this->instanceAggregate($engine);
+        foreach ($databases as $i => $db) {
+            $name = (string) ($db['name'] ?? '');
+            $requested = $this->accessFor($engine, $name);
+            $databases[$i]['access'] = DbAccessPolicy::describe($engine, $requested, $instance);
+        }
+
+        return ['engine' => $engine, 'databases' => $databases];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function dbAccessShow(array $args, array $stdin): array
+    {
+        try {
+            $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
+            $name = Validator::dbName((string) ($args[0] ?? ($stdin['name'] ?? '')));
+            $this->assertDatabaseExists($engine, $name, false);
+            $instance = $this->instanceAggregate($engine);
+
+            return [
+                'engine' => $engine,
+                'name' => $name,
+                'access' => DbAccessPolicy::describe($engine, $this->accessFor($engine, $name), $instance),
+            ];
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function dbAccessSet(array $args, array $stdin): array
+    {
+        try {
+            $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
+            $name = Validator::dbName((string) ($args[0] ?? ($stdin['name'] ?? '')));
+            $mode = Validator::accessMode((string) ($stdin['mode'] ?? ''));
+            $ips = Validator::accessIps($mode, $stdin['ips'] ?? ($stdin['ip'] ?? []));
+            if ($mode === 'global') {
+                Validator::typedConfirm((string) ($stdin['confirm'] ?? ''), Validator::GLOBAL_ACCESS_CONFIRM);
+            }
+            $this->assertDatabaseExists($engine, $name, true);
+            $before = $this->accessFor($engine, $name);
+            $this->dbAccess[$engine][$name] = ['mode' => $mode, 'ips' => $ips];
+            $instance = $this->instanceAggregate($engine);
+
+            return [
+                'engine' => $engine,
+                'name' => $name,
+                'before' => DbAccessPolicy::describe($engine, $before, $instance),
+                'after' => DbAccessPolicy::describe($engine, ['mode' => $mode, 'ips' => $ips], $instance),
+                'bind' => ['changed' => $mode !== 'localhost', 'listen' => $mode === 'localhost' ? '127.0.0.1' : '0.0.0.0'],
+                'firewall' => ['backend' => 'ufw', 'applied' => true, 'detail' => 'fake'],
+            ];
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+    }
+
+    private function assertDatabaseExists(string $engine, string $name, bool $mutate): void
+    {
+        $list = $engine === 'mongodb' ? $this->mongoDatabases : $this->databases;
+        foreach ($list as $db) {
+            if (($db['name'] ?? '') === $name) {
+                if ($mutate && ! empty($db['protected'])) {
+                    throw new BrokerException('Refusing to change access on a protected system database.', 3);
+                }
+
+                return;
+            }
+        }
+        throw new BrokerException('Database does not exist.', 3);
+    }
+
+    /** @return array{mode:string,ips:list<string>} */
+    private function accessFor(string $engine, string $name): array
+    {
+        $row = $this->dbAccess[$engine][$name] ?? null;
+        if (! is_array($row)) {
+            return ['mode' => 'localhost', 'ips' => []];
+        }
+
+        return [
+            'mode' => (string) ($row['mode'] ?? 'localhost'),
+            'ips' => array_values(array_filter((array) ($row['ips'] ?? []), 'is_string')),
+        ];
+    }
+
+    /** @return array{network:string,ips:list<string>,bind_public:bool} */
+    private function instanceAggregate(string $engine): array
+    {
+        $entries = [];
+        foreach ($this->dbAccess[$engine] ?? [] as $row) {
+            $entries[] = $row;
+        }
+
+        return DbAccessPolicy::aggregate($entries);
     }
 
     /** @param list<string> $args */
@@ -1099,5 +1399,314 @@ final class FakeBroker
     private function terminalSessionCleanup(): array
     {
         return ['removed' => []];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function vhostFilesOp(string $op, array $args, array $stdin): array
+    {
+        $vhost = $this->eligibleFilesVhost((string) ($args[0] ?? ($stdin['domain'] ?? '')));
+        $domain = (string) $vhost['domain'];
+        $root = (string) $vhost['root'];
+        if (! isset($this->vhostFiles[$domain])) {
+            $this->vhostFiles[$domain] = ['' => ['type' => 'dir', 'mtime' => time()]];
+        }
+        $path = $this->filesRel($root, (string) ($stdin['path'] ?? ''));
+        $data = match ($op) {
+            'list' => $this->filesList($domain, $root, $path),
+            'read' => $this->filesRead($domain, $root, $path),
+            'write' => $this->filesWrite($domain, $root, $path, (string) ($stdin['content_base64'] ?? '')),
+            'mkdir' => $this->filesMkdir($domain, $path),
+            'rename', 'move' => $this->filesRename(
+                $domain,
+                $root,
+                $path,
+                $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
+            ),
+            'delete' => $this->filesDelete($domain, $path, (bool) ($stdin['recursive'] ?? false)),
+            default => throw new BrokerCallException('Unknown file operation.', 2),
+        };
+        $data['domain'] = $domain;
+        $data['username'] = 'az-vh-' . str_replace('.', '-', $domain);
+        $data['root'] = $root;
+        $data['max_bytes'] = $this->vhostFilesMaxBytes;
+
+        return $data;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function eligibleFilesVhost(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        foreach ($this->vhosts as $vhost) {
+            if (($vhost['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($vhost['readonly'])) {
+                throw new BrokerCallException('File manager is not available for read-only or system vhosts.', 3);
+            }
+            if ((string) ($vhost['root'] ?? '') === '') {
+                throw new BrokerCallException('Vhost has no document root.', 2);
+            }
+
+            return $vhost;
+        }
+
+        throw new BrokerCallException('Vhost not found.', 2);
+    }
+
+    private function filesRel(string $root, string $rel): string
+    {
+        $joined = VhostPath::lexicalJoin($root, $rel);
+        if ($joined === null) {
+            throw new BrokerCallException('Path is outside the vhost directory.', 3);
+        }
+        $root = rtrim(str_replace('\\', '/', $root), '/');
+
+        return $joined === $root ? '' : substr($joined, strlen($root) + 1);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesNode(string $domain, string $rel, bool $follow = true): array
+    {
+        if (! isset($this->vhostFiles[$domain][$rel])) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        $node = $this->vhostFiles[$domain][$rel];
+        if (($node['type'] ?? '') === 'symlink') {
+            $target = (string) ($node['target'] ?? '');
+            $root = $this->eligibleFilesVhost($domain)['root'];
+            if ($target === '' || ! VhostPath::isUnder(rtrim((string) $root, '/'), $target)) {
+                throw new BrokerCallException('Path resolves outside the vhost directory.', 3);
+            }
+            if (! $follow) {
+                return $node;
+            }
+            $inner = $this->filesRel((string) $root, ltrim(substr($target, strlen(rtrim((string) $root, '/'))), '/'));
+
+            return $this->filesNode($domain, $inner, false);
+        }
+
+        return $node;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesList(string $domain, string $root, string $path): array
+    {
+        $node = $this->filesNode($domain, $path);
+        if (($node['type'] ?? '') !== 'dir') {
+            throw new BrokerCallException('Not a directory.', 2);
+        }
+        $prefix = $path === '' ? '' : $path . '/';
+        $entries = [];
+        foreach ($this->vhostFiles[$domain] as $rel => $child) {
+            if ($rel === $path) {
+                continue;
+            }
+            $name = $rel;
+            if ($prefix === '') {
+                if (str_contains($rel, '/')) {
+                    continue;
+                }
+            } else {
+                if (! str_starts_with($rel, $prefix)) {
+                    continue;
+                }
+                $name = substr($rel, strlen($prefix));
+                if ($name === '' || str_contains($name, '/')) {
+                    continue;
+                }
+            }
+            $isLink = ($child['type'] ?? '') === 'symlink';
+            $escaped = false;
+            $type = (string) ($child['type'] ?? 'file');
+            if ($isLink) {
+                $target = (string) ($child['target'] ?? '');
+                $escaped = $target === '' || ! VhostPath::isUnder(rtrim($root, '/'), $target);
+                $type = $escaped ? 'symlink' : $type;
+            }
+            $content = (string) ($child['content'] ?? '');
+            $entries[] = [
+                'name' => $name,
+                'type' => $escaped ? 'symlink' : ($type === 'dir' ? 'dir' : 'file'),
+                'size' => $type === 'dir' ? 0 : strlen($content),
+                'mtime' => (int) ($child['mtime'] ?? 0),
+                'mode' => $type === 'dir' ? '2770' : '0660',
+                'link' => $isLink,
+                'escaped' => $escaped,
+            ];
+        }
+        usort($entries, static function (array $a, array $b): int {
+            $ad = ($a['type'] ?? '') === 'dir' ? 0 : 1;
+            $bd = ($b['type'] ?? '') === 'dir' ? 0 : 1;
+            if ($ad !== $bd) {
+                return $ad <=> $bd;
+            }
+
+            return strcasecmp((string) $a['name'], (string) $b['name']);
+        });
+
+        return ['path' => $path, 'root' => $root, 'entries' => $entries];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesRead(string $domain, string $root, string $path): array
+    {
+        if ($path === '') {
+            throw new BrokerCallException('Cannot read a directory as a file.', 2);
+        }
+        $node = $this->filesNode($domain, $path);
+        if (($node['type'] ?? '') === 'dir') {
+            throw new BrokerCallException('Cannot read a directory as a file.', 2);
+        }
+        $bytes = (string) ($node['content'] ?? '');
+        if (strlen($bytes) > $this->vhostFilesMaxBytes) {
+            throw new BrokerCallException('File exceeds the size limit (' . $this->vhostFilesMaxBytes . ' bytes).', 2);
+        }
+
+        return [
+            'path' => $path,
+            'size' => strlen($bytes),
+            'mtime' => (int) ($node['mtime'] ?? 0),
+            'content_base64' => base64_encode($bytes),
+            'text' => ! str_contains($bytes, "\0") && mb_check_encoding($bytes, 'UTF-8'),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesWrite(string $domain, string $root, string $path, string $b64): array
+    {
+        if ($path === '') {
+            throw new BrokerCallException('Refusing to replace the vhost root.', 3);
+        }
+        $bytes = $b64 === '' ? '' : base64_decode($b64, true);
+        if ($bytes === false) {
+            throw new BrokerCallException('Invalid file content encoding.', 2);
+        }
+        if (strlen($bytes) > $this->vhostFilesMaxBytes) {
+            throw new BrokerCallException('File exceeds the size limit (' . $this->vhostFilesMaxBytes . ' bytes).', 2);
+        }
+        $parent = dirname($path) === '.' ? '' : dirname($path);
+        $parentNode = $this->filesNode($domain, $parent);
+        if (($parentNode['type'] ?? '') !== 'dir') {
+            throw new BrokerCallException('Parent directory not found.', 3);
+        }
+        if (isset($this->vhostFiles[$domain][$path]) && ($this->vhostFiles[$domain][$path]['type'] ?? '') === 'dir') {
+            throw new BrokerCallException('Cannot overwrite a directory.', 2);
+        }
+        if (isset($this->vhostFiles[$domain][$path]) && ($this->vhostFiles[$domain][$path]['type'] ?? '') === 'symlink') {
+            $this->filesNode($domain, $path);
+        }
+        $this->vhostFiles[$domain][$path] = [
+            'type' => 'file',
+            'content' => $bytes,
+            'mtime' => time(),
+        ];
+
+        return ['path' => $path, 'size' => strlen($bytes), 'written' => true];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesMkdir(string $domain, string $path): array
+    {
+        if ($path === '') {
+            throw new BrokerCallException('Refusing to replace the vhost root.', 3);
+        }
+        if (isset($this->vhostFiles[$domain][$path])) {
+            throw new BrokerCallException('Path already exists.', 3);
+        }
+        $parent = dirname($path) === '.' ? '' : dirname($path);
+        $parentNode = $this->filesNode($domain, $parent);
+        if (($parentNode['type'] ?? '') !== 'dir') {
+            throw new BrokerCallException('Parent directory not found.', 3);
+        }
+        $this->vhostFiles[$domain][$path] = ['type' => 'dir', 'mtime' => time()];
+
+        return ['path' => $path, 'created' => true];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesRename(string $domain, string $root, string $from, string $to): array
+    {
+        if ($from === '' || $to === '') {
+            throw new BrokerCallException($to === '' ? 'Destination path is required.' : 'Refusing to rename the vhost root.', $to === '' ? 2 : 3);
+        }
+        if (! isset($this->vhostFiles[$domain][$from])) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        if (isset($this->vhostFiles[$domain][$to])) {
+            throw new BrokerCallException('Destination already exists.', 3);
+        }
+        $parent = dirname($to) === '.' ? '' : dirname($to);
+        $parentNode = $this->filesNode($domain, $parent);
+        if (($parentNode['type'] ?? '') !== 'dir') {
+            throw new BrokerCallException('Parent directory not found.', 3);
+        }
+        $moved = [];
+        foreach ($this->vhostFiles[$domain] as $rel => $node) {
+            if ($rel === $from || str_starts_with($rel, $from . '/')) {
+                $suffix = $rel === $from ? '' : substr($rel, strlen($from));
+                $moved[$to . $suffix] = $node;
+                unset($this->vhostFiles[$domain][$rel]);
+            }
+        }
+        foreach ($moved as $rel => $node) {
+            $this->vhostFiles[$domain][$rel] = $node;
+        }
+
+        return ['from' => $from, 'path' => $to, 'renamed' => true];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function filesDelete(string $domain, string $path, bool $recursive): array
+    {
+        if ($path === '') {
+            throw new BrokerCallException('Refusing to delete the vhost root.', 3);
+        }
+        if (! isset($this->vhostFiles[$domain][$path])) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        $node = $this->vhostFiles[$domain][$path];
+        if (($node['type'] ?? '') === 'symlink') {
+            unset($this->vhostFiles[$domain][$path]);
+
+            return ['path' => $path, 'deleted' => true];
+        }
+        if (($node['type'] ?? '') === 'dir') {
+            $children = [];
+            foreach (array_keys($this->vhostFiles[$domain]) as $rel) {
+                if (str_starts_with($rel, $path . '/')) {
+                    $children[] = $rel;
+                }
+            }
+            if ($children !== [] && ! $recursive) {
+                throw new BrokerCallException('Directory is not empty; pass recursive to delete it.', 2);
+            }
+            foreach ($children as $rel) {
+                unset($this->vhostFiles[$domain][$rel]);
+            }
+        }
+        unset($this->vhostFiles[$domain][$path]);
+
+        return ['path' => $path, 'deleted' => true];
     }
 }

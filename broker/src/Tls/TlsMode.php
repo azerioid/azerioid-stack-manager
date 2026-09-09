@@ -9,9 +9,9 @@ use AzerioidPanel\Broker\BrokerException;
  * TLS modes for user vhosts.
  *
  * - off: HTTP only
- * - auto: driver-native or certbot HTTP-01 Let's Encrypt (public hostnames)
- * - internal: self-signed (Caddy tls internal / snakeoil for Apache/Nginx)
- * - dns01: certbot DNS-01 → static cert/key files wired into the driver
+ * - auto: Caddy-native Let's Encrypt HTTP-01 (front router; all engines)
+ * - internal: Caddy tls internal (self-signed)
+ * - dns01: certbot DNS-01 → static tls cert/key on the Caddy block
  */
 final class TlsMode
 {

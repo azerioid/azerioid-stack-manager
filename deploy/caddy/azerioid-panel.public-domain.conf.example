@@ -1,11 +1,12 @@
-# Example: public domain mode (Let's Encrypt). Preferred for public access.
+# Example: white-label panel hostname on :443 (Let's Encrypt HTTP-01).
 # ./stack-manager.sh --access=public --domain=panel.example.com --port=3169 --email=you@example.com
+# or: azerioid panel domain set --domain=panel.example.com --tls=auto
 #
-# Optional allowlist:
-#   @blocked not remote_ip 203.0.113.0/24
-#   respond @blocked "Forbidden" 403
+# IP:3169 and the SSH tunnel always remain as lockout-proof fallback.
+# Do not reuse a hostname that is already a site vhost.
 
-https://panel.example.com:3169 {
+https://203.0.113.10:3169 {
+    tls internal
     encode gzip zstd
     root * /usr/local/lib/azerioid-panel/web/public
     php_fastcgi unix//run/php/azerioid-panel.sock
@@ -17,7 +18,23 @@ https://panel.example.com:3169 {
         Referrer-Policy no-referrer
         -Server
     }
-    log {
-        output file /var/log/caddy/azerioid-panel.log
+}
+
+https://:3169 {
+    tls internal
+    respond "Misdirected request." 421
+}
+
+panel.example.com {
+    encode gzip zstd
+    root * /usr/local/lib/azerioid-panel/web/public
+    php_fastcgi unix//run/php/azerioid-panel.sock
+    file_server
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        -Server
     }
 }

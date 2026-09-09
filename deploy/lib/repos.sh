@@ -25,15 +25,12 @@ install_caddy_repo() {
                 > /etc/apt/sources.list.d/caddy-stable.list
             ;;
         el)
-            curl -fsSL "${CADDY_GPG_URL}" -o /etc/pki/rpm-gpg/RPM-GPG-KEY-caddy
-            cat > /etc/yum.repos.d/caddy.repo <<'EOF'
-[caddy]
-name=Caddy stable
-baseurl=https://dl.cloudsmith.io/public/caddy/stable/rpm/el/$releasever/$basearch
-enabled=1
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-caddy
-EOF
+            # Official Caddy docs for RHEL/CentOS use COPR. Cloudsmith rpm/el/$releasever
+            # 404s on AlmaLinux 9.8 (releasever=9.8) and rpm/el/9 is an empty 2020 stub,
+            # so dnf silently installs EPEL Caddy 2.6.4.
+            echo "==> Enabling @caddy/caddy COPR (EL official install path)"
+            dnf -y install dnf-plugins-core >/dev/null
+            dnf -y copr enable @caddy/caddy >/dev/null
             ;;
     esac
 }

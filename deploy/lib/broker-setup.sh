@@ -70,7 +70,13 @@ EOF
         "php_version": "${PANEL_PHP_VERSION}",
         "fpm_socket": "/run/php/azerioid-panel.sock",
         "fpm_pool": "azerioid-panel",
+        "fpm_unit": "$(panel_fpm_unit)",
         "queue_unit": "azerioid-panel-queue.service"
+    },
+    "panel": {
+        "domain": "${PANEL_PUBLIC_DOMAIN:-}",
+        "tls_mode": "auto",
+        "public_ip": "${PANEL_PUBLIC_IP:-}"
     },
     "readonly_vhosts": [],
     "observed_services": []
@@ -108,7 +114,11 @@ install_panel_app() {
         "${ROOT}/web/" "${PREFIX}/web/"
 
     install -d -m 0750 -o "${WEB_USER}" -g "${WEB_USER}" "${PREFIX}/web/lib/azerioid-broker"
+    # Panel FPM autoloads this copy. Never chmod go-rwx here — that is only for PREFIX/src (root broker).
     rsync -a --delete "${ROOT}/broker/src/" "${PREFIX}/web/lib/azerioid-broker/"
+    chown -R "${WEB_USER}:${WEB_USER}" "${PREFIX}/web/lib/azerioid-broker"
+    find "${PREFIX}/web/lib/azerioid-broker" -type d -exec chmod 0750 {} \;
+    find "${PREFIX}/web/lib/azerioid-broker" -type f -exec chmod 0640 {} \;
 
     install -d -m 0770 -o "${WEB_USER}" -g "${WEB_USER}" \
         "${PREFIX}/web/storage" "${PREFIX}/web/storage/logs" \

@@ -6,10 +6,13 @@ namespace AzerioidPanel\Broker\Component;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseProvisioner;
+use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Web\BackendEngineBind;
+use AzerioidPanel\Broker\Web\VhostFrontRouter;
 
 final class ComponentInstaller
 {
@@ -37,17 +40,42 @@ final class ComponentInstaller
             throw new BrokerException('Preflight failed: ' . implode(' ', $preflight['issues']), 2);
         }
 
+        $unit = trim((string) ($distro['unit_name'] ?? ''));
+        $maskDuringInstall = in_array($componentId, ['apache', 'nginx'], true) && $unit !== '';
+
         $mutex = new PackageMutex($this->config->stagingDir . '/package.lock');
         $mutex->acquire(120);
         try {
             $log->info('Acquired package manager lock.');
             $this->repairDpkgIfNeeded($log, $os);
             (new ComponentRepoInstaller($this->runtime))->ensureForInstall($os, $componentId, $options, $log);
+            if ($maskDuringInstall) {
+                $log->info("Masking {$unit} during package install so postinst cannot bind :80/:443 (Caddy owns those ports).");
+                $this->runtime->exec(['/usr/bin/systemctl', 'mask', $unit], null, 30);
+            }
             $log->info('Installing packages: ' . implode(', ', $distro['packages']));
             $this->installPackages($os, $distro['packages'], $log);
             $this->runShellSteps($distro['post_install'] ?? [], $log, 'post_install');
             $this->runShellSteps($distro['secure'] ?? [], $log, 'secure');
-            $unit = trim((string) ($distro['unit_name'] ?? ''));
+            if (str_starts_with($componentId, 'php-')) {
+                $patched = (new SitePhpTimeouts())->patchPools($this->runtime);
+                if ($patched !== []) {
+                    $log->info('Applied FPM request_terminate_timeout on: ' . implode(', ', $patched));
+                }
+            }
+            if ($maskDuringInstall) {
+                $this->runtime->exec(['/usr/bin/systemctl', 'unmask', $unit], null, 30);
+                $log->info("Binding {$componentId} to its loopback backend port (Caddy keeps :80/:443).");
+                (new BackendEngineBind($this->runtime, $this->config))->ensure($componentId);
+                (new VhostFrontRouter())->migrate($this->runtime, $this->config);
+            }
+            if ($componentId === 'supervisor') {
+                SupervisedUser::ensure($this->runtime);
+                if (!$this->runtime->isDir('/etc/supervisor/conf.d')) {
+                    $this->runtime->mkdir('/etc/supervisor/conf.d', 0755);
+                }
+                $log->info('Ensured dedicated supervised user and conf.d directory.');
+            }
             if ($unit !== '') {
                 $log->info("Enabling unit {$unit}");
                 $this->runtime->exec(['/usr/bin/systemctl', 'enable', '--now', $unit], null, 120);
@@ -59,13 +87,6 @@ final class ComponentInstaller
             if ($componentId === 'mongodb') {
                 (new MongoProvisioner($this->config, $this->runtime))->provision($log);
             }
-            if ($componentId === 'supervisor') {
-                SupervisedUser::ensure($this->runtime);
-                if (!$this->runtime->isDir('/etc/supervisor/conf.d')) {
-                    $this->runtime->mkdir('/etc/supervisor/conf.d', 0755);
-                }
-                $log->info('Ensured dedicated supervised user and conf.d directory.');
-            }
             ManagedManifest::record($this->runtime, $this->config->managedComponentsPath, $componentId, [
                 'unit' => $unit,
                 'packages' => $distro['packages'],
@@ -74,6 +95,9 @@ final class ComponentInstaller
             ]);
             $log->info('Install completed successfully.');
         } finally {
+            if ($maskDuringInstall) {
+                $this->runtime->exec(['/usr/bin/systemctl', 'unmask', $unit], null, 30);
+            }
             $mutex->release();
         }
 

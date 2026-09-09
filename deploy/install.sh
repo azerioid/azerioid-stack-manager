@@ -53,7 +53,7 @@ AZERIOID Stack Manager bootstrap — installs Caddy, PHP 8.4 FPM, SQLite panel (
   --port=<n>              panel port (default 3169)
   --web-user=<user>       default: caddy or www-data
   --access=tunnel|public  default tunnel (127.0.0.1)
-  --domain=<name>         public HTTPS host (blank = IP/self-signed)
+  --domain=<name>         white-label panel hostname on :443 (Let's Encrypt); IP:port stays as fallback
   --public-ip=<addr>      override detected public IP (public mode)
   --allowlist=<csv>       panel IP allowlist (exact IPs; blank = any)
   --create-admin=true|false  bootstrap admin via artisan (default false non-interactive)
@@ -174,6 +174,15 @@ echo "==> AZERIOID Stack Manager bootstrap into ${PREFIX}"
 
 setup_repos
 bootstrap_packages
+# On a bare EL image, www-data does not exist and the caddy user is created
+# by the Caddy RPM — re-detect after packages so FPM/broker are not owned
+# by a phantom www-data group.
+if ! id -u "${WEB_USER}" >/dev/null 2>&1; then
+    WEB_USER=""
+    WEB_USER="$(detect_web_user)"
+    export WEB_USER
+    echo "==> Web user (after packages): ${WEB_USER}"
+fi
 source "${LIB}/ttyd.sh"
 install_ttyd
 apply_selinux
@@ -186,6 +195,11 @@ install_queue_worker
 dispatch_ping_job
 install_security
 write_bootstrap_json
+
+# Rsync of the panel tree after the first restorecon leaves files as
+# admin_home_t / unconfined. Re-apply so Caddy (httpd_t) can read the web
+# tree; site FPM stays confined.
+apply_selinux
 
 wait_for_panel_ready
 verify_public_panel_ready

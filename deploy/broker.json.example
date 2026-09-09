@@ -31,6 +31,7 @@
         "php_version": "8.4",
         "fpm_socket": "/run/php/azerioid-panel.sock",
         "fpm_pool": "azerioid-panel",
+        "fpm_unit": "php8.4-fpm",
         "queue_unit": "azerioid-panel-queue.service"
     },
     "readonly_vhosts": [],

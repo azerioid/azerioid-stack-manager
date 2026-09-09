@@ -38,8 +38,13 @@
                     ];
                 @endphp
                 @foreach ($links as [$name, $label, $href])
+                    @php
+                        $active = $name === 'vhosts'
+                            ? request()->routeIs('vhosts', 'vhosts.*')
+                            : request()->routeIs($name);
+                    @endphp
                     <a href="{{ $href }}"
-                       class="rounded-md px-3 py-2 {{ request()->routeIs($name) ? 'bg-ink-700 text-brass-400' : 'text-zinc-400 hover:bg-ink-700 hover:text-zinc-100' }}">
+                       class="rounded-md px-3 py-2 {{ $active ? 'bg-ink-700 text-brass-400' : 'text-zinc-400 hover:bg-ink-700 hover:text-zinc-100' }}">
                         {{ $label }}
                     </a>
                 @endforeach

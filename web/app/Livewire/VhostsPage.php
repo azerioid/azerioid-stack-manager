@@ -20,6 +20,7 @@ class VhostsPage extends Component
     public string $type = 'php';
     public string $php_version = '';
     public string $upstream = '127.0.0.1:9000';
+    public string $engine = 'caddy';
     public string $tlsMode = 'off';
     public string $dnsProvider = '';
     public string $dnsToken = '';
@@ -42,6 +43,7 @@ class VhostsPage extends Component
     public bool $editAcmeStaging = false;
     public bool $editWildcard = false;
     public string $editType = 'php';
+    public string $editEngine = 'caddy';
     public array $dnsProviders = [];
 
     public function mount(BrokerClient $broker): void
@@ -73,7 +75,9 @@ class VhostsPage extends Component
             } elseif ($type === 'proxy') {
                 $args[] = Validator::localUpstream($this->upstream);
             }
-            $res = $broker->call('vhost.add', $args);
+            $res = $broker->call('vhost.add', $args, [
+                'engine' => $type === 'proxy' ? 'caddy' : Validator::vhostEngine($this->engine),
+            ]);
             if (! $res->ok) {
                 $this->error = $this->operatorMessage((string) $res->error);
 
@@ -115,7 +119,7 @@ class VhostsPage extends Component
                 }
             }
             $this->flash = "Created {$domain}.";
-            $this->reset('domain', 'root', 'type', 'upstream', 'tlsMode', 'dnsProvider', 'dnsToken', 'acmeStaging', 'wildcard', 'showForm');
+            $this->reset('domain', 'root', 'type', 'upstream', 'engine', 'tlsMode', 'dnsProvider', 'dnsToken', 'acmeStaging', 'wildcard', 'showForm');
             $this->reload($broker);
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
@@ -132,6 +136,7 @@ class VhostsPage extends Component
             }
             $this->editingDomain = $domain;
             $this->editType = (string) ($v['type'] ?? 'php');
+            $this->editEngine = (string) ($v['engine'] ?? 'caddy');
             $this->editRoot = (string) ($v['root'] ?? '');
             $this->editPhpVersion = (string) ($v['php_version'] ?? $this->php_version);
             $this->editTls = ! empty($v['tls']);
@@ -143,12 +148,12 @@ class VhostsPage extends Component
 
             return;
         }
-        $this->error = 'This vhost cannot be edited.';
+        $this->error = "{$domain} is managed externally and can't be edited.";
     }
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine');
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -168,6 +173,7 @@ class VhostsPage extends Component
                 'root' => Validator::webRoot($this->editRoot, (string) config('azerioid.www_root'), new \AzerioidPanel\Broker\FakeRuntime()),
                 'tls_mode' => $mode,
                 'tls' => $mode !== 'off',
+                'engine' => $this->editType === 'proxy' ? 'caddy' : Validator::vhostEngine($this->editEngine),
             ];
             if ($this->editType === 'php') {
                 $payload['php_version'] = Validator::phpVersion($this->editPhpVersion, $this->phpVersions);
@@ -281,7 +287,7 @@ class VhostsPage extends Component
     {
         return view('livewire.vhosts')->layoutData([
             'heading' => 'Virtual hosts',
-            'sub' => 'Reverse-proxy and protected vhosts are read-only. Type and domain cannot be changed — delete and recreate instead.',
+            'sub' => 'Caddy is the front door on :80/:443. Each vhost chooses Caddy, Apache, or Nginx as its engine. Reverse-proxy and protected vhosts are read-only.',
         ]);
     }
 }

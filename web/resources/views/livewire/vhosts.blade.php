@@ -39,6 +39,13 @@
                     <input class="field mt-1" wire:model="upstream" placeholder="127.0.0.1:9000">
                 </label>
             @endif
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
+                <select class="field mt-1" wire:model="engine" @disabled($type === 'proxy')>
+                    <option value="caddy">Caddy (direct)</option>
+                    <option value="apache">Apache (via Caddy)</option>
+                    <option value="nginx">Nginx (via Caddy)</option>
+                </select>
+            </label>
             <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">TLS mode
                 <select class="field mt-1" wire:model.live="tlsMode">
                     <option value="off">Off (HTTP only)</option>
@@ -96,6 +103,13 @@
                     </select>
                 </label>
             @endif
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
+                <select class="field mt-1" wire:model="editEngine" @disabled($editType === 'proxy')>
+                    <option value="caddy">Caddy (direct)</option>
+                    <option value="apache">Apache (via Caddy)</option>
+                    <option value="nginx">Nginx (via Caddy)</option>
+                </select>
+            </label>
             <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">TLS mode
                 <select class="field mt-1" wire:model.live="editTlsMode">
                     <option value="off">Off (HTTP only)</option>
@@ -140,6 +154,7 @@
                 <tr>
                     <th class="px-4 py-3">Domain</th>
                     <th class="px-4 py-3">Type</th>
+                    <th class="px-4 py-3">Engine</th>
                     <th class="px-4 py-3">Root / upstream</th>
                     <th class="px-4 py-3">PHP</th>
                     <th class="px-4 py-3">TLS</th>
@@ -159,7 +174,8 @@
                                 <span class="ml-1 rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-500">disabled</span>
                             @endif
                         </td>
-                        <td class="px-4 py-3 font-mono text-xs text-zinc-400">{{ $v['reverse_proxy'] ?? $v['root'] }}</td>
+                        <td class="px-4 py-3 font-mono text-xs uppercase text-zinc-300">{{ $v['engine'] ?? 'caddy' }}</td>
+                        <td class="px-4 py-3 font-mono text-xs text-zinc-400">{{ in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true) ? ($v['root'] ?? $v['reverse_proxy']) : ($v['reverse_proxy'] ?? $v['root']) }}</td>
                         <td class="px-4 py-3 font-mono">{{ $v['php_version'] ?? '—' }}</td>
                         <td class="px-4 py-3 text-xs">
                             @php
@@ -196,6 +212,7 @@
                                 <a href="/processes" class="text-xs text-accent" title="Supervisor processes">{{ count($supervisorByVhost[$v['domain']]) }} proc</a>
                             @endif
                             @if (empty($v['readonly']))
+                                <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
                                 <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>
                                 <button type="button" class="text-xs text-accent" wire:click="startEdit('{{ $v['domain'] }}')">Edit</button>
                                 <button type="button" class="text-xs text-bad" wire:click="askDelete('{{ $v['domain'] }}')">Delete</button>
@@ -203,7 +220,7 @@
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="6" class="px-4 py-8 text-center text-zinc-500">No virtual hosts found.</td></tr>
+                    <tr><td colspan="7" class="px-4 py-8 text-center text-zinc-500">No virtual hosts found.</td></tr>
                 @endforelse
             </tbody>
         </table>

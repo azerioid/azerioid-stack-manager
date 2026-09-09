@@ -85,17 +85,19 @@ final class CaddyApplyTest extends TestCase
         $rt = new FakeRuntime();
         $rt->dirs['/var/lib/caddy'] = true;
         $rt->files['/usr/sbin/runuser'] = '';
+        $rt->files['/usr/bin/env'] = '';
         $rt->files['/usr/bin/chown'] = '';
         $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin 127.0.0.1:2019\n}\nimport /etc/caddy/conf.d/*.conf\n";
         $rt->script(['/usr/bin/systemctl', 'show', 'caddy', '-p', 'User', '--value'], 0, "caddy\n");
         $rt->script(['/usr/bin/chown', '-R', 'caddy:caddy', '/var/lib/caddy'], 0);
+        $env = ['/usr/bin/env', 'HOME=/var/lib/caddy', 'XDG_CONFIG_HOME=/var/lib/caddy/.config', 'XDG_DATA_HOME=/var/lib/caddy/.local/share'];
         $rt->script(
-            ['/usr/sbin/runuser', '-u', 'caddy', '--', '/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'],
+            array_merge(['/usr/sbin/runuser', '-u', 'caddy', '--'], $env, ['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile']),
             0,
             'Valid configuration'
         );
         $rt->script(
-            ['/usr/sbin/runuser', '-u', 'caddy', '--', '/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force'],
+            array_merge(['/usr/sbin/runuser', '-u', 'caddy', '--'], $env, ['/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force']),
             0
         );
         $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 1, '', 'must not run as root');
@@ -117,6 +119,10 @@ final class CaddyApplyTest extends TestCase
                 && ($e['command'][2] ?? '') === 'caddy';
         });
         $this->assertNotSame([], $asUser);
+        foreach ($asUser as $e) {
+            $this->assertContains('XDG_DATA_HOME=/var/lib/caddy/.local/share', $e['command']);
+            $this->assertNotContains('XDG_DATA_HOME=/root/.local/share', $e['command']);
+        }
         $chowns = array_filter($rt->execLog, static function (array $e): bool {
             return ($e['command'][0] ?? '') === '/usr/bin/chown'
                 && ($e['command'][3] ?? '') === '/var/lib/caddy';
@@ -124,15 +130,17 @@ final class CaddyApplyTest extends TestCase
         $this->assertNotSame([], $chowns);
     }
 
-    public function test_root_caddy_unit_does_not_wrap_cli(): void
+    public function test_root_caddy_unit_still_pins_xdg_data_home(): void
     {
         $rt = new FakeRuntime();
         $rt->dirs['/var/lib/caddy'] = true;
         $rt->files['/usr/sbin/runuser'] = '';
+        $rt->files['/usr/bin/env'] = '';
         $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin 127.0.0.1:2019\n}\n";
         $rt->script(['/usr/bin/systemctl', 'show', 'caddy', '-p', 'User', '--value'], 0, "root\n");
-        $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
-        $rt->script(['/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force'], 0);
+        $env = ['/usr/bin/env', 'HOME=/var/lib/caddy', 'XDG_CONFIG_HOME=/var/lib/caddy/.config', 'XDG_DATA_HOME=/var/lib/caddy/.local/share'];
+        $rt->script(array_merge($env, ['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile']), 0, 'Valid configuration');
+        $rt->script(array_merge($env, ['/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force']), 0);
 
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
@@ -144,5 +152,10 @@ final class CaddyApplyTest extends TestCase
         $this->assertSame([], $asUser);
         $chowns = array_filter($rt->execLog, static fn (array $e) => ($e['command'][0] ?? '') === '/usr/bin/chown');
         $this->assertSame([], $chowns);
+        $pinned = array_filter($rt->execLog, static function (array $e): bool {
+            return ($e['command'][0] ?? '') === '/usr/bin/env'
+                && in_array('XDG_DATA_HOME=/var/lib/caddy/.local/share', $e['command'], true);
+        });
+        $this->assertNotSame([], $pinned);
     }
 }

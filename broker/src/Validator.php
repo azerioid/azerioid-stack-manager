@@ -118,6 +118,11 @@ final class Validator
         return $type;
     }
 
+    public static function vhostEngine(string $engine): string
+    {
+        return \AzerioidPanel\Broker\Web\VhostEngine::normalize($engine);
+    }
+
     public static function localUpstream(string $upstream): string
     {
         $upstream = trim($upstream);
@@ -327,6 +332,93 @@ final class Validator
             throw new BrokerException('Invalid IPv4 address.', 2);
         }
         return $ip;
+    }
+
+    public const ACCESS_MODES = ['localhost', 'specific', 'global'];
+
+    public const GLOBAL_ACCESS_CONFIRM = 'OPEN-GLOBAL';
+
+    /**
+     * IPv4 or IPv4 CIDR. Rejects anything that is not a pure address/prefix
+     * (SQL fragments, shell metacharacters, whitespace, quotes).
+     */
+    public static function ipOrCidr(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '' || strlen($value) > 43) {
+            throw new BrokerException('Invalid IP or CIDR.', 2);
+        }
+        if (!preg_match('#^[0-9.]+(?:/[0-9]{1,2})?$#', $value)) {
+            throw new BrokerException('Invalid IP or CIDR.', 2);
+        }
+        $parts = explode('/', $value, 2);
+        $ip = self::ipv4($parts[0]);
+        if (!isset($parts[1])) {
+            return $ip;
+        }
+        if (!preg_match('/^\d{1,2}$/', $parts[1])) {
+            throw new BrokerException('Invalid IP or CIDR.', 2);
+        }
+        $prefix = (int) $parts[1];
+        if ($prefix < 0 || $prefix > 32) {
+            throw new BrokerException('Invalid IP or CIDR prefix (0–32).', 2);
+        }
+        if ($prefix === 32) {
+            return $ip;
+        }
+
+        return $ip . '/' . $prefix;
+    }
+
+    public static function accessMode(string $mode): string
+    {
+        $mode = strtolower(trim($mode));
+        if (!in_array($mode, self::ACCESS_MODES, true)) {
+            throw new BrokerException('Invalid access mode. Allowed: localhost, specific, global.', 2);
+        }
+
+        return $mode;
+    }
+
+    /**
+     * @param  list<string>|string  $ips
+     * @return list<string>
+     */
+    public static function accessIps(string $mode, array|string $ips): array
+    {
+        if (is_string($ips)) {
+            $raw = preg_split('/\s*,\s*/', $ips, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        } else {
+            $raw = $ips;
+        }
+        $normalized = [];
+        foreach ($raw as $item) {
+            if (!is_string($item) && !is_int($item)) {
+                throw new BrokerException('Invalid IP or CIDR.', 2);
+            }
+            $normalized[] = self::ipOrCidr((string) $item);
+        }
+        $normalized = array_values(array_unique($normalized));
+        if ($mode === 'localhost' || $mode === 'global') {
+            if ($normalized !== []) {
+                throw new BrokerException('IP list is only valid with --mode=specific.', 2);
+            }
+
+            return [];
+        }
+        if ($normalized === []) {
+            throw new BrokerException('Specific-IP mode requires at least one IP or CIDR.', 2);
+        }
+        if (count($normalized) > 32) {
+            throw new BrokerException('Too many IPs (maximum 32 per database).', 2);
+        }
+        foreach ($normalized as $cidr) {
+            if ($cidr === '0.0.0.0' || $cidr === '0.0.0.0/0') {
+                throw new BrokerException('0.0.0.0/0 is Global mode, not Specific IP. Use --mode=global with --confirm.', 2);
+            }
+        }
+
+        return $normalized;
     }
 
     public static function searchNeedle(string $needle): string

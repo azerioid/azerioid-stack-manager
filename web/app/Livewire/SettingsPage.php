@@ -30,6 +30,9 @@ class SettingsPage extends Component
     public array $phpVersions = [];
     public array $opcache = [];
     public array $panelRuntime = [];
+    public string $panelDomain = '';
+    public string $panelTlsMode = 'auto';
+    public ?string $panelDomainError = null;
     public array $dnsProviders = [];
     public string $dnsRotateProvider = '';
     public string $dnsRotateToken = '';
@@ -47,6 +50,8 @@ class SettingsPage extends Component
         $runtime = $broker->call('panel.runtime');
         if ($runtime->ok) {
             $this->panelRuntime = $runtime->data ?? [];
+            $this->panelDomain = (string) ($this->panelRuntime['domain'] ?? '');
+            $this->panelTlsMode = (string) ($this->panelRuntime['tls_mode'] ?? 'auto');
         }
         $php = $broker->call('php.versions');
         if ($php->ok) {
@@ -150,6 +155,44 @@ class SettingsPage extends Component
         $this->flash = 'Panel settings saved.';
     }
 
+    public function savePanelDomain(BrokerClient $broker): void
+    {
+        $this->panelDomainError = null;
+        $domain = strtolower(trim($this->panelDomain));
+        if ($domain === '') {
+            $this->panelDomainError = 'Enter a hostname, or use Clear to stay on IP/tunnel access.';
+
+            return;
+        }
+        $res = $broker->call('panel.domain.set', [], [
+            'domain' => $domain,
+            'tls_mode' => $this->panelTlsMode !== '' ? $this->panelTlsMode : 'auto',
+        ], 120);
+        if (! $res->ok) {
+            $this->panelDomainError = (string) $res->error;
+
+            return;
+        }
+        $this->panelRuntime = array_merge($this->panelRuntime, $res->data ?? []);
+        $this->panelDomain = (string) ($res->data['domain'] ?? $domain);
+        $this->panelTlsMode = (string) ($res->data['tls_mode'] ?? $this->panelTlsMode);
+        $this->flash = 'Panel domain updated. IP and SSH-tunnel access are unchanged.';
+    }
+
+    public function clearPanelDomain(BrokerClient $broker): void
+    {
+        $this->panelDomainError = null;
+        $res = $broker->call('panel.domain.set', [], ['clear' => true], 120);
+        if (! $res->ok) {
+            $this->panelDomainError = (string) $res->error;
+
+            return;
+        }
+        $this->panelRuntime = array_merge($this->panelRuntime, $res->data ?? []);
+        $this->panelDomain = '';
+        $this->flash = 'Panel domain cleared. Use IP or SSH-tunnel access.';
+    }
+
     public function saveIni(BrokerClient $broker, string $key, string $value): void
     {
         $res = $broker->call('php.ini.set', [$this->phpVersion, $key, $value]);
@@ -187,7 +230,7 @@ class SettingsPage extends Component
             'totpEnrolled' => $user instanceof User && $user->hasTwoFactorEnabled(),
         ])->layoutData([
             'heading' => 'Settings',
-            'sub' => 'Admin, session, panel runtime, DNS-01 credentials, php.ini',
+            'sub' => 'Admin, session, panel domain, DNS-01 credentials, php.ini',
         ]);
     }
 }

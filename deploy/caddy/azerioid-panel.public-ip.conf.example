@@ -2,6 +2,7 @@
 # Generated live by: ./stack-manager.sh --access=public --ip=<addr> --port=3169
 #
 # Never serve the panel over plaintext HTTP on a public interface.
+# The catch-all on :3169 is required: a lone site on that port matches any Host.
 
 https://203.0.113.10:3169 {
     tls internal
@@ -18,4 +19,9 @@ https://203.0.113.10:3169 {
     log {
         output file /var/log/caddy/azerioid-panel.log
     }
+}
+
+https://:3169 {
+    tls internal
+    respond "Misdirected request." 421
 }

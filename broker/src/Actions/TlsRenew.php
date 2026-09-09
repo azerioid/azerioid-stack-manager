@@ -27,7 +27,7 @@ final class TlsRenew
             'dry_run' => $result,
             'hook' => $hook,
             'certbot_timer' => $timerState !== '' ? $timerState : 'unknown',
-            'note' => 'Caddy-native HTTP-01 certs renew via Caddy itself; certbot.timer covers Apache/Nginx/DNS-01 paths.',
+            'note' => 'Caddy-native HTTP-01 certs renew via Caddy itself; certbot.timer covers DNS-01 static certs wired into Caddy.',
         ];
     }
 }

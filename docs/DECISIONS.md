@@ -31,7 +31,7 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 ## A3 — SELinux (EL)
 
 **Status:** Accepted (P1 minimum)  
-**Decision:** On EL with enforcing SELinux: `semanage port` for 3169, fcontext for `/data/www` and `/var/lib/azerioid-panel`, `httpd_can_network_connect`. Package: `policycoreutils-python-utils`.
+**Decision:** On EL with enforcing SELinux: `semanage port` for 3169 and backend 8081/8082 (`http_port_t`), fcontext for `/data/www`, `/var/lib/azerioid-panel`, and the panel web tree (content + rw storage/cache), `httpd_can_network_connect` (+ `httpd_unified` for FPM). Package: `policycoreutils-python-utils`. Never disable SELinux to make a step pass. Distro `php-fpm` (site `www` pool) stays `httpd_t`. Panel PHP-FPM is a dedicated `azerioid-panel-php-fpm` unit executing a `bin_t` copy of php-fpm (`PREFIX/sbin/php-fpm`) so the master is `unconfined_service_t` and the UI can sudo the broker. Caddy stays `httpd_t`; the `azerioid_panel_fpm` module allows `connectto` on the panel FPM unix socket. `httpd_t` cannot sudo (often dontaudit, empty stdout → “Broker returned non-JSON output”). Do not `SELinuxContext=` the distro `httpd_exec_t` binary — systemd fails with 203/EXEC.
 
 ## A4 — Distro package names
 
@@ -55,8 +55,8 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 
 ## A9 — Port ownership
 
-**Status:** Accepted  
-**Decision:** See `docs/port-ownership.md`. Panel Caddy always single instance; snippet in `/etc/caddy/conf.d/`.
+**Status:** Accepted (revised — Caddy permanent front router)  
+**Decision:** See `docs/port-ownership.md`. Single Caddy instance owns `:80`/`:443` forever and the panel snippet on `:3169`. Apache (`127.0.0.1:8081`) and Nginx (`127.0.0.1:8082`) are loopback-only backends selected per vhost. `web.release-site-ports` is deprecated (no-op). The earlier limitation (“no path to reclaim Caddy after releasing ports to Nginx”) no longer exists.
 
 ## A10 — GPG pinning
 
@@ -123,15 +123,65 @@ The uninstall path performs the same panel-scoped flush before removing the jail
 
 | Path | Mechanism |
 |------|-----------|
-| **Caddy + HTTP-01 (default)** | Native Caddy automatic HTTPS (no external ACME client). Bare site label in the generated Caddyfile. Non-public hostnames (IP, `.test`/`.local`/…) force `tls internal`. |
-| **Apache / Nginx + HTTP-01** | `certbot certonly --webroot` into `/var/lib/azerioid-panel/acme-webroot`. Broker owns vhost files — **never** `certbot --apache` / `--nginx` installers. |
-| **DNS-01 (all drivers)** | certbot DNS plugins via `registry/dns-providers/` (Cloudflare, DigitalOcean v1). Cert files wired as static `tls <cert> <key>` / `SSLCertificateFile` / `ssl_certificate`. |
-| **Renewal** | Caddy renews its own certs; certbot.timer + deploy-hook `azerioid-reload.sh` reloads the active driver for certbot-managed certs. |
+| **HTTP-01 (any engine)** | Native Caddy automatic HTTPS on the front-router site block. Apache/Nginx never terminate TLS for site vhosts. Non-public hostnames (IP, `.test`/`.local`/…) force `tls internal`. |
+| **DNS-01 (any engine)** | certbot DNS plugins via `registry/dns-providers/` (Cloudflare, DigitalOcean v1). Cert files are always wired as static `tls <cert> <key>` on the **Caddy** block. |
+| **Renewal** | Caddy renews its own HTTP-01 certs; certbot.timer + deploy-hook `azerioid-reload.sh` reloads Caddy for DNS-01 static certs. |
 
 **Secrets:** DNS API tokens only via broker stdin → root-only `0600` files under `/etc/azerioid-panel/dns-credentials/`. Never argv, never logged.
 
-**UI:** Vhost create/edit offer Automatic / DNS challenge / Self-signed. List TLS column shows issuer type + expiry (from live probe), not a boolean yes/http. Settings can rotate DNS provider credentials without re-displaying the secret. CLI mirrors the same TLS flags (`--tls=auto|dns|self`, env token for DNS-01).
+**UI:** Vhost create/edit offer Automatic / DNS challenge / Self-signed, independent of Engine (Caddy / Apache / Nginx). List TLS column shows issuer type + expiry (from live probe). CLI mirrors the same TLS flags (`--tls=auto|dns|self`, env token for DNS-01) plus `--engine=caddy|apache|nginx`.
 
-**Scope note (panel-only Caddy):** `auto_https disable_redirects` is written **only** in the panel-only Caddyfile produced by `SitePortReleaser` when site ports are released to Nginx/Apache. It must never appear in the global multi-vhost Caddyfile — user sites still need ACME HTTP-01 on `:80`.
+**Retired:** certbot HTTP-01 webroot on Apache/Nginx, and the panel-only Caddyfile produced by `SitePortReleaser` (`auto_https disable_redirects`). Caddy never releases `:80`/`:443`.
 
 **Operator note:** CertProbe reads the origin cert via `127.0.0.1:443` + SNI. If the domain is orange-clouded at Cloudflare, browsers may see a Cloudflare edge cert while the panel correctly shows Let's Encrypt on origin. Grey-cloud (DNS only) for HTTP-01 troubleshooting, or use CF Full (strict) once origin LE is issued.
+
+## A22 — Panel white-label domain (and :3169 Host isolation)
+
+**Status:** Accepted (2026-09-08)  
+**Decision:**
+
+Caddy treats a **single site** on a listener as the default for **any** Host/SNI on that port. The panel's `https://<IP>:3169` block therefore used to serve the panel for unrelated names (e.g. `https://let.az:3169/`) whenever DNS pointed at the same box — usually as a blank page from `APP_URL`/asset mismatch.
+
+**Fix (always, even with no custom domain):** when public IP access is enabled, add a less-specific catch-all on the same port:
+
+```
+https://:3169 {
+    tls internal
+    respond "Misdirected request." 421
+}
+```
+
+`https://<IP>:3169` stays more specific. Tunnel `http://127.0.0.1:3169` (`bind 127.0.0.1`) is unchanged. Tunnel-only installs must **not** add a public catch-all (that would open `*:3169`).
+
+**White-label:** optional hostname on **:443** (not :3169), same A21 TLS pipeline (`auto` HTTP-01 / `dns01` / `internal`). `APP_URL` becomes `https://<domain>` (no port). Settings, `azerioid panel domain set|show|clear`, and install `--domain=`.
+
+**Lockout:** IP:3169 and the SSH tunnel **always** remain after a custom domain is set. Switching domains rewrites the snippet (old name no longer serves the panel; old cert left to expire). Refused if the hostname is already a **site** vhost.
+
+**Apply:** validate → write snippet + `.env` `APP_URL` + `broker.json` `panel` → Caddy apply → reload panel PHP-FPM; rollback snippet/env/broker.json if Caddy rejects.
+
+## A23 — Per-database remote access (engine differences)
+
+**Status:** Accepted (2026-09-08 audit)  
+**Decision:** Remote reachability is explicit per database, but **enforcement differs by engine**:
+
+| Engine | Authz | Network |
+|--------|-------|---------|
+| MariaDB | `GRANT … TO user@host` (per database) | `bind-address` + tagged ufw/firewalld on 3306 |
+| PostgreSQL | `pg_hba.conf` (per database) | `listen_addresses` + firewall on 5432 |
+| MongoDB | **Instance-wide** firewall on 27017 only (no per-database bind) | `bindIp` + firewall; UI must show this caveat |
+
+Opening remote access for **any** database on an engine may bind that engine publicly. The **union** of specific IPs (or fully open if any database is Global) is what the firewall allows. Closing the last remote database returns bind + firewall to localhost. Activating the firewall for this layer **always keeps 80/443 open**.
+
+**CLI secrets:** DB passwords are generated and printed once — never argv. Global mode requires typed confirmation (`OPEN-GLOBAL` / `--confirm`).
+
+## A24 — Real-IP trust boundary (front router)
+
+**Status:** Accepted (2026-09-08)  
+**Decision:** Caddy is the only public TLS terminator. `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarded-Host` from the real client. Apache `mod_remoteip` and Nginx `real_ip` restore `REMOTE_ADDR`, trusting **only** `127.0.0.1`/`::1`. Never trust those headers from the public internet. Panel white-label on `:443` is a separate Caddy site and must not change site-vhost header handling.
+
+## A25 — Per-vhost Unix identity (Terminal / Files / Supervisor)
+
+**Status:** Accepted  
+**Decision:** Terminal and File Manager drop to a dedicated `az-vh-*` user in group `azerioid-vhosts` (same identity for every engine: Caddy / Apache / Nginx). Supervisor programs run as `azerioid-supervised`, never root / `caddy` / `www-data`. Read-only and system vhosts (panel snippet, reverse-proxy) refuse Terminal, Files, and delete/edit. Uninstall `--full` / `--drop-db` must remove these identities; `/usr/local/bin/azerioid` is removed on every uninstall.
+
+

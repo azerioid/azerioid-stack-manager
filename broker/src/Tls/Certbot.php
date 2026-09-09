@@ -8,8 +8,10 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 
 /**
- * Thin certbot runner. Broker owns vhost config; we only use `certonly`
- * (webroot or DNS plugins) — never certbot's apache/nginx installers.
+ * Thin certbot runner for DNS-01 only.
+ *
+ * HTTP-01 for site vhosts is Caddy-native (A21) — `issueHttp01()` is unused.
+ * Never invoke certbot's apache/nginx installers.
  */
 final class Certbot
 {
@@ -58,6 +60,8 @@ final class Certbot
     }
 
     /**
+     * Retired: Apache/Nginx certbot HTTP-01 webroot. Not called after the front-router model.
+     *
      * @param  list<string>  $domains
      * @return array{cert:string,key:string,chain:string,staging:bool}
      */

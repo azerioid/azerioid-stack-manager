@@ -17,6 +17,7 @@ final class CaddyParserTest extends TestCase
         $this->assertSame('/data/www/example.com', $parsed['root']);
         $this->assertSame('php', $parsed['type']);
         $this->assertSame('8.4', $parsed['php_version']);
+        $this->assertSame('caddy', $parsed['engine'] ?? 'caddy');
         $this->assertFalse($parsed['readonly']);
         $this->assertTrue($parsed['tls']);
     }
@@ -76,5 +77,23 @@ CADDY;
         $this->assertSame('201.79.10.81:3169', $parsed['domain']);
         $this->assertSame('internal', $parsed['tls_mode']);
         $this->assertTrue($parsed['readonly']);
+    }
+
+    public function test_internal_engine_reverse_proxy_is_not_user_proxy_type(): void
+    {
+        $contents = <<<'CADDY'
+# azerioid-managed engine=apache type=php php=8.4 root=/data/www/abc.az
+abc.az {
+    reverse_proxy 127.0.0.1:8081 {
+        header_up Host {host}
+    }
+}
+CADDY;
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/abc.az.conf', $contents, []);
+        $this->assertSame('apache', $parsed['engine']);
+        $this->assertSame('php', $parsed['type']);
+        $this->assertSame('8.4', $parsed['php_version']);
+        $this->assertSame('/data/www/abc.az', $parsed['root']);
+        $this->assertSame('127.0.0.1:8081', $parsed['reverse_proxy']);
     }
 }

@@ -45,6 +45,14 @@ else
     fail "FPM socket missing: ${FPM_SOCK}"
 fi
 
+if systemctl cat azerioid-panel-php-fpm.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet azerioid-panel-php-fpm; then
+        pass "dedicated panel FPM active (EL)"
+    else
+        fail "azerioid-panel-php-fpm installed but not active"
+    fi
+fi
+
 # 3. SQLite panel DB
 if [[ -f "${PANEL_DB}" ]]; then
     pass "Panel SQLite exists: ${PANEL_DB}"
@@ -69,7 +77,7 @@ fi
 # 6. panel.runtime broker action
 BROKER="/usr/local/lib/azerioid-panel/broker"
 if [[ -x "${BROKER}" ]]; then
-    if "${BROKER}" panel.runtime 2>/dev/null | grep -q '"php_version"'; then
+    if "${BROKER}" panel.runtime </dev/null 2>/dev/null | grep -q '"php_version"'; then
         pass "broker panel.runtime returns php_version"
     else
         fail "broker panel.runtime failed or missing php_version"

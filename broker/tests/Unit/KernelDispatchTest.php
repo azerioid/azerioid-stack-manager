@@ -178,4 +178,17 @@ final class KernelDispatchTest extends TestCase
         $this->assertStringNotContainsString('abcdefghijklmnopqrst', $audit);
         $this->assertStringContainsString('[redacted]', $audit);
     }
+
+    public function test_decode_stdin_ignores_accidental_non_json_pipes(): void
+    {
+        $this->assertSame([], Kernel::decodeStdinString("set -euo pipefail\necho hi\n"));
+        $this->assertSame([], Kernel::decodeStdinString(''));
+        $this->assertSame(['origin' => 'ui'], Kernel::decodeStdinString('{"origin":"ui"}'));
+    }
+
+    public function test_decode_stdin_rejects_broken_json_object(): void
+    {
+        $this->expectException(\AzerioidPanel\Broker\BrokerException::class);
+        Kernel::decodeStdinString('{not json');
+    }
 }

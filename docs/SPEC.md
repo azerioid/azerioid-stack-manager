@@ -33,7 +33,7 @@ flowchart TB
 | Registry | `registry/components/*.json` | Component metadata (detect/install data) |
 | Panel DB | `/var/lib/azerioid-panel/panel.sqlite` | SQLite — panel state only |
 | Panel FPM | `/run/php/azerioid-panel.sock` | Isolated PHP 8.4 pool (user `caddy`) |
-| Panel vhost | `/etc/caddy/conf.d/azerioid-panel.conf` | Localhost tunnel on `:3169` |
+| Panel vhost | `/etc/caddy/conf.d/azerioid-panel.conf` | Localhost tunnel on `:3169`; optional `https://<IP>:3169` + 421 catch-all; optional white-label hostname on `:443` |
 
 ## Panel runtime isolation (A1)
 
@@ -57,9 +57,10 @@ P3: Redis install/uninstall via queued broker jobs. MariaDB/PostgreSQL in P4. Ad
 ## Security model (A8)
 
 - **Broker-only package ops**: the web UI never runs `apt`/`dnf` directly; all privileged work goes through the broker binary via sudo.
-- **Localhost-first**: panel Caddy binds `127.0.0.1:3169` by default (SSH tunnel).
-- **Application DBs**: MariaDB/PostgreSQL/Mongo default to localhost-only when installed (P3+).
-- **FPM lockdown**: panel pool disables dangerous functions; public pools retain `proc_open` lockdown.
+- **Localhost-first**: panel Caddy binds `127.0.0.1:3169` by default (SSH tunnel). Optional public IP:3169 never answers for a Host that belongs to a site vhost (421 catch-all). Optional white-label hostname on `:443` (ADR A22).
+- **Application DBs**: MariaDB/PostgreSQL/Mongo default to localhost-only when installed. Per-database remote access (localhost / specific IPs / global) is explicit: MariaDB GRANT hosts and PostgreSQL `pg_hba.conf` are per-database; MongoDB remote access is instance-wide firewall on 27017 only. Global mode requires a typed confirmation (`OPEN-GLOBAL` / CLI `--confirm`).
+- **FPM lockdown**: panel pool disables dangerous functions; public pools retain `proc_open` lockdown. Site PHP-FPM pools (`www`) set `request_terminate_timeout=30` and `php_admin_value[max_execution_time]=30` so a hung script is killed in bounded time. Caddy `php_fastcgi` / Nginx `fastcgi_read_timeout` / Apache `ProxyTimeout` wait 35s so the reverse proxy does not hang indefinitely on a stuck worker.
+- **Site HTTP ports**: when ufw/firewalld is active (panel `--firewall=true`, or database remote access), **80/443 stay allowed**. Enabling the firewall must never brick public vhosts.
 
 ## Panel database (A2)
 
@@ -109,6 +110,26 @@ Every phase exit runs `deploy/test/smoke-p1.sh` against Ubuntu 24.04, Debian 12,
 | `/etc/azerioid-panel` | `broker.json`, `runtime.json`, `bootstrap.json` |
 | `/var/lib/azerioid-panel` | SQLite DB, staging, managed-components |
 | `/var/log/azerioid-panel` | Panel audit + auth-fail logs |
+
+## Per-vhost Terminal and File Manager
+
+The panel FPM process **must not** read or write vhost document roots. Terminal sessions and the File Manager are broker actions that:
+
+1. Reject read-only / system / reverse-proxy vhosts (same eligibility as each other).
+2. Ensure a dedicated `az-vh-*` user (group `azerioid-vhosts`) for that domain.
+3. Execute as that user (Terminal: `runuser` + ttyd; File Manager: PHP helper that `setuid`s after loading root-only broker classes).
+
+File Manager actions: `vhost.files.list|read|write|mkdir|rename|move|delete`.
+
+Path containment (both lexical and canonical):
+
+- `VhostPath::lexicalJoin` rejects NUL, absolute relative paths, and `..` segments that climb above the vhost root.
+- `realpath()` of the existing target (or of the parent, for create) must remain under the vhost root. Symlinks that resolve outside are rejected on read/write.
+- Rename/move validates **both** source and destination.
+- The helper does not create symlinks. Archive extract is **not** implemented (zip-slip scoped out of v1).
+- Writes are size-capped (`vhost_files_max_bytes`, default 20 MiB). File bodies travel as `content_base64` on broker stdin and are redacted from audit logs; audit records action, vhost, path, admin, timestamp.
+
+CLI: `azerioid vhost files list|read|write|delete|mkdir|rename`. Upload/download remain UI-only.
 
 ## Phase 7
 

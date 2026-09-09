@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Tests;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Validator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ValidatorTest extends TestCase
@@ -24,9 +25,7 @@ final class ValidatorTest extends TestCase
         $this->assertSame('api.dev.example.co.uk', Validator::domain('api.dev.example.co.uk'));
     }
 
-    /**
-     * @dataProvider invalidDomains
-     */
+    #[DataProvider('invalidDomains')]
     public function test_rejects_invalid_domains(string $domain): void
     {
         $this->expectException(BrokerException::class);
@@ -57,9 +56,7 @@ final class ValidatorTest extends TestCase
         $this->assertSame('User01', Validator::userName('User01'));
     }
 
-    /**
-     * @dataProvider invalidDbNames
-     */
+    #[DataProvider('invalidDbNames')]
     public function test_rejects_invalid_db_names(string $name): void
     {
         $this->expectException(BrokerException::class);
@@ -105,9 +102,7 @@ final class ValidatorTest extends TestCase
         $this->assertSame('/data/www/example.com', Validator::webRoot('/data/www/example.com', '/data/www', $this->rt));
     }
 
-    /**
-     * @dataProvider badRoots
-     */
+    #[DataProvider('badRoots')]
     public function test_rejects_bad_web_roots(string $path): void
     {
         $this->expectException(BrokerException::class);

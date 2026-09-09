@@ -2,16 +2,15 @@
   "id": "nginx",
   "display_name": "Nginx",
   "category": "web",
-  "description": "High-performance web server and reverse proxy",
+  "description": "Internal backend engine (loopback only). Caddy terminates TLS on :80/:443 and reverse-proxies vhosts that choose Nginx.",
   "managed": true,
   "system": false,
   "installable": true,
   "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
   "ports": [
-    { "port": 80, "bind": "0.0.0.0", "owner": "nginx", "protocol": "tcp" },
-    { "port": 443, "bind": "0.0.0.0", "owner": "nginx", "protocol": "tcp" }
+    { "port": 8082, "bind": "127.0.0.1", "owner": "nginx", "protocol": "tcp" }
   ],
-  "conflicts": ["apache", "caddy"],
+  "conflicts": [],
   "distros": {
     "ubuntu": {
       "packages": ["nginx"],

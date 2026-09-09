@@ -36,7 +36,7 @@ case "${cmd}" in
     status|version|audit)
         exec "${PHP_BIN}" "${ARTISAN}" "azerioid:${cmd}" "$@"
         ;;
-    vhost|db|component|service|process)
+    vhost|db|component|service|process|panel)
         # Map user-facing --version= to Artisan --pkg-version= (Symfony reserves --version).
         mapped=()
         for arg in "$@"; do

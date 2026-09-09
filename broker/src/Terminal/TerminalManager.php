@@ -274,7 +274,17 @@ final class TerminalManager
 
         $pid = $this->ttydMainPid($sessionId);
         if ($pid < 1) {
-            throw new BrokerException('Failed to start ttyd (no pid).', 1);
+            $detail = '';
+            if ($this->runtime->fileExists($log)) {
+                $detail = trim($this->runtime->readFile($log));
+                if (strlen($detail) > 400) {
+                    $detail = substr($detail, -400);
+                }
+            }
+            throw new BrokerException(
+                'Failed to start ttyd (no pid).' . ($detail !== '' ? ' ' . $detail : ''),
+                1
+            );
         }
 
         return $pid;
@@ -287,7 +297,7 @@ final class TerminalManager
             $used[(int) ($session['port'] ?? 0)] = true;
         }
         for ($port = $this->config->terminalPortMin; $port <= $this->config->terminalPortMax; $port++) {
-            if (!isset($used[$port])) {
+            if (!isset($used[$port]) && !$this->portListening($port)) {
                 return $port;
             }
         }
@@ -450,6 +460,23 @@ final class TerminalManager
         }
 
         return $this->runtime->exec(['/bin/kill', '-0', (string) $pid], null, 5)->ok();
+    }
+
+    private function portListening(int $port): bool
+    {
+        $ss = null;
+        foreach (['/usr/sbin/ss', '/usr/bin/ss', '/bin/ss'] as $bin) {
+            if ($this->runtime->fileExists($bin)) {
+                $ss = $bin;
+                break;
+            }
+        }
+        if ($ss === null) {
+            return false;
+        }
+        $r = $this->runtime->exec([$ss, '-H', '-tln', 'sport', '=', ':' . $port], null, 5);
+
+        return trim($r->stdout) !== '';
     }
 
     private function runuserBin(): string

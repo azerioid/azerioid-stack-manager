@@ -70,10 +70,16 @@ CADDY;
         $this->assertStringStartsWith('az-vh-', $json['data']['username']);
         $this->assertStringContainsString('/terminal/', $json['data']['ws_path']);
         $this->assertStringContainsString('handle /terminal/', $this->rt->files[$this->cfg->terminalCaddyRoutesPath] ?? '');
-        $spawn = json_encode($this->rt->execLog);
-        $this->assertStringContainsString('/usr/bin/systemd-run', $spawn);
-        $this->assertStringContainsString('az-terminal-', $spawn);
-        $this->assertStringContainsString('-w /data/www/shop.example.com', $spawn);
+        $spawned = false;
+        foreach ($this->rt->execLog as $entry) {
+            $cmd = implode(' ', $entry['command'] ?? []);
+            if (str_contains($cmd, '/usr/bin/systemd-run') && str_contains($cmd, 'az-terminal-')) {
+                $this->assertStringContainsString('-w /data/www/shop.example.com', $cmd);
+                $spawned = true;
+                break;
+            }
+        }
+        $this->assertTrue($spawned, 'expected systemd-run ttyd spawn');
     }
 
     public function test_rejects_readonly_vhost_terminal(): void

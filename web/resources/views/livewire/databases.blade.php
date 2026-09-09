@@ -8,7 +8,7 @@
 
     @if ($configuredEngines === [])
         <div class="panel border border-warn/30 p-5 text-sm text-zinc-300">
-            No database engine is configured yet. Install <span class="font-mono">mariadb</span> or <span class="font-mono">postgresql</span> from the Components page.
+            No database engine is configured yet. Install <span class="font-mono">mariadb</span>, <span class="font-mono">postgresql</span>, or <span class="font-mono">mongodb</span> from the Components page.
         </div>
     @elseif (count($configuredEngines) > 1)
         <div class="panel p-5">
@@ -19,6 +19,12 @@
                     @endforeach
                 </select>
             </label>
+        </div>
+    @endif
+
+    @if ($selectedEngine === 'mongodb')
+        <div class="rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+            MongoDB has no per-database host authentication. Remote access here only changes this instance’s firewall and bind on port 27017 — every database on this mongod shares that network scope. MariaDB and PostgreSQL enforce hosts per database inside the engine.
         </div>
     @endif
 
@@ -46,13 +52,18 @@
                 <label class="text-xs uppercase tracking-wide text-zinc-500">User (default: same as db)
                     <input class="field mt-1" wire:model="user" maxlength="32">
                 </label>
+                @if ($selectedEngine === 'mongodb')
+                    <p class="md:col-span-2 text-xs text-zinc-500">MongoDB materializes the database on first write and creates a <span class="font-mono">dbOwner</span> user on that database. Connect with <span class="font-mono">--authenticationDatabase &lt;name&gt;</span>.</p>
+                @endif
                 <div class="md:col-span-2 flex gap-2">
                     <button type="submit" class="btn-primary">Create</button>
                     <p class="self-center text-xs text-zinc-500">A one-time password is generated only after {{ $engineLabel }} confirms the create.</p>
                 </div>
             </form>
         @endif
+    @endif
 
+    @if ($selectedEngine !== '')
         <div class="panel overflow-x-auto">
             <table class="w-full text-left text-sm">
                 <thead class="font-mono text-[11px] uppercase tracking-wide text-zinc-500">
@@ -61,11 +72,17 @@
                         <th class="px-4 py-3">Size</th>
                         <th class="px-4 py-3">Tables</th>
                         <th class="px-4 py-3">Users</th>
+                        <th class="px-4 py-3">Remote access</th>
                         <th class="px-4 py-3"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-white/5">
                     @forelse ($databases as $db)
+                        @php
+                            $rowAccess = is_array($db['access'] ?? null) ? $db['access'] : [];
+                            $rowAccessMode = $rowAccess['mode'] ?? 'localhost';
+                            $rowAccessLabel = $rowAccess['label'] ?? 'Localhost only';
+                        @endphp
                         <tr>
                             <td class="px-4 py-3 font-mono">
                                 {{ $db['name'] }}
@@ -80,20 +97,107 @@
                                     {{ $u['user'].'@'.$u['host'] }}@if (!$loop->last), @endif
                                 @endforeach
                             </td>
+                            <td class="px-4 py-3">
+                                <span @class([
+                                    'rounded px-1.5 py-0.5 font-mono text-[10px] uppercase',
+                                    'bg-ink-700 text-zinc-400' => $rowAccessMode === 'localhost',
+                                    'bg-brass-500/20 text-brass-400' => $rowAccessMode === 'specific',
+                                    'bg-bad/20 text-bad' => $rowAccessMode === 'global',
+                                ])>{{ $rowAccessLabel }}</span>
+                                @if (!empty($rowAccess['conflict']))
+                                    <div class="mt-1 text-[10px] text-warn">Instance firewall is wider than this database’s requested scope.</div>
+                                @endif
+                            </td>
                             <td class="px-4 py-3 text-right space-x-3">
                                 @if (empty($db['protected']))
                                     @php $firstUser = $db['users'][0]['user'] ?? $db['name']; @endphp
                                     <button type="button" class="text-xs text-brass-400" wire:click="startReset('{{ $firstUser }}')" wire:confirm="Reset password for {{ $firstUser }}?">Reset pw</button>
+                                    <button type="button" class="text-xs text-brass-400" wire:click="startAccess('{{ $db['name'] }}')">Access</button>
                                     <button type="button" class="text-xs text-bad" wire:click="$set('confirmDelete', '{{ $db['name'] }}')">Delete</button>
                                 @endif
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="5" class="px-4 py-8 text-center text-zinc-500">No databases visible.</td></tr>
+                        <tr><td colspan="6" class="px-4 py-8 text-center text-zinc-500">No databases visible.</td></tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
+
+        @if ($accessName && !$accessShowGlobalModal)
+            <form wire:submit="requestAccessSave" class="panel border border-brass-500/30 p-5 space-y-4">
+                <p class="text-sm">Remote access for <span class="font-mono text-brass-400">{{ $accessName }}</span> ({{ $engineLabel }})</p>
+                @if ($selectedEngine === 'mongodb')
+                    <p class="text-xs text-warn">Specific IP and Global only restrict who can reach port 27017 for this whole MongoDB instance — not this database alone.</p>
+                @elseif ($selectedEngine === 'mariadb')
+                    <p class="text-xs text-zinc-500">MariaDB will grant this database’s user only from the hosts you set (<span class="font-mono">user@ip</span>). Localhost access is always kept.</p>
+                @else
+                    <p class="text-xs text-zinc-500">PostgreSQL will add <span class="font-mono">pg_hba.conf</span> lines for this database only, then reload. Local connections stay unchanged.</p>
+                @endif
+                <fieldset class="space-y-2 text-sm">
+                    <label class="flex items-center gap-2">
+                        <input type="radio" wire:model.live="accessMode" value="localhost" @checked($accessMode === 'localhost')> Localhost only
+                    </label>
+                    <label class="flex items-center gap-2">
+                        <input type="radio" wire:model.live="accessMode" value="specific" @checked($accessMode === 'specific')> Specific IP(s)
+                    </label>
+                    <label class="flex items-center gap-2 text-bad">
+                        <input type="radio" wire:model.live="accessMode" value="global" @checked($accessMode === 'global')> Global (any IP)
+                    </label>
+                </fieldset>
+                @if ($accessMode === 'specific')
+                    <label class="text-xs uppercase tracking-wide text-zinc-500">Allowed IPs or CIDRs
+                        <input
+                            class="field mt-1"
+                            wire:model="accessIpsText"
+                            wire:key="access-ips-{{ $accessName }}-{{ $accessMode }}"
+                            value="{{ $accessIpsText }}"
+                            placeholder="IP or CIDR, comma-separated"
+                            autocomplete="off"
+                            spellcheck="false"
+                            required
+                            pattern="^\s*(?:\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?)(?:\s*,\s*\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?)*\s*$"
+                            title="Comma-separated IPv4 addresses or CIDRs"
+                            aria-label="Allowed IPs or CIDRs"
+                        >
+                    </label>
+                    <p class="text-xs text-zinc-500">Saved IPs appear in the field. Placeholder text is only an example for a first-time Specific-IP setup (<span class="font-mono">203.0.113.5, 198.51.100.0/24</span>).</p>
+                    @if ($selectedEngine === 'mariadb')
+                        <p class="text-xs text-zinc-500">MariaDB host grants accept /8, /16, /24, and /32 (or a single IP).</p>
+                    @endif
+                @endif
+                <div class="flex gap-2">
+                    <button class="btn-primary" type="submit">Apply access</button>
+                    <button class="btn-ghost" type="button" wire:click="cancelAccess">Cancel</button>
+                </div>
+            </form>
+        @endif
+
+        @if ($accessShowGlobalModal)
+            <form wire:submit="confirmGlobalAccess" class="panel border border-bad/50 p-5 space-y-4">
+                <p class="text-sm font-medium text-bad">Expose this database to the entire internet?</p>
+                <p class="text-sm text-zinc-300">
+                    Global mode opens this engine’s port
+                    ({{ $selectedEngine === 'mariadb' ? '3306' : ($selectedEngine === 'postgresql' ? '5432' : '27017') }})
+                    to any IPv4 address. The only remaining protection is the database password.
+                    Scanners will find it and brute-force it.
+                    @if ($selectedEngine === 'mongodb')
+                        For MongoDB this is instance-wide: every database on this mongod becomes reachable.
+                    @endif
+                </p>
+                <label class="flex items-start gap-2 text-sm">
+                    <input type="checkbox" wire:model="accessUnderstand" class="mt-1">
+                    <span>I understand this exposes the port to the entire internet, protected only by the database password.</span>
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Type <span class="font-mono text-bad">{{ $accessName }}</span> to confirm
+                    <input class="field mt-1" wire:model="accessConfirmName" autocomplete="off">
+                </label>
+                <div class="flex gap-2">
+                    <button class="btn-danger" type="submit">Expose globally</button>
+                    <button class="btn-ghost" type="button" wire:click="cancelAccess">Cancel</button>
+                </div>
+            </form>
+        @endif
 
         @if ($confirmDelete)
             <form wire:submit="delete" class="panel border border-bad/40 p-5">

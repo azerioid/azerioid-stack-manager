@@ -150,10 +150,14 @@ final class MariaDBDriver implements DatabaseDriver
         }
 
         $this->runtime->dbExec('DROP DATABASE IF EXISTS `' . SqlIdent::mysql($name) . '`');
-        foreach (['localhost', '127.0.0.1'] as $host) {
+        $hosts = $this->hostsForUser($user);
+        if ($hosts === []) {
+            $hosts = ['localhost', '127.0.0.1'];
+        }
+        foreach ($hosts as $host) {
             try {
                 $this->runtime->dbExec(
-                    'DROP USER IF EXISTS `' . SqlIdent::mysql($user) . '`@`' . SqlIdent::mysql($host) . '`'
+                    'DROP USER IF EXISTS `' . SqlIdent::mysql($user) . '`@`' . SqlIdent::mysqlHost($host) . '`'
                 );
             } catch (\Throwable) {
             }
@@ -168,9 +172,13 @@ final class MariaDBDriver implements DatabaseDriver
         $user = Validator::userName($user);
         Validator::password($password);
 
-        foreach (['localhost', '127.0.0.1'] as $host) {
+        $hosts = $this->hostsForUser($user);
+        if ($hosts === []) {
+            $hosts = ['localhost', '127.0.0.1'];
+        }
+        foreach ($hosts as $host) {
             $this->runtime->dbExec(
-                'ALTER USER `' . SqlIdent::mysql($user) . '`@`' . SqlIdent::mysql($host) . '` IDENTIFIED BY ?',
+                'ALTER USER `' . SqlIdent::mysql($user) . '`@`' . SqlIdent::mysqlHost($host) . '` IDENTIFIED BY ?',
                 [$password]
             );
         }
@@ -257,6 +265,25 @@ final class MariaDBDriver implements DatabaseDriver
         );
 
         return $path;
+    }
+
+    /** @return list<string> */
+    private function hostsForUser(string $user): array
+    {
+        $rows = $this->runtime->dbQuery('SELECT Host FROM mysql.user WHERE User = ?', [$user]);
+        $hosts = [];
+        foreach ($rows as $row) {
+            $host = (string) ($row['Host'] ?? '');
+            if ($host === '') {
+                continue;
+            }
+            try {
+                $hosts[] = SqlIdent::mysqlHost($host);
+            } catch (BrokerException) {
+            }
+        }
+
+        return array_values(array_unique($hosts));
     }
 
     private function isProtected(string $name): bool

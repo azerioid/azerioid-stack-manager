@@ -97,17 +97,25 @@ final class PosixRuntime implements Runtime
      */
     private static function childEnv(): array
     {
+        $fallback = is_dir('/var/lib/caddy') ? '/var/lib/caddy' : '/var/lib/azerioid-panel';
         $home = getenv('HOME');
-        if (! is_string($home) || $home === '') {
-            $home = is_dir('/var/lib/caddy') ? '/var/lib/caddy' : '/var/lib/azerioid-panel';
+        if (! is_string($home) || $home === '' || $home === '/root') {
+            $home = $fallback;
         }
         $path = getenv('PATH') ?: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
         $xdgConfig = getenv('XDG_CONFIG_HOME');
         $xdgData = getenv('XDG_DATA_HOME');
+        if (! is_string($xdgConfig) || $xdgConfig === '' || str_starts_with($xdgConfig, '/root')) {
+            $xdgConfig = $home . '/.config';
+        }
+        if (! is_string($xdgData) || $xdgData === '' || str_starts_with($xdgData, '/root')) {
+            $xdgData = $home . '/.local/share';
+        }
+
         return [
             'HOME' => $home,
-            'XDG_CONFIG_HOME' => (is_string($xdgConfig) && $xdgConfig !== '') ? $xdgConfig : ($home . '/.config'),
-            'XDG_DATA_HOME' => (is_string($xdgData) && $xdgData !== '') ? $xdgData : ($home . '/.local/share'),
+            'XDG_CONFIG_HOME' => $xdgConfig,
+            'XDG_DATA_HOME' => $xdgData,
             'PATH' => $path,
             'LC_ALL' => 'C',
         ];
@@ -257,6 +265,22 @@ final class PosixRuntime implements Runtime
                 }
             }
         }
+        if (is_dir('/etc/opt/remi')) {
+            foreach (scandir('/etc/opt/remi') ?: [] as $entry) {
+                if (preg_match('/^php([0-9])([0-9]+)$/', $entry, $m) && is_dir('/etc/opt/remi/' . $entry)) {
+                    $versions[] = $m[1] . '.' . $m[2];
+                }
+            }
+        }
+        if (is_executable('/usr/bin/php')) {
+            $out = [];
+            @exec('/usr/bin/php -r "echo PHP_MAJOR_VERSION.\'.\'.PHP_MINOR_VERSION;"', $out);
+            $ver = trim(implode('', $out));
+            if (preg_match('/^[0-9]+\.[0-9]+$/', $ver)) {
+                $versions[] = $ver;
+            }
+        }
+        $versions = array_values(array_unique($versions));
         sort($versions, SORT_NATURAL);
         return $versions;
     }
@@ -300,7 +324,7 @@ final class PosixRuntime implements Runtime
     private static function isPasswordDdl(string $sql): bool
     {
         return (bool) preg_match('/^\s*(CREATE|ALTER)\s+USER\b/i', $sql)
-            && stripos($sql, 'IDENTIFIED BY') !== false;
+            && (stripos($sql, 'IDENTIFIED BY') !== false || stripos($sql, 'IDENTIFIED VIA') !== false);
     }
 
     public static function describePdo(PDOException $e): string
@@ -308,6 +332,7 @@ final class PosixRuntime implements Runtime
         $msg = $e->getMessage();
         $msg = preg_replace("/IDENTIFIED BY\\s+'[^']*'/i", 'IDENTIFIED BY [redacted]', $msg) ?? $msg;
         $msg = preg_replace('/IDENTIFIED BY\\s+"[^"]*"/i', 'IDENTIFIED BY [redacted]', $msg) ?? $msg;
+        $msg = preg_replace("/USING\\s+'[^']*'/i", 'USING [redacted]', $msg) ?? $msg;
         if (str_contains($msg, "near '?'")) {
             return 'MariaDB rejected a bound parameter in CREATE/ALTER USER; the broker quotes the password for that statement.';
         }

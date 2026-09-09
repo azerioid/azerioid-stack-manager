@@ -37,7 +37,7 @@ configure_panel_db() {
             fi
         fi
         if [[ -n "${PANEL_PUBLIC_DOMAIN:-}" ]]; then
-            app_url="https://${PANEL_PUBLIC_DOMAIN}:${PANEL_PORT}"
+            app_url="https://${PANEL_PUBLIC_DOMAIN}"
         elif [[ -n "${PANEL_PUBLIC_IP:-}" ]]; then
             app_url="https://${PANEL_PUBLIC_IP}:${PANEL_PORT}"
         fi

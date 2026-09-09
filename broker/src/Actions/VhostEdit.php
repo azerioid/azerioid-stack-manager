@@ -60,9 +60,12 @@ final class VhostEdit
         if (array_key_exists('tls_key', $input)) {
             $changes['tls_key'] = (string) $input['tls_key'];
         }
+        if (array_key_exists('engine', $input)) {
+            $changes['engine'] = Validator::vhostEngine((string) $input['engine']);
+        }
 
         if ($changes === []) {
-            throw new BrokerException('No editable fields provided (root, php_version, tls, tls_mode).', 2);
+            throw new BrokerException('No editable fields provided (root, php_version, tls, tls_mode, engine).', 2);
         }
 
         $mode = null;
@@ -91,7 +94,7 @@ final class VhostEdit
 
         $result = WebServers::for($config)->updateVhost($runtime, $config, $domain, $changes);
 
-        // Caddy auto is native; Apache/Nginx auto needs certbot after ACME-capable HTTP is live.
+        // TLS is always terminated by Caddy; auto uses native HTTP-01 regardless of backend engine.
         if ($mode === TlsMode::AUTO) {
             $issued = $issuer->ensure($domain, TlsMode::AUTO, $input);
         }

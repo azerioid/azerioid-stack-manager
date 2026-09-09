@@ -8,7 +8,7 @@ namespace AzerioidPanel\Broker\Web;
  */
 final class ManagedVhost
 {
-    /** Distro / teddysun / panel vhost filenames (not customer domains). */
+    /** Distro default / panel vhost filenames (not customer domains). */
     private const MANAGED_BASENAMES = [
         'default',
         '000-default',

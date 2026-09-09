@@ -15,6 +15,7 @@
             linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
         background-size: auto, 48px 48px, 48px 48px;
     }
+    [x-cloak] { display: none !important; }
 }
 
 @layer components {
@@ -42,4 +43,7 @@
     .led-on { @apply bg-good shadow-[0_0_8px_#3d9a7a]; }
     .led-off { @apply bg-zinc-600; }
     .led-bad { @apply bg-bad shadow-[0_0_8px_#c45c4a]; }
+    .text-accent { @apply text-brass-400; }
+    .az-cm .cm-editor { height: 100%; outline: none; }
+    .az-cm .cm-scroller { font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
 }

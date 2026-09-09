@@ -25,4 +25,19 @@ final class ComponentRepoInstallerTest extends TestCase
         $this->assertIsString($joined);
         $this->assertStringContainsString('setup_22.x', $joined);
     }
+
+    public function test_el_mongodb_repo_uses_rhel_major_not_minor_version(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=almalinux\nVERSION_ID=\"9.8\"\n";
+        $os = OsRelease::detect($rt);
+        $log = new OperationLogger($rt, '/tmp/op.log');
+
+        $installer = new ComponentRepoInstaller($rt);
+        $installer->ensureForInstall($os, 'mongodb', [], $log);
+
+        $repo = $rt->files['/etc/yum.repos.d/mongodb-org-8.0.repo'] ?? '';
+        $this->assertStringContainsString('repo.mongodb.org/yum/redhat/9/mongodb-org/8.0/x86_64/', $repo);
+        $this->assertStringNotContainsString('redhat/9.8/', $repo);
+    }
 }

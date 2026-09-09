@@ -45,13 +45,27 @@ final class Config
     public string $cronDPath = '/etc/cron.d/azerioid-panel';
     public string $webUser = 'caddy';
 
+    /** Apache loopback backend (Caddy reverse_proxy target). */
+    public int $apacheBackendPort = 8081;
+    /** Nginx loopback backend (Caddy reverse_proxy target). */
+    public int $nginxBackendPort = 8082;
+    public string $backendBind = '127.0.0.1';
+
     public string $ttydBin = '/usr/local/bin/ttyd';
     public string $terminalSessionsPath = '/var/lib/azerioid-panel/terminal-sessions.json';
     public string $terminalCaddyRoutesPath = '/var/lib/azerioid-panel/caddy-terminal-routes.conf';
     public int $panelPort = 3169;
+    public string $brokerConfigPath = '/etc/azerioid-panel/broker.json';
+    public ?string $panelDomain = null;
+    public string $panelDomainTlsMode = 'auto';
+    public ?string $panelDomainTlsCert = null;
+    public ?string $panelDomainTlsKey = null;
+    public ?string $panelPublicIp = null;
     public int $terminalIdleSeconds = 1200;
     public int $terminalPortMin = 35000;
     public int $terminalPortMax = 35999;
+    /** Per-request file-manager payload cap (read/write/upload). Default 20 MiB. */
+    public int $vhostFilesMaxBytes = 20971520;
 
     public string $panelPhpVersion = '8.4';
     public string $panelFpmSocket = '/run/php/azerioid-panel.sock';
@@ -61,7 +75,7 @@ final class Config
     public string $registryComponentsPath = '/usr/local/lib/azerioid-panel/registry/components';
     public string $managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
 
-    /** ACME account email for certbot (HTTP-01 / DNS-01). Empty → derived as admin@<domain>. */
+    /** ACME account email for certbot DNS-01 (Caddy uses its own ACME account for HTTP-01). Empty → derived as admin@<domain>. */
     public string $acmeEmail = '';
 
     /** @var list<string> reverse-proxy / operator-protected vhosts (detected at install) */
@@ -140,10 +154,33 @@ final class Config
         $cfg->terminalSessionsPath = (string) ($data['paths']['terminal_sessions'] ?? $cfg->terminalSessionsPath);
         $cfg->terminalCaddyRoutesPath = (string) ($data['paths']['terminal_caddy_routes'] ?? $cfg->terminalCaddyRoutesPath);
         $cfg->panelPort = (int) ($data['panel_port'] ?? $cfg->panelPort);
+        $cfg->brokerConfigPath = (string) ($data['paths']['broker_json'] ?? $cfg->brokerConfigPath);
+        if (isset($data['panel']) && is_array($data['panel'])) {
+            $panel = $data['panel'];
+            $dom = strtolower(trim((string) ($panel['domain'] ?? '')));
+            $cfg->panelDomain = $dom !== '' ? $dom : null;
+            try {
+                $cfg->panelDomainTlsMode = Tls\TlsMode::normalize((string) ($panel['tls_mode'] ?? $cfg->panelDomainTlsMode));
+            } catch (BrokerException) {
+                $cfg->panelDomainTlsMode = 'auto';
+            }
+            $cert = trim((string) ($panel['tls_cert'] ?? ''));
+            $key = trim((string) ($panel['tls_key'] ?? ''));
+            $cfg->panelDomainTlsCert = $cert !== '' ? $cert : null;
+            $cfg->panelDomainTlsKey = $key !== '' ? $key : null;
+            $ip = trim((string) ($panel['public_ip'] ?? ''));
+            $cfg->panelPublicIp = $ip !== '' ? $ip : null;
+        }
         $cfg->terminalIdleSeconds = (int) ($data['terminal_idle_seconds'] ?? $cfg->terminalIdleSeconds);
         if (isset($data['terminal_ports']) && is_array($data['terminal_ports'])) {
             $cfg->terminalPortMin = (int) ($data['terminal_ports']['min'] ?? $cfg->terminalPortMin);
             $cfg->terminalPortMax = (int) ($data['terminal_ports']['max'] ?? $cfg->terminalPortMax);
+        }
+        if (isset($data['vhost_files_max_bytes'])) {
+            $max = (int) $data['vhost_files_max_bytes'];
+            if ($max >= 1024) {
+                $cfg->vhostFilesMaxBytes = $max;
+            }
         }
         $cfg->webUser = (string) ($data['web_user'] ?? $cfg->webUser);
         $cfg->phpUser = $cfg->webUser;
@@ -202,7 +239,59 @@ final class Config
         } elseif (isset($data['acme_email'])) {
             $cfg->acmeEmail = (string) $data['acme_email'];
         }
+        if (isset($data['front_router']) && is_array($data['front_router'])) {
+            $fr = $data['front_router'];
+            if (isset($fr['apache_backend_port'])) {
+                $cfg->apacheBackendPort = (int) $fr['apache_backend_port'];
+            }
+            if (isset($fr['nginx_backend_port'])) {
+                $cfg->nginxBackendPort = (int) $fr['nginx_backend_port'];
+            }
+            if (isset($fr['bind']) && is_string($fr['bind']) && $fr['bind'] !== '') {
+                $cfg->backendBind = $fr['bind'];
+            }
+        }
         return $cfg;
+    }
+
+    public function forApacheBackend(Runtime $runtime): self
+    {
+        $c = clone $this;
+        $c->webServer = 'apache';
+        $c->vhostFormat = 'apache';
+        if ($runtime->isDir('/etc/httpd/conf') || ($runtime->fileExists('/usr/sbin/httpd') && !$runtime->isDir('/etc/apache2'))) {
+            $c->webService = 'httpd';
+            $c->vhostDir = '/etc/httpd/conf.d';
+            $c->vhostAvailableDir = '';
+            $c->webLogDir = '/var/log/httpd';
+            $c->apacheCtl = '/usr/sbin/httpd';
+            $c->webUser = $c->webUser === 'caddy' ? 'apache' : $c->webUser;
+        } else {
+            $c->webService = 'apache2';
+            $c->vhostDir = '/etc/apache2/sites-enabled';
+            $c->vhostAvailableDir = '/etc/apache2/sites-available';
+            $c->webLogDir = '/var/log/apache2';
+        }
+
+        return $c;
+    }
+
+    public function forNginxBackend(Runtime $runtime): self
+    {
+        $c = clone $this;
+        $c->webServer = 'nginx';
+        $c->webService = 'nginx';
+        $c->vhostFormat = 'nginx';
+        $c->webLogDir = '/var/log/nginx';
+        if ($runtime->isDir('/etc/nginx/sites-available')) {
+            $c->vhostDir = '/etc/nginx/sites-enabled';
+            $c->vhostAvailableDir = '/etc/nginx/sites-available';
+        } else {
+            $c->vhostDir = '/etc/nginx/conf.d';
+            $c->vhostAvailableDir = '';
+        }
+
+        return $c;
     }
 
     public function runtimeWithDb(Runtime $runtime): Runtime

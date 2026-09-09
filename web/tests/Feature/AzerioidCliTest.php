@@ -92,7 +92,11 @@ class AzerioidCliTest extends TestCase
         $this->assertSame(0, $code);
         $out = Artisan::output();
         $this->assertStringContainsString('--tls=off|auto|internal|dns01', $out);
+        $this->assertStringContainsString('--engine=caddy|apache|nginx', $out);
         $this->assertStringContainsString('AZERIOID_DNS_API_TOKEN', $out);
+        $this->assertStringContainsString('azerioid panel domain set', $out);
+        $this->assertStringContainsString('azerioid service', $out);
+        $this->assertStringContainsString('--confirm', $out);
     }
 
     public function test_vhost_list_json(): void
@@ -122,6 +126,30 @@ class AzerioidCliTest extends TestCase
             '--domain' => 'cli-test.example.com',
         ]);
         $this->assertSame(0, $del);
+    }
+
+    public function test_vhost_add_engine_flag_is_persisted(): void
+    {
+        $code = Artisan::call('azerioid:vhost', [
+            'action' => 'add',
+            '--domain' => 'cli-apache.example.com',
+            '--type' => 'static',
+            '--root' => '/data/www/cli-apache.example.com',
+            '--engine' => 'apache',
+        ]);
+        $this->assertSame(0, $code, Artisan::output());
+        $fake = $this->app->make(FakeBroker::class);
+        $row = collect($fake->vhosts)->firstWhere('domain', 'cli-apache.example.com');
+        $this->assertSame('apache', $row['engine'] ?? null);
+
+        $edit = Artisan::call('azerioid:vhost', [
+            'action' => 'edit',
+            '--domain' => 'cli-apache.example.com',
+            '--engine' => 'nginx',
+        ]);
+        $this->assertSame(0, $edit, Artisan::output());
+        $row = collect($fake->vhosts)->firstWhere('domain', 'cli-apache.example.com');
+        $this->assertSame('nginx', $row['engine'] ?? null);
     }
 
     public function test_vhost_del_rejects_readonly_panel_vhost(): void
@@ -216,5 +244,91 @@ class AzerioidCliTest extends TestCase
             '--root' => '/etc/passwd',
         ]);
         $this->assertNotSame(0, $code);
+    }
+
+    public function test_db_access_global_requires_confirm_and_rejects_injection(): void
+    {
+        $code = Artisan::call('azerioid:db', [
+            'action' => 'access',
+            'subcommand' => 'set',
+            '--engine' => 'mariadb',
+            '--name' => 'projob',
+            '--mode' => 'global',
+        ]);
+        $out = Artisan::output();
+        $this->assertNotSame(0, $code, $out);
+        $this->assertStringContainsString('--confirm', $out);
+
+        $inject = Artisan::call('azerioid:db', [
+            'action' => 'access',
+            'subcommand' => 'set',
+            '--engine' => 'mariadb',
+            '--name' => 'projob',
+            '--mode' => 'specific',
+            '--ip' => '1.2.3.4; DROP TABLE x',
+        ]);
+        $injectOut = Artisan::output();
+        $this->assertNotSame(0, $inject, $injectOut);
+        $this->assertStringContainsString('Invalid IP', $injectOut);
+        $this->assertArrayNotHasKey('projob', $this->app->make(FakeBroker::class)->dbAccess['mariadb'] ?? []);
+
+        $ok = Artisan::call('azerioid:db', [
+            'action' => 'access',
+            'subcommand' => 'set',
+            '--engine' => 'mariadb',
+            '--name' => 'projob',
+            '--mode' => 'specific',
+            '--ip' => '203.0.113.5',
+        ]);
+        $this->assertSame(0, $ok, Artisan::output());
+        $this->assertSame(['203.0.113.5'], $this->app->make(FakeBroker::class)->dbAccess['mariadb']['projob']['ips']);
+
+        $global = Artisan::call('azerioid:db', [
+            'action' => 'access',
+            'subcommand' => 'set',
+            '--engine' => 'mariadb',
+            '--name' => 'projob',
+            '--mode' => 'global',
+            '--confirm' => true,
+        ]);
+        $this->assertSame(0, $global, Artisan::output());
+        $this->assertSame('global', $this->app->make(FakeBroker::class)->dbAccess['mariadb']['projob']['mode']);
+
+        $row = AuditLog::query()->where('action', 'db.access.set')->latest('id')->first();
+        $this->assertNotNull($row);
+        $this->assertTrue($row->ok);
+        $this->assertSame('global', $row->args['mode'] ?? null);
+    }
+
+    public function test_panel_domain_show_set_clear(): void
+    {
+        $show = Artisan::call('azerioid:panel', ['action' => 'domain', 'op' => 'show']);
+        $this->assertSame(0, $show);
+        $this->assertStringContainsString('not set', Artisan::output());
+
+        $set = Artisan::call('azerioid:panel', [
+            'action' => 'domain',
+            'op' => 'set',
+            '--domain' => 'panel.example.com',
+            '--tls' => 'internal',
+        ]);
+        $this->assertSame(0, $set, Artisan::output());
+        $this->assertSame('panel.example.com', $this->app->make(FakeBroker::class)->panelDomain);
+        $this->assertSame('internal', $this->app->make(FakeBroker::class)->panelDomainTlsMode);
+
+        $clear = Artisan::call('azerioid:panel', ['action' => 'domain', 'op' => 'clear']);
+        $this->assertSame(0, $clear, Artisan::output());
+        $this->assertNull($this->app->make(FakeBroker::class)->panelDomain);
+    }
+
+    public function test_panel_domain_set_refuses_existing_vhost(): void
+    {
+        $code = Artisan::call('azerioid:panel', [
+            'action' => 'domain',
+            'op' => 'set',
+            '--domain' => 'shop.example.com',
+        ]);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('already a site vhost', Artisan::output());
     }
 }

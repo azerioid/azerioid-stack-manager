@@ -193,7 +193,14 @@ class ComponentsPage extends Component
             return;
         }
         $port = (int) ($response->data['panel_port'] ?? 3169);
-        $this->flash = "Released :80/:443 from panel Caddy. Panel remains on port {$port}.";
+        $note = (string) ($response->data['note'] ?? '');
+        if (! empty($response->data['deprecated']) || ($response->data['released'] ?? true) === false) {
+            $this->flash = $note !== ''
+                ? $note
+                : 'Caddy already owns :80/:443 as the front router. Apache/Nginx are loopback backends — no port release is needed.';
+        } else {
+            $this->flash = "Released :80/:443 from panel Caddy. Panel remains on port {$port}.";
+        }
         $this->preflightRemediations = [];
         $componentId = $this->pendingPreflightComponent;
         $action = $this->pendingPreflightAction;

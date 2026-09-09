@@ -46,6 +46,7 @@ final class DatabaseProvisioner
 
         if ($componentId === 'postgresql') {
             $this->securePostgreSqlListen($log);
+            $this->securePostgreSqlHba($log);
             Systemd::control($this->runtime, 'restart', 'postgresql');
             $this->provisionPostgreSqlAdmin($password, $log);
             BrokerConfigWriter::merge($this->runtime, $configPath, [
@@ -124,6 +125,7 @@ final class DatabaseProvisioner
         $paths = [
             '/etc/mysql/mariadb.conf.d/50-server.cnf',
             '/etc/my.cnf.d/server.cnf',
+            '/etc/my.cnf.d/mariadb-server.cnf',
         ];
         foreach ($paths as $path) {
             if (!$this->runtime->fileExists($path)) {
@@ -131,8 +133,8 @@ final class DatabaseProvisioner
             }
             $log->info("Setting bind-address=127.0.0.1 in {$path}");
             $content = $this->runtime->readFile($path);
-            if (preg_match('/^bind-address\s*=/m', $content) === 1) {
-                $content = preg_replace('/^bind-address\s*=.*/m', 'bind-address = 127.0.0.1', $content) ?? $content;
+            if (preg_match('/^#?\s*bind-address\s*=/m', $content) === 1) {
+                $content = preg_replace('/^#?\s*bind-address\s*=.*/m', 'bind-address = 127.0.0.1', $content) ?? $content;
             } elseif (preg_match('/^\[mysqld\]/m', $content) === 1) {
                 $content = preg_replace(
                     '/^(\[mysqld\][^\[]*)/m',
@@ -173,6 +175,40 @@ final class DatabaseProvisioner
         }
     }
 
+    /**
+     * EL ships `host all all 127.0.0.1/32 ident`. The panel connects over TCP as
+     * azerioid_panel_admin with a password, so ident always fails. Keep local/peer.
+     */
+    private function securePostgreSqlHba(OperationLogger $log): void
+    {
+        $candidates = array_merge(
+            $this->runtime->glob('/etc/postgresql/*/main/pg_hba.conf'),
+            $this->runtime->glob('/var/lib/pgsql/*/data/pg_hba.conf'),
+            ['/var/lib/pgsql/data/pg_hba.conf']
+        );
+        foreach ($candidates as $path) {
+            if (!$this->runtime->fileExists($path)) {
+                continue;
+            }
+            $content = $this->runtime->readFile($path);
+            $next = preg_replace(
+                '/^(host\s+all\s+all\s+127\.0\.0\.1\/32\s+)ident\s*$/m',
+                '${1}scram-sha-256',
+                $content
+            ) ?? $content;
+            $next = preg_replace(
+                '/^(host\s+all\s+all\s+::1\/128\s+)ident\s*$/m',
+                '${1}scram-sha-256',
+                $next
+            ) ?? $next;
+            if ($next === $content) {
+                continue;
+            }
+            $log->info("Switching loopback pg_hba ident → scram-sha-256 in {$path}");
+            $this->runtime->writeFile($path, $next, 0640);
+        }
+    }
+
     private function provisionMariaDbAdmin(string $password, OperationLogger $log): void
     {
         $escaped = SqlIdent::escapeLiteral($password);
@@ -203,7 +239,7 @@ final class DatabaseProvisioner
         }
 
         $escaped = SqlIdent::escapeLiteral($password);
-        $sql = "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '"
+        $sql = "SET password_encryption = 'scram-sha-256'; DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '"
             . self::ADMIN_USER . "') THEN CREATE ROLE " . self::ADMIN_USER
             . " WITH LOGIN SUPERUSER PASSWORD '{$escaped}' CREATEDB CREATEROLE; "
             . "ELSE ALTER ROLE " . self::ADMIN_USER

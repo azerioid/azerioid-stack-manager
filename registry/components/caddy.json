@@ -16,6 +16,18 @@
       "bind": "127.0.0.1",
       "owner": "panel",
       "protocol": "tcp"
+    },
+    {
+      "port": 80,
+      "bind": "0.0.0.0",
+      "owner": "caddy",
+      "protocol": "tcp"
+    },
+    {
+      "port": 443,
+      "bind": "0.0.0.0",
+      "owner": "caddy",
+      "protocol": "tcp"
     }
   ],
   "conflicts": [],
