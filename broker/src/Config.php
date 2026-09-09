@@ -88,12 +88,13 @@ final class Config
 
     /** @var array<string,string> log key => path */
     public array $logPaths = [
-        'caddy' => '/var/log/caddy/access.log',
+        'caddy' => '/var/log/caddy/access_azerioid-panel.log',
         'mariadb' => '/var/log/mysql/error.log',
-        'php-fpm' => '/var/log/www-error.log',
+        'php-fpm' => '/var/log/php8.4-fpm.log',
         'php-slow' => '/var/log/www-slow.log',
         'panel-audit' => '/var/log/azerioid-panel/broker-audit.log',
         'auth' => '/var/log/auth.log',
+        'auth-secure' => '/var/log/secure',
         'auth-syslog' => '/var/log/syslog',
     ];
 
@@ -257,7 +258,77 @@ final class Config
             $cfg->controllableServices = [$cfg->webService, 'mariadb'];
             $cfg->logPaths['caddy'] = rtrim($cfg->webLogDir, '/') . '/access.log';
         }
+        $cfg->resolveLogPaths($runtime);
         return $cfg;
+    }
+
+    /**
+     * Prefer live-on-disk log paths over Debian-shaped defaults.
+     * Explicit broker.json "logs" entries still win when the file exists.
+     */
+    public function resolveLogPaths(Runtime $runtime): void
+    {
+        $dir = rtrim($this->webLogDir, '/');
+        $caddyCandidates = [
+            $this->logPaths['caddy'] ?? '',
+            $dir . '/access_azerioid-panel.log',
+            $dir . '/access.log',
+        ];
+        foreach ($caddyCandidates as $candidate) {
+            if ($candidate !== '' && $runtime->fileExists($candidate)) {
+                $this->logPaths['caddy'] = $candidate;
+                break;
+            }
+        }
+        if (!isset($this->logPaths['caddy']) || $this->logPaths['caddy'] === '') {
+            $this->logPaths['caddy'] = $dir . '/access_azerioid-panel.log';
+        }
+
+        $authCandidates = [
+            $this->logPaths['auth'] ?? '',
+            $this->logPaths['auth-secure'] ?? '',
+            '/var/log/auth.log',
+            '/var/log/secure',
+            '/var/log/syslog',
+        ];
+        foreach ($authCandidates as $candidate) {
+            if ($candidate !== '' && $runtime->fileExists($candidate)) {
+                $this->logPaths['auth'] = $candidate;
+                break;
+            }
+        }
+        $this->logPaths['auth-secure'] = $this->logPaths['auth-secure'] ?? '/var/log/secure';
+
+        $phpVer = $this->panelPhpVersion !== '' ? $this->panelPhpVersion : '8.4';
+        $nodot = str_replace('.', '', $phpVer);
+        $phpCandidates = [
+            $this->logPaths['php-fpm'] ?? '',
+            "/var/log/php{$phpVer}-fpm.log",
+            '/var/log/php-fpm/error.log',
+            '/var/log/php-fpm.log',
+            "/var/opt/remi/php{$nodot}/log/php-fpm/error.log",
+            '/var/log/azerioid-panel/php-fpm.log',
+            '/var/log/www-error.log',
+        ];
+        foreach ($phpCandidates as $candidate) {
+            if ($candidate !== '' && $runtime->fileExists($candidate)) {
+                $this->logPaths['php-fpm'] = $candidate;
+                break;
+            }
+        }
+
+        $mariaCandidates = [
+            $this->logPaths['mariadb'] ?? '',
+            '/var/log/mysql/error.log',
+            '/var/log/mariadb/mariadb.log',
+            '/var/log/mysqld.log',
+        ];
+        foreach ($mariaCandidates as $candidate) {
+            if ($candidate !== '' && $runtime->fileExists($candidate)) {
+                $this->logPaths['mariadb'] = $candidate;
+                break;
+            }
+        }
     }
 
     public function forApacheBackend(Runtime $runtime): self

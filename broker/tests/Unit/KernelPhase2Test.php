@@ -276,6 +276,34 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame(0, $code);
         $this->assertSame(1, $json['data']['failed_count']);
         $this->assertNotSame([], $json['data']['new_root_ips']);
+        $this->assertSame('file', $json['data']['source']);
+    }
+
+    public function test_auth_audit_uses_el_secure_log(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/var/log/secure'] = "Sep 9 12:00:01 host sshd[9]: Failed password for root from 198.51.100.9 port 22 ssh2\n";
+        $rt->script(['/usr/bin/tail', '-n', '400', '/var/log/secure'], 0, $rt->files['/var/log/secure']);
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'auth.audit']);
+        $this->assertSame(0, $code);
+        $this->assertSame('/var/log/secure', $json['data']['path']);
+        $this->assertSame(1, $json['data']['failed_count']);
+    }
+
+    public function test_auth_audit_falls_back_to_journalctl(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/usr/bin/journalctl'] = "binary\n";
+        $journal = "2026-09-09T12:00:00+00:00 host sshd[1]: Accepted publickey for root from 203.0.113.9 port 22 ssh2\n"
+            . "2026-09-09T12:01:00+00:00 host sshd[2]: Failed password for invalid user admin from 198.51.100.7 port 22 ssh2\n";
+        $rt->script([
+            '/usr/bin/journalctl', '-u', 'ssh', '-u', 'sshd', '-n', '400', '--no-pager', '-o', 'short-iso',
+        ], 0, $journal);
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'auth.audit']);
+        $this->assertSame(0, $code);
+        $this->assertFalse($json['data']['missing']);
+        $this->assertSame('journal', $json['data']['source']);
+        $this->assertSame(1, $json['data']['failed_count']);
     }
 
     public function test_logs_search_uses_fixed_string_grep(): void
