@@ -258,6 +258,7 @@ systemctl daemon-reload
 rm -f /etc/sudoers.d/azerioid-panel
 visudo -c >/dev/null 2>&1 || echo "Warning: visudo -c failed after removing panel sudoers." >&2
 rm -f /etc/cron.d/azerioid-panel
+rm -f /etc/logrotate.d/azerioid-panel
 rm -f /usr/local/bin/azerioid
 
 if command -v fail2ban-client >/dev/null 2>&1 \

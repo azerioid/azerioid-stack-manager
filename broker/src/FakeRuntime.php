@@ -112,6 +112,14 @@ final class FakeRuntime implements Runtime
         return isset($this->files[$path]) || isset($this->dirs[$path]);
     }
 
+    public function fileSize(string $path): int
+    {
+        if (!isset($this->files[$path])) {
+            throw new BrokerException("Unable to size {$path}.", 1);
+        }
+        return strlen($this->files[$path]);
+    }
+
     public function isDir(string $path): bool
     {
         return isset($this->dirs[$path]);

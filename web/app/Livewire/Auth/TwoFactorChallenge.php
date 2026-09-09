@@ -28,33 +28,26 @@ class TwoFactorChallenge extends Component
             return;
         }
 
-        if (! config('azerioid.require_totp')) {
-            $pending = User::query()->find(session('login.id'));
+        $pending = User::query()->find(session('login.id'));
+        if (! $pending instanceof User) {
             session()->forget('login.id');
-            if ($pending instanceof User) {
-                Auth::login($pending);
-                session()->regenerate();
-                session()->put('last_activity_at', time());
-                $pending->forceFill([
-                    'last_login_at' => now(),
-                    'last_login_ip' => request()->ip(),
-                ])->save();
-                $this->redirectRoute('dashboard', navigate: true);
-
-                return;
-            }
             $this->redirectRoute('login', navigate: true);
 
             return;
         }
-
-        $pending = User::query()->find(session('login.id'));
-        if ($pending instanceof User && ! $pending->hasTwoFactorEnabled()) {
+        if (! $pending->hasTwoFactorEnabled()) {
             session()->forget('login.id');
             Auth::login($pending);
             session()->regenerate();
             session()->put('last_activity_at', time());
-            $this->redirectRoute('two-factor.setup', navigate: true);
+            if ($pending->mustEnrollTwoFactor()) {
+                $this->redirectRoute('two-factor.setup', navigate: true);
+
+                return;
+            }
+            $this->redirectRoute('dashboard', navigate: true);
+
+            return;
         }
     }
 

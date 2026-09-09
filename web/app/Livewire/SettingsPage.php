@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Setting;
 use App\Models\User;
 use App\Services\Broker\BrokerClient;
+use App\Services\TotpService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules\Password;
@@ -37,6 +38,9 @@ class SettingsPage extends Component
     public string $dnsRotateProvider = '';
     public string $dnsRotateToken = '';
     public ?string $dnsError = null;
+    public string $totp_password = '';
+    public string $totp_code = '';
+    public ?string $totpError = null;
 
     public function mount(BrokerClient $broker): void
     {
@@ -219,6 +223,59 @@ class SettingsPage extends Component
             $this->addError('phpIni', $res->error);
         }
         $this->loadOpcache($broker);
+    }
+
+
+    public function disableTotp(TotpService $totp): void
+    {
+        $this->totpError = null;
+        if (config('azerioid.require_totp')) {
+            $this->totpError = 'Cannot disable TOTP while PANEL_REQUIRE_TOTP is enabled for this instance.';
+            return;
+        }
+        $user = Auth::user();
+        abort_unless($user instanceof User, 403);
+        $this->validate([
+            'totp_password' => ['required', 'string'],
+        ]);
+        if (! Hash::check($this->totp_password, $user->password)) {
+            $this->addError('totp_password', 'Current password is incorrect.');
+            return;
+        }
+        if ($user->hasTwoFactorEnabled()) {
+            $secret = $user->plainTwoFactorSecret();
+            if ($secret === null || $this->totp_code === '' || ! $totp->verify($secret, $this->totp_code)) {
+                $this->addError('totp_code', 'Enter a valid authenticator code to disable TOTP.');
+                return;
+            }
+        }
+        $totp->disable($user);
+        $this->reset('totp_password', 'totp_code');
+        $this->flash = 'Two-factor authentication disabled. Login is password-only for this account.';
+    }
+
+    public function resetTotp(TotpService $totp): void
+    {
+        $this->totpError = null;
+        $user = Auth::user();
+        abort_unless($user instanceof User, 403);
+        $this->validate([
+            'totp_password' => ['required', 'string'],
+        ]);
+        if (! Hash::check($this->totp_password, $user->password)) {
+            $this->addError('totp_password', 'Current password is incorrect.');
+            return;
+        }
+        if ($user->hasTwoFactorEnabled()) {
+            $secret = $user->plainTwoFactorSecret();
+            if ($secret === null || $this->totp_code === '' || ! $totp->verify($secret, $this->totp_code)) {
+                $this->addError('totp_code', 'Enter a valid authenticator code to reset TOTP.');
+                return;
+            }
+        }
+        $totp->beginReset($user);
+        $this->reset('totp_password', 'totp_code');
+        $this->redirectRoute('two-factor.setup', navigate: true);
     }
 
     public function render()

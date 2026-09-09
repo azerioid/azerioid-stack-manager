@@ -75,7 +75,7 @@ class AuthTest extends TestCase
         $this->actingAs($user);
         $this->get('/')->assertOk();
         $this->get('/settings')->assertOk()
-            ->assertSee('Disabled: admins log in with password only', false)
+            ->assertSee('Instance does not require TOTP', false)
             ->assertDontSee('2FA REQUIRED', false);
     }
 
@@ -145,7 +145,7 @@ class AuthTest extends TestCase
             ->assertRedirect(route('dashboard'));
     }
 
-    public function test_login_is_password_only_when_totp_not_required_even_if_user_enrolled(): void
+    public function test_enrolled_user_is_challenged_even_when_totp_not_required(): void
     {
         config(['azerioid.require_totp' => false]);
         $secret = 'JBSWY3DPEHPK3PXP';
@@ -160,11 +160,11 @@ class AuthTest extends TestCase
             ->set('email', $user->email)
             ->set('password', 'password')
             ->call('authenticate')
-            ->assertRedirect(route('dashboard'));
+            ->assertRedirect(route('two-factor.challenge'));
 
         $this->withSession(['login.id' => $user->id])
             ->get('/two-factor/challenge')
-            ->assertRedirect(route('dashboard'));
+            ->assertOk();
     }
 
     public function test_login_sends_unenrolled_user_to_setup_when_totp_required(): void
@@ -307,5 +307,50 @@ class AuthTest extends TestCase
             ])->save();
         }
         return $user->fresh();
+    }
+
+    public function test_settings_can_disable_totp_when_not_required(): void
+    {
+        config(['azerioid.require_totp' => false]);
+        $totp = new TotpService();
+        $secret = $totp->generateSecret();
+        $user = User::factory()->create([
+            'email' => 'disable-me@example.com',
+            'password' => 'password',
+            'two_factor_secret' => Crypt::encryptString($secret),
+            'two_factor_confirmed_at' => now(),
+        ]);
+        Livewire::actingAs($user)
+            ->test(\App\Livewire\SettingsPage::class)
+            ->set('totp_password', 'password')
+            ->set('totp_code', $this->totpCode($secret))
+            ->call('disableTotp')
+            ->assertHasNoErrors();
+
+        $user->refresh();
+        $this->assertFalse($user->hasTwoFactorEnabled());
+        $this->assertNull($user->two_factor_secret);
+    }
+
+    public function test_settings_blocks_disable_when_totp_required(): void
+    {
+        config(['azerioid.require_totp' => true]);
+        $totp = new TotpService();
+        $secret = $totp->generateSecret();
+        $user = User::factory()->create([
+            'email' => 'locked-totp@example.com',
+            'password' => 'password',
+            'two_factor_secret' => Crypt::encryptString($secret),
+            'two_factor_confirmed_at' => now(),
+        ]);
+        Livewire::actingAs($user)
+            ->test(\App\Livewire\SettingsPage::class)
+            ->set('totp_password', 'password')
+            ->set('totp_code', $this->totpCode($secret))
+            ->call('disableTotp')
+            ->assertSet('totpError', 'Cannot disable TOTP while PANEL_REQUIRE_TOTP is enabled for this instance.');
+
+        $user->refresh();
+        $this->assertTrue($user->hasTwoFactorEnabled());
     }
 }

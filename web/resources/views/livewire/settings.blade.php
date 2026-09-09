@@ -31,19 +31,40 @@
         <div><button class="btn-primary" type="submit">Update password</button></div>
     </form>
 
-    <section class="panel p-5 space-y-2">
+    <section class="panel p-5 space-y-3">
         <h2 class="text-sm font-medium">Two-factor (TOTP)</h2>
         @if ($totpRequired)
-            <p class="text-sm text-zinc-400">Required for admin login (PANEL_REQUIRE_TOTP). Reinstall with <span class="font-mono">--require-totp=false</span> to allow password-only.</p>
+            <p class="text-sm text-zinc-400">Required for admin login (<span class="font-mono">PANEL_REQUIRE_TOTP</span>). Disabling per-account TOTP is blocked while this instance policy is on.</p>
             <p class="text-sm {{ $totpEnrolled ? 'text-good' : 'text-warn' }}">{{ $totpEnrolled ? 'This account is enrolled.' : 'This account is not enrolled yet.' }}</p>
         @else
-            <p class="text-sm text-zinc-400">Disabled: admins log in with password only. Optional enrollment is available.</p>
+            <p class="text-sm text-zinc-400">Instance does not require TOTP. Optional enrollment is available; enrolled accounts are still challenged at login.</p>
             <p class="text-sm text-warn">If this panel is internet-facing, reinstall with <span class="font-mono">--require-totp=true</span>.</p>
             @unless ($totpEnrolled)
                 <a class="btn-ghost inline-block text-xs" href="{{ route('two-factor.setup') }}">Enroll authenticator (optional)</a>
-            @else
-                <p class="text-sm text-good">This account is enrolled; login still asks for a code.</p>
+            @endunless
+        @endif
+
+        @if ($totpEnrolled)
+            <p class="text-sm text-zinc-400">Disable or reset requires your current password and a valid authenticator code.</p>
+            <label class="block text-xs uppercase tracking-wide text-zinc-500">Current password
+                <input class="field mt-1 max-w-md" type="password" wire:model="totp_password" autocomplete="current-password">
+            </label>
+            @error('totp_password') <p class="text-sm text-bad">{{ $message }}</p> @enderror
+            <label class="block text-xs uppercase tracking-wide text-zinc-500">Authenticator code
+                <input class="field mt-1 max-w-xs" wire:model="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits">
+            </label>
+            @error('totp_code') <p class="text-sm text-bad">{{ $message }}</p> @enderror
+            @if ($totpError)
+                <p class="text-sm text-bad">{{ $totpError }}</p>
             @endif
+            <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn-ghost" wire:click="resetTotp" wire:confirm="Generate a new authenticator secret? You must confirm a new code before it activates.">Reset / re-enroll</button>
+                @unless ($totpRequired)
+                    <button type="button" class="btn-danger" wire:click="disableTotp" wire:confirm="Disable two-factor for this account?">Disable TOTP</button>
+                @else
+                    <p class="text-sm text-zinc-500">Disable is unavailable while instance TOTP is required.</p>
+                @endunless
+            </div>
         @endif
     </section>
 

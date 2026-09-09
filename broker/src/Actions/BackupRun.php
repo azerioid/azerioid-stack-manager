@@ -16,8 +16,9 @@ final class BackupRun
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $passphrase = Validator::password((string) ($input['passphrase'] ?? ''));
-        $client = SpacesClient::fromInput($input['spaces'] ?? []);
+        $destination = $this->destination($input);
         $stamp = gmdate('Ymd\THis\Z');
+        $keep = max(1, min(365, (int) ($input['keep'] ?? 14)));
 
         $plain = match ($action) {
             'backup.db' => $this->dumpDb($runtime, $config, (string) ($args[0] ?? ($input['database'] ?? 'all'))),
@@ -27,9 +28,16 @@ final class BackupRun
         };
 
         $blob = ArchiveCrypto::encrypt($plain['bytes'], $passphrase);
+        unset($plain['bytes']);
+
+        if ($destination === 'local') {
+            return $this->storeLocal($runtime, $config, $plain, $blob, $stamp, $keep);
+        }
+
+        $client = SpacesClient::fromInput($input['spaces'] ?? []);
         $key = 'azerioid/' . $plain['kind'] . '/' . $plain['name'] . '/' . $stamp . '.bin';
         $uploaded = $client->put($key, $blob);
-        unset($plain['bytes'], $blob);
+        unset($blob);
 
         return [
             'key' => $uploaded['key'],
@@ -37,7 +45,80 @@ final class BackupRun
             'kind' => $plain['kind'],
             'name' => $plain['name'],
             'sha256' => $plain['sha256'],
+            'destination' => 'spaces',
+            'encrypted' => true,
         ];
+    }
+
+    /** @param array<string,mixed> $input */
+    private function destination(array $input): string
+    {
+        $dest = strtolower(trim((string) ($input['destination'] ?? 'spaces')));
+        if ($dest === 'local') {
+            return 'local';
+        }
+        if ($dest === 'spaces' || $dest === '') {
+            return 'spaces';
+        }
+        throw new BrokerException('destination must be spaces or local.', 2);
+    }
+
+    /**
+     * @param array{kind:string,name:string,sha256:string} $plain
+     * @return array{key:string,size:int,kind:string,name:string,sha256:string,destination:string,encrypted:bool,pruned:list<string>}
+     */
+    private function storeLocal(
+        Runtime $runtime,
+        Config $config,
+        array $plain,
+        string $blob,
+        string $stamp,
+        int $keep,
+    ): array {
+        $base = rtrim($config->localBackupDir, '/');
+        $dir = $base . '/' . $plain['kind'] . '/' . $plain['name'];
+        $runtime->mkdir($base, 0750);
+        $runtime->mkdir($base . '/' . $plain['kind'], 0750);
+        $runtime->mkdir($dir, 0750);
+        $path = $dir . '/' . $stamp . '.bin';
+        if ($runtime->resolveUnderBase($path, $base) === null) {
+            throw new BrokerException('Local backup path escaped backup root.', 3);
+        }
+        $runtime->writeFile($path, $blob, 0600);
+        $pruned = $this->pruneLocal($runtime, $dir, $keep);
+
+        return [
+            'key' => $path,
+            'size' => strlen($blob),
+            'kind' => $plain['kind'],
+            'name' => $plain['name'],
+            'sha256' => $plain['sha256'],
+            'destination' => 'local',
+            'encrypted' => true,
+            'pruned' => $pruned,
+        ];
+    }
+
+    /** @return list<string> */
+    private function pruneLocal(Runtime $runtime, string $dir, int $keep): array
+    {
+        $files = [];
+        foreach ($runtime->listDir($dir) as $name) {
+            if (!str_ends_with($name, '.bin')) {
+                continue;
+            }
+            $path = rtrim($dir, '/') . '/' . $name;
+            if ($runtime->fileExists($path)) {
+                $files[] = $path;
+            }
+        }
+        rsort($files, SORT_STRING);
+        $deleted = [];
+        foreach (array_slice($files, $keep) as $old) {
+            $runtime->deleteFile($old);
+            $deleted[] = $old;
+        }
+        return $deleted;
     }
 
     /** @return array{kind:string,name:string,bytes:string,sha256:string} */

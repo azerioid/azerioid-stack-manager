@@ -61,6 +61,7 @@ EOF
         "mariadb_server_cnf": "${mariadb_cnf}",
         "artisan": "${PREFIX}/web/artisan",
         "staging_dir": "/var/lib/azerioid-panel/staging",
+        "local_backup_dir": "/var/lib/azerioid-panel/backups",
         "cron_d": "/etc/cron.d/azerioid-panel",
         "panel_root": "${PREFIX}",
         "registry_components": "${PREFIX}/registry/components",
@@ -95,6 +96,8 @@ EOF
     install -d -m 0755 "${WWW_ROOT:-/data/www}"
 
     install -d -m 0750 /var/lib/azerioid-panel
+    install -d -m 0750 /var/lib/azerioid-panel/staging
+    install -d -m 0750 /var/lib/azerioid-panel/backups
     echo "# AZERIOID Stack Manager — no active terminal sessions" > /var/lib/azerioid-panel/caddy-terminal-routes.conf
     chmod 0644 /var/lib/azerioid-panel/caddy-terminal-routes.conf
     touch /var/lib/azerioid-panel/terminal-sessions.json

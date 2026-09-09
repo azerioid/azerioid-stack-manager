@@ -1,0 +1,13 @@
+# AZERIOID Stack Manager — panel-managed logs.
+# Daily rotation, 14 compressed archives kept (~2 weeks).
+/var/log/azerioid-panel/*.log {
+	daily
+	rotate 14
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+	create 0640 root root
+	sharedscripts
+}

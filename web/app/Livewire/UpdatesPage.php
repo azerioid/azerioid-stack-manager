@@ -21,6 +21,9 @@ class UpdatesPage extends Component
     public ?string $output = null;
     public ?string $flash = null;
     public ?string $error = null;
+    public string $pkgMgr = '';
+    public string $updateSource = '';
+    public string $distro = '';
 
     public function mount(BrokerClient $broker): void
     {
@@ -34,6 +37,9 @@ class UpdatesPage extends Component
             $this->total = (int) ($u->data['total'] ?? 0);
             $this->security = (int) ($u->data['security'] ?? 0);
             $this->packages = $u->data['packages'] ?? [];
+            $this->pkgMgr = (string) ($u->data['pkg_mgr'] ?? '');
+            $this->updateSource = (string) ($u->data['source'] ?? '');
+            $this->distro = (string) ($u->data['distro'] ?? '');
         } else {
             $this->error = $u->error;
         }
@@ -75,9 +81,11 @@ class UpdatesPage extends Component
 
     public function render()
     {
+        $mgr = $this->pkgMgr !== '' ? $this->pkgMgr : 'apt/dnf';
+
         return view('livewire.updates')->layoutData([
-            'heading' => 'Updates & TLS',
-            'sub' => 'apt · reboot-required · certificate expiry',
+            'heading' => 'OS updates & TLS',
+            'sub' => "host packages ({$mgr}) · reboot-required · certificate expiry — not panel self-update",
         ]);
     }
 }

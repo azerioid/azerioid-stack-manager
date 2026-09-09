@@ -8,7 +8,7 @@ bootstrap_packages() {
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
             apt-get -o DPkg::Lock::Timeout=120 install -y \
-                caddy sqlite3 curl ca-certificates gnupg rsync \
+                caddy sqlite3 curl ca-certificates gnupg rsync logrotate \
                 "php${PANEL_PHP_VERSION}-fpm" "php${PANEL_PHP_VERSION}-cli" \
                 "php${PANEL_PHP_VERSION}-sqlite3" "php${PANEL_PHP_VERSION}-mysql" \
                 "php${PANEL_PHP_VERSION}-pgsql" "php${PANEL_PHP_VERSION}-mbstring" \
@@ -17,7 +17,7 @@ bootstrap_packages() {
                 unzip git
             ;;
         dnf)
-            dnf -y install caddy sqlite curl ca-certificates gnupg2 unzip git rsync \
+            dnf -y install caddy sqlite curl ca-certificates gnupg2 unzip git rsync logrotate \
                 php-fpm php-cli php-process php-sqlite3 php-mysqlnd php-pgsql php-mbstring php-xml php-curl \
                 php-zip php-bcmath policycoreutils-python-utils checkpolicy >/dev/null
             ;;

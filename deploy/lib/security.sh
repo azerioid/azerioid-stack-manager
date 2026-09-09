@@ -19,7 +19,36 @@ reset_panel_fail2ban_log() {
     chown "${WEB_USER}:${WEB_USER}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
 }
 
+
+install_logrotate() {
+    echo "==> Installing logrotate for panel logs"
+    case "${PKG_MGR}" in
+        apt-get)
+            if ! command -v logrotate >/dev/null 2>&1; then
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get -o DPkg::Lock::Timeout=120 install -y logrotate >/dev/null
+            fi
+            ;;
+        dnf)
+            if ! command -v logrotate >/dev/null 2>&1; then
+                dnf -y install logrotate >/dev/null
+            fi
+            ;;
+    esac
+    install -d -m 0750 /var/log/azerioid-panel
+    install -m 0644 "${ROOT}/deploy/logrotate/azerioid-panel" /etc/logrotate.d/azerioid-panel
+    # Ensure audit log exists so rotation has a target on first run.
+    if [[ ! -f /var/log/azerioid-panel/broker-audit.log ]]; then
+        install -m 0640 /dev/null /var/log/azerioid-panel/broker-audit.log
+    fi
+    if [[ ! -f /var/log/azerioid-panel/auth-fail.log ]]; then
+        install -m 0640 /dev/null /var/log/azerioid-panel/auth-fail.log
+        chown "${WEB_USER:-caddy}:${WEB_USER:-caddy}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
+    fi
+}
+
 install_security() {
+    install_logrotate
     if [[ "${DO_FAIL2BAN:-false}" == "true" ]]; then
         echo "==> fail2ban jail for panel failed logins"
         flush_panel_fail2ban_bans

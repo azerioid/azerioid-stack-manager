@@ -14,15 +14,34 @@ final class BackupRestore
 {
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
-        $key = Validator::objectKey((string) ($args[0] ?? $input['key'] ?? ''));
         $passphrase = Validator::password((string) ($input['passphrase'] ?? ''));
-        $client = SpacesClient::fromInput($input['spaces'] ?? []);
-        $plain = ArchiveCrypto::decrypt($client->get($key), $passphrase);
+        $destination = strtolower(trim((string) ($input['destination'] ?? 'spaces')));
+        $keyArg = (string) ($args[0] ?? $input['key'] ?? '');
 
-        if ($action === 'backup.restore.db') {
-            return $this->restoreDb($runtime, $config, $plain, $input);
+        if ($destination === 'local') {
+            $key = Validator::localBackupPath($keyArg, $config->localBackupDir, $runtime);
+            $cipher = $runtime->readFile($key);
+        } elseif ($destination === 'spaces' || $destination === '') {
+            $key = Validator::objectKey($keyArg);
+            $client = SpacesClient::fromInput($input['spaces'] ?? []);
+            $cipher = $client->get($key);
+        } else {
+            throw new BrokerException('destination must be spaces or local.', 2);
         }
-        return $this->restoreFiles($runtime, $config, $plain, $input);
+
+        $plain = ArchiveCrypto::decrypt($cipher, $passphrase);
+
+        $storage = $destination === '' ? 'spaces' : $destination;
+        if ($action === 'backup.restore.db') {
+            return $this->restoreDb($runtime, $config, $plain, $input) + [
+                'key' => $key,
+                'storage' => $storage,
+            ];
+        }
+        return $this->restoreFiles($runtime, $config, $plain, $input) + [
+            'key' => $key,
+            'storage' => $storage,
+        ];
     }
 
     /** @param array<string,mixed> $input */

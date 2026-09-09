@@ -260,7 +260,7 @@ final class FakeBroker
                 'system.reboot-required' => ['required' => true, 'packages' => ['linux-image-6.8']],
                 'system.reboot' => $this->requireConfirm($stdin, 'REBOOT', ['accepted' => true]),
                 'scheduler.install' => ['path' => '/etc/cron.d/azerioid-panel', 'artisan' => '/usr/local/lib/azerioid-panel/web/artisan', 'user' => 'caddy'],
-                'updates.list' => ['total' => 12, 'security' => 3, 'source' => 'apt-check', 'packages' => [
+                'updates.list' => ['total' => 12, 'security' => 3, 'source' => 'apt-check', 'pkg_mgr' => 'apt', 'distro' => 'ubuntu', 'scope' => 'os-packages', 'packages' => [
                     ['name' => 'openssl', 'security' => true, 'raw' => 'Inst openssl [3.0] (3.0.1 Ubuntu:24.04/noble-security)'],
                     ['name' => 'curl', 'security' => false, 'raw' => 'Inst curl [8.5] (8.5.1 Ubuntu:24.04/noble-updates)'],
                 ]],
@@ -283,10 +283,8 @@ final class FakeBroker
                     'hook' => '/etc/letsencrypt/renewal-hooks/deploy/azerioid-reload.sh',
                     'installed' => true,
                 ],
-                'backup.db', 'backup.files', 'backup.caddy' => ['key' => 'azerioid/db/all/20260828T000000Z.bin', 'size' => 1024, 'kind' => 'db', 'name' => 'all', 'sha256' => str_repeat('a', 64)],
-                'backup.list' => ['objects' => [[
-                    'key' => 'azerioid/db/all/20260828T000000Z.bin', 'size' => 1024, 'last_modified' => '2026-08-28T00:00:00Z', 'kind' => 'db', 'name' => 'all',
-                ]]],
+                'backup.db', 'backup.files', 'backup.caddy' => $this->backupRun($action, $stdin),
+                'backup.list' => $this->backupList($stdin),
                 'backup.prune' => ['deleted' => [], 'keep' => 14],
                 'backup.restore.db' => $this->restoreDb($stdin),
                 'backup.restore.files' => $this->restoreFiles($stdin),
@@ -488,6 +486,56 @@ final class FakeBroker
      * @param  array<string,mixed>  $stdin
      * @return array<string,mixed>
      */
+
+    /** @param array<string,mixed> $stdin */
+    private function backupRun(string $action, array $stdin): array
+    {
+        $dest = (string) ($stdin['destination'] ?? 'spaces');
+        if ($dest === 'local') {
+            return [
+                'key' => '/var/lib/azerioid-panel/backups/db/all/20260828T000000Z.bin',
+                'size' => 1024,
+                'kind' => 'db',
+                'name' => 'all',
+                'sha256' => str_repeat('a', 64),
+                'destination' => 'local',
+                'encrypted' => true,
+                'pruned' => [],
+            ];
+        }
+        return [
+            'key' => 'azerioid/db/all/20260828T000000Z.bin',
+            'size' => 1024,
+            'kind' => 'db',
+            'name' => 'all',
+            'sha256' => str_repeat('a', 64),
+            'destination' => 'spaces',
+            'encrypted' => true,
+        ];
+    }
+
+    /** @param array<string,mixed> $stdin
+     * @return array{objects:list<array<string,mixed>>,destination:string}
+     */
+    private function backupList(array $stdin): array
+    {
+        $dest = (string) ($stdin['destination'] ?? 'spaces');
+        if ($dest === 'local') {
+            return ['objects' => [], 'destination' => 'local'];
+        }
+        return [
+            'objects' => [[
+                'key' => 'azerioid/db/all/20260828T000000Z.bin',
+                'size' => 1024,
+                'last_modified' => '2026-08-28T00:00:00Z',
+                'kind' => 'db',
+                'name' => 'all',
+                'destination' => 'spaces',
+            ]],
+            'destination' => 'spaces',
+        ];
+    }
+
     private function restoreDb(array $stdin): array
     {
         $target = (string) ($stdin['target'] ?? '');

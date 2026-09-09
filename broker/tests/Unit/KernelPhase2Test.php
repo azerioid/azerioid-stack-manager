@@ -90,6 +90,7 @@ final class KernelPhase2Test extends TestCase
     public function test_updates_list_splits_security(): void
     {
         $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n";
         $rt->files['/usr/lib/update-notifier/apt-check'] = '';
         $rt->script(['/usr/lib/update-notifier/apt-check'], 0, '', '12;3');
         $rt->script(
@@ -101,8 +102,71 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame(0, $code);
         $this->assertSame(12, $json['data']['total']);
         $this->assertSame(3, $json['data']['security']);
+        $this->assertSame('apt', $json['data']['pkg_mgr']);
+        $this->assertSame('os-packages', $json['data']['scope']);
         $this->assertTrue($json['data']['packages'][0]['security']);
         $this->assertFalse($json['data']['packages'][1]['security']);
+    }
+
+    public function test_updates_list_uses_dnf_on_el(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=almalinux\nVERSION_ID=\"9.8\"\n";
+        $rt->files['/usr/bin/dnf'] = "binary\n";
+        $rt->script(['/usr/bin/dnf', 'check-update', '--quiet'], 100,
+            "openssl.x86_64\t1:3.0.7-1.el9\tbaseos\ncurl.x86_64\t7.76.1-1.el9\tbaseos\n");
+        $rt->script(['/usr/bin/dnf', 'updateinfo', 'list', 'security', '--quiet'], 0,
+            "RHSA-2024:1000 Important/Sec. openssl-1:3.0.7-1.el9.x86_64\n");
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'updates.list']);
+        $this->assertSame(0, $code);
+        $this->assertSame('dnf', $json['data']['pkg_mgr']);
+        $this->assertSame(2, $json['data']['total']);
+        $this->assertGreaterThanOrEqual(1, $json['data']['security']);
+        $this->assertSame('os-packages', $json['data']['scope']);
+    }
+
+    public function test_local_backup_db_writes_encrypted_file_and_prunes(): void
+    {
+        $rt = new FakeRuntime();
+        $cfg = new Config();
+        $cfg->mysqlPassword = 'db-secret-password-xx';
+        $cfg->localBackupDir = '/var/lib/azerioid-panel/backups';
+        $cfg->stagingDir = '/var/lib/azerioid-panel/staging';
+        $rt->dirs[$cfg->localBackupDir] = true;
+        $rt->dirs[$cfg->stagingDir] = true;
+        // Seed older backups so prune keep=2 deletes extras.
+        $oldDir = $cfg->localBackupDir . '/db/all';
+        $rt->dirs[$oldDir] = true;
+        $rt->files[$oldDir . '/20260101T000000Z.bin'] = 'old1';
+        $rt->files[$oldDir . '/20260102T000000Z.bin'] = 'old2';
+        $rt->files[$oldDir . '/20260103T000000Z.bin'] = 'old3';
+        $rt->script([
+            '/usr/bin/mysqldump',
+            '--defaults-extra-file=/var/lib/azerioid-panel/staging/mysqldump.cnf',
+            '--protocol=socket',
+            '--socket=' . $cfg->mysqlSocket,
+            '--single-transaction',
+            '--quick',
+            '--routines',
+            '--skip-comments',
+            '--all-databases',
+        ], 0, '-- dump --');
+
+        [$code, $json] = $this->capture($this->kernel($rt, $cfg), ['broker', 'backup.db', 'all'], [
+            'destination' => 'local',
+            'passphrase' => 'abcdefghijklmnopqrst',
+            'keep' => 2,
+        ]);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertTrue($json['ok']);
+        $this->assertSame('local', $json['data']['destination']);
+        $this->assertTrue($json['data']['encrypted']);
+        $key = $json['data']['key'];
+        $this->assertStringStartsWith($cfg->localBackupDir . '/db/all/', $key);
+        $this->assertArrayHasKey($key, $rt->files);
+        $this->assertNotSame('-- dump --', $rt->files[$key]);
+        // keep=2 retains newest + this run; older pruned
+        $this->assertContains($oldDir . '/20260101T000000Z.bin', $json['data']['pruned']);
     }
 
     public function test_reboot_required_flag(): void

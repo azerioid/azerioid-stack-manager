@@ -44,6 +44,7 @@ final class Config
     public string $panelRoot = '/usr/local/lib/azerioid-panel';
     public string $artisanPath = '/usr/local/lib/azerioid-panel/web/artisan';
     public string $stagingDir = '/var/lib/azerioid-panel/staging';
+    public string $localBackupDir = '/var/lib/azerioid-panel/backups';
     public string $cronDPath = '/etc/cron.d/azerioid-panel';
     public string $webUser = 'caddy';
 
@@ -146,6 +147,7 @@ final class Config
         $cfg->managedComponentsPath = (string) ($data['paths']['managed_components'] ?? $cfg->managedComponentsPath);
         $cfg->artisanPath = (string) ($data['paths']['artisan'] ?? $cfg->artisanPath);
         $cfg->stagingDir = (string) ($data['paths']['staging_dir'] ?? $cfg->stagingDir);
+        $cfg->localBackupDir = (string) ($data['paths']['local_backup_dir'] ?? $cfg->localBackupDir);
         $cfg->cronDPath = (string) ($data['paths']['cron_d'] ?? $cfg->cronDPath);
         $cfg->ttydBin = (string) ($data['paths']['ttyd_bin'] ?? $cfg->ttydBin);
         $cfg->terminalSessionsPath = (string) ($data['paths']['terminal_sessions'] ?? $cfg->terminalSessionsPath);

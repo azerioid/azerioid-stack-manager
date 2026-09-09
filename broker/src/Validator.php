@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker;
 
+
 final class Validator
 {
     public const DOMAIN_PATTERN = '/^(?=.{1,253}$)([a-z0-9](-?[a-z0-9])*\.)+[a-z]{2,}$/';
@@ -299,6 +300,19 @@ final class Validator
             throw new BrokerException('Confirmation phrase did not match.', 3);
         }
         return $got;
+    }
+
+    public static function localBackupPath(string $path, string $base, Runtime $runtime): string
+    {
+        $path = trim($path);
+        if ($path === '' || str_contains($path, "\0") || !str_ends_with($path, '.bin')) {
+            throw new BrokerException('Invalid local backup path.', 2);
+        }
+        $resolved = $runtime->resolveUnderBase($path, $base);
+        if ($resolved === null || !$runtime->fileExists($resolved)) {
+            throw new BrokerException('Local backup path is outside the backup root or missing.', 3);
+        }
+        return $resolved;
     }
 
     public static function objectKey(string $key): string

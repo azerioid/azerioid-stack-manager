@@ -50,4 +50,22 @@ final class TotpService
     {
         $user->forceFill(['two_factor_confirmed_at' => now()])->save();
     }
+
+    public function disable(User $user): void
+    {
+        $user->forceFill([
+            'two_factor_secret' => null,
+            'two_factor_confirmed_at' => null,
+            'two_factor_recovery_codes' => null,
+        ])->save();
+    }
+
+    /** Begin re-enrollment: new secret, unconfirmed until a valid code is entered. */
+    public function beginReset(User $user): string
+    {
+        $secret = $this->generateSecret();
+        $this->storeUnconfirmed($user, $secret);
+
+        return $secret;
+    }
 }

@@ -6,9 +6,15 @@
         <pre class="max-h-64 overflow-auto rounded-md border border-bad/40 bg-bad/10 px-4 py-3 font-mono text-xs text-bad">{{ $error }}</pre>
     @endif
 
+    <p class="text-sm text-zinc-400">
+        Counts pending <strong class="font-medium text-zinc-200">OS package updates</strong> on this host
+        ({{ $pkgMgr !== '' ? $pkgMgr : 'package manager' }}{{ $updateSource !== '' ? ' · '.$updateSource : '' }}{{ $distro !== '' ? ' · '.$distro : '' }}).
+        This is not a panel self-update — the stack manager itself is not upgraded from this page.
+    </p>
+
     <section class="grid gap-4 sm:grid-cols-3">
         <div class="panel p-5">
-            <div class="text-xs uppercase tracking-wide text-zinc-500">Pending updates</div>
+            <div class="text-xs uppercase tracking-wide text-zinc-500">Pending OS packages</div>
             <div class="mt-2 font-mono text-2xl">{{ $total }}</div>
         </div>
         <div class="panel p-5">
@@ -25,11 +31,15 @@
     </section>
 
     <form class="panel space-y-3 p-5" onsubmit="return false;">
-        <p class="text-sm text-zinc-400">Type the confirmation phrase, then run. Security uses <span class="font-mono">unattended-upgrade</span>. Apply-all may restart services. Reboot takes <strong>every site</strong> down.</p>
+        <p class="text-sm text-zinc-400">
+            Type the confirmation phrase, then run.
+            On apt hosts, security uses <span class="font-mono">unattended-upgrade</span>; on EL, <span class="font-mono">dnf update --security</span>.
+            Apply-all may restart services. Reboot takes <strong>every site</strong> down.
+        </p>
         <input class="field max-w-md" wire:model="confirm" placeholder="APPLY-SECURITY / APPLY-ALL / REBOOT">
         <div class="flex flex-wrap gap-2">
             <button type="button" class="btn-primary" wire:click="applySecurity" wire:confirm="Apply security updates only?">Apply security</button>
-            <button type="button" class="btn-ghost" wire:click="applyAll" wire:confirm="Apply ALL updates? Services may restart.">Apply all</button>
+            <button type="button" class="btn-ghost" wire:click="applyAll" wire:confirm="Apply ALL OS package updates? Services may restart.">Apply all</button>
             <button type="button" class="btn-danger" wire:click="reboot" wire:confirm="This reboots the whole droplet. Continue?">Reboot host</button>
         </div>
     </form>
@@ -39,7 +49,7 @@
     @endif
 
     <section class="panel overflow-hidden">
-        <div class="border-b border-white/5 px-5 py-3 text-xs uppercase tracking-wide text-zinc-500">Packages (simulated list, first 200)</div>
+        <div class="border-b border-white/5 px-5 py-3 text-xs uppercase tracking-wide text-zinc-500">Packages (first 200)</div>
         <div class="divide-y divide-white/5">
             @foreach ($packages as $p)
                 <div class="flex justify-between px-5 py-2 font-mono text-xs">

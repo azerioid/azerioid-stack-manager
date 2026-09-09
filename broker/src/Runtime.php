@@ -17,6 +17,8 @@ interface Runtime
 
     public function fileExists(string $path): bool;
 
+    public function fileSize(string $path): int;
+
     public function isDir(string $path): bool;
 
     public function mkdir(string $path, int $mode = 0755): void;

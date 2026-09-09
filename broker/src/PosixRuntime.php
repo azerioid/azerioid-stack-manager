@@ -162,6 +162,18 @@ final class PosixRuntime implements Runtime
         return file_exists($path);
     }
 
+    public function fileSize(string $path): int
+    {
+        if (!is_file($path)) {
+            throw new BrokerException("Unable to size {$path}.", 1);
+        }
+        $size = filesize($path);
+        if ($size === false) {
+            throw new BrokerException("Unable to size {$path}.", 1);
+        }
+        return (int) $size;
+    }
+
     public function isDir(string $path): bool
     {
         return is_dir($path);
