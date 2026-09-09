@@ -37,7 +37,9 @@ EOF
 
     local mariadb_cnf
     mariadb_cnf="$(mariadb_server_cnf || true)"
-    mariadb_cnf="${mariadb_cnf:-/etc/mysql/mariadb.conf.d/50-server.cnf}"
+    if [[ -z "${mariadb_cnf}" ]]; then
+        mariadb_cnf="$(mariadb_server_cnf_default)"
+    fi
 
     if [[ ! -f /etc/azerioid-panel/broker.json ]]; then
         cat > /etc/azerioid-panel/broker.json <<EOF

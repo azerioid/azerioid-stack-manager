@@ -35,6 +35,23 @@ mariadb_server_cnf() {
         /etc/my.cnf.d/server.cnf
 }
 
+# Bootstrap-only default when no cnf exists on disk yet (pre-package or empty tree).
+# Uses DISTRO_FAMILY from detect-os.sh — never assume Debian.
+mariadb_server_cnf_default() {
+    case "${DISTRO_FAMILY:-}" in
+        ubuntu|debian)
+            echo /etc/mysql/mariadb.conf.d/50-server.cnf
+            ;;
+        el)
+            echo /etc/my.cnf.d/mariadb-server.cnf
+            ;;
+        *)
+            echo "mariadb_server_cnf_default: DISTRO_FAMILY unset or unsupported (${DISTRO_FAMILY:-empty}); cannot pick MariaDB config path" >&2
+            return 1
+            ;;
+    esac
+}
+
 mariadb_socket() {
     os_first_file \
         /run/mysqld/mysqld.sock \
