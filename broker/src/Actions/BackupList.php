@@ -83,8 +83,9 @@ final class BackupList
 
     private function stampToIso(string $stamp): ?string
     {
-        // 20260909T123456Z
-        if (!preg_match('/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/', $stamp, $m)) {
+        // 20260909T123456123456Z (seconds + microseconds)
+        if (!preg_match('/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{6})Z$/', $stamp, $m)
+            && !preg_match('/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/', $stamp, $m)) {
             return null;
         }
         return sprintf('%s-%s-%sT%s:%s:%sZ', $m[1], $m[2], $m[3], $m[4], $m[5], $m[6]);

@@ -17,7 +17,7 @@ final class BackupRun
     {
         $passphrase = Validator::password((string) ($input['passphrase'] ?? ''));
         $destination = $this->destination($input);
-        $stamp = gmdate('Ymd\THis\Z');
+        $stamp = gmdate('Ymd\THis') . sprintf('%06d', (int) ((microtime(true) - floor(microtime(true))) * 1_000_000)) . 'Z';
         $keep = max(1, min(365, (int) ($input['keep'] ?? 14)));
 
         $plain = match ($action) {
