@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Web;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\CaddyApply;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
@@ -138,8 +139,10 @@ final class VhostFrontRouter implements WebServerDriver
     {
         return array_values(array_unique(array_merge(
             (new CaddyDriver())->backupPaths($config),
-            ['/etc/apache2/sites-available', '/etc/apache2/sites-enabled', '/etc/httpd/conf.d'],
-            ['/etc/nginx/sites-available', '/etc/nginx/sites-enabled', '/etc/nginx/conf.d'],
+            DistroPaths::probeList('apache.vhost_available'),
+            DistroPaths::probeList('apache.vhost_dir'),
+            DistroPaths::probeList('nginx.vhost_available'),
+            DistroPaths::probeList('nginx.vhost_dir'),
         )));
     }
 

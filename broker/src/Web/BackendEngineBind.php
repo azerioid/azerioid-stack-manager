@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Web;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Network\SiteHttpFirewall;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 
 /**
@@ -57,9 +58,7 @@ final class BackendEngineBind
         // Leftover /etc/apache2 or /etc/nginx after a package purge is not an
         // install. Match component.status: the engine binary must exist.
         if ($engine === VhostEngine::APACHE) {
-            return $this->runtime->fileExists('/usr/sbin/apache2ctl')
-                || $this->runtime->fileExists('/usr/sbin/apachectl')
-                || $this->runtime->fileExists('/usr/sbin/httpd');
+            return DistroPaths::for($this->runtime, $this->config)->apacheCtlBin() !== null;
         }
 
         return $this->runtime->fileExists('/usr/sbin/nginx');
@@ -70,52 +69,58 @@ final class BackendEngineBind
     {
         $addr = VhostEngine::backendAddress($this->config, VhostEngine::APACHE);
         $listenLine = 'Listen ' . $addr;
+        $layout = DistroPaths::for($this->runtime, $this->config);
         $rewritten = [];
-        foreach (['/etc/apache2/ports.conf', '/etc/httpd/conf/httpd.conf'] as $path) {
-            if (!$this->runtime->fileExists($path)) {
-                continue;
-            }
+        foreach ($layout->apacheListenConfigs() as $path) {
             $this->runtime->writeFile($path, $this->rewriteApacheListen($this->runtime->readFile($path), $listenLine), 0644);
             $rewritten[] = $path;
         }
 
         // Ubuntu includes Listen from ports.conf; do not also Listen in conf-enabled
         // (AH00526: Cannot define multiple Listeners on the same IP:port).
-        if ($this->runtime->isDir('/etc/httpd/conf.d')) {
+        $confD = $layout->apacheConfDDir();
+        if ($confD !== null) {
             $this->runtime->writeFile(
-                '/etc/httpd/conf.d/00-azerioid-remoteip.conf',
+                rtrim($confD, '/') . '/00-azerioid-remoteip.conf',
                 $this->apacheForwardedClientConf($addr),
                 0644
             );
         }
-        if ($this->runtime->isDir('/etc/apache2/conf-available')) {
-            $snippet = '/etc/apache2/conf-available/azerioid-backend.conf';
+        $avail = $layout->apacheConfAvailableDir();
+        if ($avail !== null) {
+            $snippet = rtrim($avail, '/') . '/azerioid-backend.conf';
             $this->runtime->writeFile($snippet, $this->apacheForwardedClientConf($addr), 0644);
-            if (!$this->runtime->isDir('/etc/apache2/conf-enabled')) {
-                $this->runtime->mkdir('/etc/apache2/conf-enabled', 0755);
+            $enabledDir = $layout->apacheConfEnabledDir();
+            if ($enabledDir === null) {
+                $enabledDir = rtrim($avail, '/') . '/../conf-enabled';
+                $enabledDir = $this->runtime->isDir($enabledDir) ? $enabledDir : rtrim($avail, '/');
+                if (!$this->runtime->isDir($enabledDir)) {
+                    $this->runtime->mkdir($enabledDir, 0755);
+                }
             }
-            $enabled = '/etc/apache2/conf-enabled/azerioid-backend.conf';
-            if (!$this->runtime->fileExists($enabled) && $this->runtime->fileExists('/usr/sbin/a2enconf')) {
-                $this->runtime->exec(['/usr/sbin/a2enconf', 'azerioid-backend'], null, 15);
+            $enabled = rtrim($enabledDir, '/') . '/azerioid-backend.conf';
+            $a2enconf = $layout->apacheHelper('a2enconf');
+            if (!$this->runtime->fileExists($enabled) && $a2enconf !== null) {
+                $this->runtime->exec([$a2enconf, 'azerioid-backend'], null, 15);
             } elseif (!$this->runtime->fileExists($enabled)) {
                 $this->runtime->writeFile($enabled, $this->runtime->readFile($snippet), 0644);
             }
         }
 
-        foreach (['proxy', 'proxy_fcgi', 'rewrite', 'headers', 'setenvif', 'remoteip'] as $mod) {
-            if ($this->runtime->fileExists('/usr/sbin/a2enmod')) {
-                $this->runtime->exec(['/usr/sbin/a2enmod', $mod], null, 15);
+        $a2enmod = $layout->apacheHelper('a2enmod');
+        if ($a2enmod !== null) {
+            foreach (['proxy', 'proxy_fcgi', 'rewrite', 'headers', 'setenvif', 'remoteip'] as $mod) {
+                $this->runtime->exec([$a2enmod, $mod], null, 15);
             }
         }
-        foreach (['000-default', 'default-ssl'] as $site) {
-            if ($this->runtime->fileExists('/usr/sbin/a2dissite')) {
-                $this->runtime->exec(['/usr/sbin/a2dissite', $site], null, 15);
+        $a2dissite = $layout->apacheHelper('a2dissite');
+        if ($a2dissite !== null) {
+            foreach (['000-default', 'default-ssl'] as $site) {
+                $this->runtime->exec([$a2dissite, $site], null, 15);
             }
         }
 
-        $unit = $this->runtime->fileExists('/usr/sbin/httpd') && !$this->runtime->isDir('/etc/apache2')
-            ? 'httpd'
-            : 'apache2';
+        $unit = $layout->apacheUnit();
         $this->reloadUnit($unit);
 
         return ['listen' => $addr, 'rewritten' => $rewritten, 'unit' => $unit];
@@ -126,19 +131,21 @@ final class BackendEngineBind
     {
         $addr = VhostEngine::backendAddress($this->config, VhostEngine::NGINX);
         [$host, $port] = explode(':', $addr, 2);
-        if ($this->runtime->isDir('/etc/nginx/conf.d') || $this->runtime->isDir('/etc/nginx')) {
-            if (!$this->runtime->isDir('/etc/nginx/conf.d')) {
-                $this->runtime->mkdir('/etc/nginx/conf.d', 0755);
+        $confD = DistroPaths::for($this->runtime, $this->config)->nginxConfDDir();
+        if ($confD !== null) {
+            if (!$this->runtime->isDir($confD)) {
+                $this->runtime->mkdir($confD, 0755);
             }
             $this->runtime->writeFile(
-                '/etc/nginx/conf.d/00-azerioid-backend.conf',
+                rtrim($confD, '/') . '/00-azerioid-backend.conf',
                 $this->nginxForwardedClientConf($host, $port),
                 0644
             );
         }
+        $nginxLayout = DistroPaths::for($this->runtime, $this->config)->nginxSiteLayout();
         foreach ([
-            '/etc/nginx/sites-enabled/default',
-            '/etc/nginx/sites-enabled/default.conf',
+            rtrim($nginxLayout['vhost_dir'], '/') . '/default',
+            rtrim($nginxLayout['vhost_dir'], '/') . '/default.conf',
         ] as $default) {
             if ($this->runtime->fileExists($default)) {
                 $this->runtime->deleteFile($default);

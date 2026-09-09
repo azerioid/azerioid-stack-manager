@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Database;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Component\OperationLogger;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Secrets;
 use AzerioidPanel\Broker\Systemd;
@@ -122,40 +123,30 @@ final class DatabaseProvisioner
 
     private function secureMariaDbBind(OperationLogger $log): void
     {
-        $paths = [
-            '/etc/mysql/mariadb.conf.d/50-server.cnf',
-            '/etc/my.cnf.d/server.cnf',
-            '/etc/my.cnf.d/mariadb-server.cnf',
-        ];
-        foreach ($paths as $path) {
-            if (!$this->runtime->fileExists($path)) {
-                continue;
-            }
-            $log->info("Setting bind-address=127.0.0.1 in {$path}");
-            $content = $this->runtime->readFile($path);
-            if (preg_match('/^#?\s*bind-address\s*=/m', $content) === 1) {
-                $content = preg_replace('/^#?\s*bind-address\s*=.*/m', 'bind-address = 127.0.0.1', $content) ?? $content;
-            } elseif (preg_match('/^\[mysqld\]/m', $content) === 1) {
-                $content = preg_replace(
-                    '/^(\[mysqld\][^\[]*)/m',
-                    "$1\nbind-address = 127.0.0.1",
-                    $content,
-                    1
-                ) ?? $content;
-            } else {
-                $content .= "\n[mysqld]\nbind-address = 127.0.0.1\n";
-            }
-            $this->runtime->writeFile($path, $content, 0644);
+        $path = DistroPaths::for($this->runtime, $this->config)->mariadbServerCnf();
+        if ($path === null) {
+            return;
         }
+        $log->info("Setting bind-address=127.0.0.1 in {$path}");
+        $content = $this->runtime->readFile($path);
+        if (preg_match('/^#?\s*bind-address\s*=/m', $content) === 1) {
+            $content = preg_replace('/^#?\s*bind-address\s*=.*/m', 'bind-address = 127.0.0.1', $content) ?? $content;
+        } elseif (preg_match('/^\[mysqld\]/m', $content) === 1) {
+            $content = preg_replace(
+                '/^(\[mysqld\][^\[]*)/m',
+                "$1\nbind-address = 127.0.0.1",
+                $content,
+                1
+            ) ?? $content;
+        } else {
+            $content .= "\n[mysqld]\nbind-address = 127.0.0.1\n";
+        }
+        $this->runtime->writeFile($path, $content, 0644);
     }
 
     private function securePostgreSqlListen(OperationLogger $log): void
     {
-        $candidates = array_merge(
-            $this->runtime->glob('/etc/postgresql/*/main/postgresql.conf'),
-            $this->runtime->glob('/var/lib/pgsql/*/data/postgresql.conf'),
-            ['/var/lib/pgsql/data/postgresql.conf']
-        );
+        $candidates = DistroPaths::for($this->runtime, $this->config)->postgresqlConfFiles();
         foreach ($candidates as $path) {
             if (!$this->runtime->fileExists($path)) {
                 continue;
@@ -181,11 +172,7 @@ final class DatabaseProvisioner
      */
     private function securePostgreSqlHba(OperationLogger $log): void
     {
-        $candidates = array_merge(
-            $this->runtime->glob('/etc/postgresql/*/main/pg_hba.conf'),
-            $this->runtime->glob('/var/lib/pgsql/*/data/pg_hba.conf'),
-            ['/var/lib/pgsql/data/pg_hba.conf']
-        );
+        $candidates = DistroPaths::for($this->runtime, $this->config)->postgresqlHbaFiles();
         foreach ($candidates as $path) {
             if (!$this->runtime->fileExists($path)) {
                 continue;
@@ -275,12 +262,8 @@ final class DatabaseProvisioner
 
     private function detectMariaSocket(): string
     {
-        foreach (['/run/mysqld/mysqld.sock', '/var/lib/mysql/mysql.sock', '/tmp/mysql.sock'] as $path) {
-            if ($this->runtime->fileExists($path)) {
-                return $path;
-            }
-        }
+        $socket = DistroPaths::for($this->runtime, $this->config)->mariadbSocket();
 
-        return $this->config->mysqlSocket;
+        return $socket ?? $this->config->mysqlSocket;
     }
 }

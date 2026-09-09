@@ -6,27 +6,95 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [
-    { "port": 8081, "bind": "127.0.0.1", "owner": "apache", "protocol": "tcp" }
+    {
+      "port": 8081,
+      "bind": "127.0.0.1",
+      "owner": "apache",
+      "protocol": "tcp"
+    }
   ],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["apache2", "libapache2-mod-fcgid"],
+      "packages": [
+        "apache2",
+        "libapache2-mod-fcgid"
+      ],
       "unit_name": "apache2",
-      "detect": { "packages": ["apache2"], "unit": "apache2", "command": "apache2 -v" }
+      "detect": {
+        "packages": [
+          "apache2"
+        ],
+        "unit": "apache2",
+        "command": "apache2 -v"
+      },
+      "paths": {
+        "main_config": "/etc/apache2/apache2.conf",
+        "ports_conf": "/etc/apache2/ports.conf",
+        "vhost_dir": "/etc/apache2/sites-enabled",
+        "vhost_available": "/etc/apache2/sites-available",
+        "conf_available": "/etc/apache2/conf-available",
+        "conf_enabled": "/etc/apache2/conf-enabled",
+        "web_log_dir": "/var/log/apache2",
+        "apache_ctl": "/usr/sbin/apache2ctl"
+      }
     },
     "debian": {
-      "packages": ["apache2", "libapache2-mod-fcgid"],
+      "packages": [
+        "apache2",
+        "libapache2-mod-fcgid"
+      ],
       "unit_name": "apache2",
-      "detect": { "packages": ["apache2"], "unit": "apache2", "command": "apache2 -v" }
+      "detect": {
+        "packages": [
+          "apache2"
+        ],
+        "unit": "apache2",
+        "command": "apache2 -v"
+      },
+      "paths": {
+        "main_config": "/etc/apache2/apache2.conf",
+        "ports_conf": "/etc/apache2/ports.conf",
+        "vhost_dir": "/etc/apache2/sites-enabled",
+        "vhost_available": "/etc/apache2/sites-available",
+        "conf_available": "/etc/apache2/conf-available",
+        "conf_enabled": "/etc/apache2/conf-enabled",
+        "web_log_dir": "/var/log/apache2",
+        "apache_ctl": "/usr/sbin/apache2ctl"
+      }
     },
     "el": {
-      "packages": ["httpd", "mod_fcgid"],
+      "packages": [
+        "httpd",
+        "mod_fcgid"
+      ],
       "unit_name": "httpd",
-      "detect": { "packages": ["httpd"], "unit": "httpd", "command": "httpd -v" }
+      "detect": {
+        "packages": [
+          "httpd"
+        ],
+        "unit": "httpd",
+        "command": "httpd -v"
+      },
+      "paths": {
+        "main_config": "/etc/httpd/conf/httpd.conf",
+        "ports_conf": "/etc/httpd/conf/httpd.conf",
+        "vhost_dir": "/etc/httpd/conf.d/vhost",
+        "vhost_available": "/etc/httpd/conf.d/vhost",
+        "conf_d": "/etc/httpd/conf.d",
+        "web_log_dir": "/var/log/httpd",
+        "apache_ctl": "/usr/sbin/apachectl"
+      }
     }
   },
-  "preflight": { "min_disk_gb": 1, "min_ram_mb": 512 }
+  "preflight": {
+    "min_disk_gb": 1,
+    "min_ram_mb": 512
+  }
 }

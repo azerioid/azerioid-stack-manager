@@ -44,7 +44,7 @@ final class DbAccessApply
 
         $engineResult = match ($engine) {
             'mariadb' => (new MariaDBAccess($this->runtime))->apply($name, $user, $mode, $ips),
-            'postgresql' => (new PostgreSQLAccess($this->runtime))->apply($name, $user, $mode, $ips),
+            'postgresql' => (new PostgreSQLAccess($this->runtime, $this->config))->apply($name, $user, $mode, $ips),
             'mongodb' => (new MongoAccess())->apply($name, $mode, $ips),
             default => throw new BrokerException('Unknown database engine.', 2),
         };

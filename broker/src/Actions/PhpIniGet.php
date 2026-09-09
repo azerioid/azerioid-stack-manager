@@ -13,7 +13,7 @@ final class PhpIniGet
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $version = Validator::phpVersion($args[0] ?? ($input['php_version'] ?? ''), $runtime->phpVersions());
-        $path = $config->phpIniPath($version);
+        $path = $config->phpIniPath($version, $runtime);
         if (!$runtime->fileExists($path)) {
             throw new BrokerException('php.ini not found for this version.', 3);
         }

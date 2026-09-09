@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker;
 
+use AzerioidPanel\Broker\Os\DistroPaths;
+
 final class Config
 {
     public const CADDYFILE = '/etc/caddy/Caddyfile';
@@ -130,13 +132,7 @@ final class Config
         $cfg->apacheCtl = (string) ($data['paths']['apache_ctl'] ?? $cfg->apacheCtl);
         if ($cfg->stack === 'lamp') {
             $cfg->webServer = (string) ($data['web_server'] ?? 'apache');
-            $cfg->webService = (string) ($data['web_service'] ?? 'apache2');
             $cfg->vhostFormat = (string) ($data['vhost_format'] ?? 'apache');
-            $cfg->vhostDir = (string) ($data['paths']['vhost_dir'] ?? '/etc/apache2/sites-enabled');
-            $cfg->vhostAvailableDir = (string) ($data['paths']['vhost_available'] ?? '/etc/apache2/sites-available');
-            $cfg->webLogDir = (string) ($data['paths']['web_log_dir'] ?? ($cfg->webService === 'httpd' ? '/var/log/httpd' : '/var/log/apache2'));
-            $cfg->controllableServices = [$cfg->webService, 'mariadb'];
-            $cfg->logPaths['caddy'] = rtrim($cfg->webLogDir, '/') . '/access.log';
         } else {
             $cfg->vhostDir = (string) ($data['paths']['vhost_dir'] ?? $cfg->caddyConfD);
             $cfg->vhostAvailableDir = (string) ($data['paths']['vhost_available'] ?? '');
@@ -251,6 +247,16 @@ final class Config
                 $cfg->backendBind = $fr['bind'];
             }
         }
+        if ($cfg->stack === 'lamp') {
+            $layout = DistroPaths::for($runtime, $cfg)->apacheSiteLayout();
+            $cfg->webService = (string) ($data['web_service'] ?? $layout['web_service']);
+            $cfg->vhostDir = (string) ($data['paths']['vhost_dir'] ?? $layout['vhost_dir']);
+            $cfg->vhostAvailableDir = (string) ($data['paths']['vhost_available'] ?? $layout['vhost_available']);
+            $cfg->webLogDir = (string) ($data['paths']['web_log_dir'] ?? $layout['web_log_dir']);
+            $cfg->apacheCtl = (string) ($data['paths']['apache_ctl'] ?? $layout['apache_ctl']);
+            $cfg->controllableServices = [$cfg->webService, 'mariadb'];
+            $cfg->logPaths['caddy'] = rtrim($cfg->webLogDir, '/') . '/access.log';
+        }
         return $cfg;
     }
 
@@ -259,18 +265,14 @@ final class Config
         $c = clone $this;
         $c->webServer = 'apache';
         $c->vhostFormat = 'apache';
-        if ($runtime->isDir('/etc/httpd/conf') || ($runtime->fileExists('/usr/sbin/httpd') && !$runtime->isDir('/etc/apache2'))) {
-            $c->webService = 'httpd';
-            $c->vhostDir = '/etc/httpd/conf.d';
-            $c->vhostAvailableDir = '';
-            $c->webLogDir = '/var/log/httpd';
-            $c->apacheCtl = '/usr/sbin/httpd';
-            $c->webUser = $c->webUser === 'caddy' ? 'apache' : $c->webUser;
-        } else {
-            $c->webService = 'apache2';
-            $c->vhostDir = '/etc/apache2/sites-enabled';
-            $c->vhostAvailableDir = '/etc/apache2/sites-available';
-            $c->webLogDir = '/var/log/apache2';
+        $layout = DistroPaths::for($runtime, $c)->apacheSiteLayout();
+        $c->webService = $layout['web_service'];
+        $c->vhostDir = $layout['vhost_dir'];
+        $c->vhostAvailableDir = $layout['vhost_available'];
+        $c->webLogDir = $layout['web_log_dir'];
+        $c->apacheCtl = $layout['apache_ctl'];
+        if ($c->webService === 'httpd' && $c->webUser === 'caddy') {
+            $c->webUser = 'apache';
         }
 
         return $c;
@@ -282,14 +284,11 @@ final class Config
         $c->webServer = 'nginx';
         $c->webService = 'nginx';
         $c->vhostFormat = 'nginx';
-        $c->webLogDir = '/var/log/nginx';
-        if ($runtime->isDir('/etc/nginx/sites-available')) {
-            $c->vhostDir = '/etc/nginx/sites-enabled';
-            $c->vhostAvailableDir = '/etc/nginx/sites-available';
-        } else {
-            $c->vhostDir = '/etc/nginx/conf.d';
-            $c->vhostAvailableDir = '';
-        }
+        $layout = DistroPaths::for($runtime, $c)->nginxSiteLayout();
+        $c->webService = $layout['web_service'];
+        $c->vhostDir = $layout['vhost_dir'];
+        $c->vhostAvailableDir = $layout['vhost_available'];
+        $c->webLogDir = $layout['web_log_dir'];
 
         return $c;
     }
@@ -302,39 +301,80 @@ final class Config
         return $runtime;
     }
 
-    public function phpFpmService(string $version): string
+    /**
+     * Distro-correct PHP-FPM unit for a version (php8.4-fpm on Debian/Ubuntu,
+     * php83-php-fpm / php-fpm on EL/Remi). Probes loaded units when a runtime
+     * is provided so Services/Overview never show phantom Debian names on EL.
+     */
+    public function phpFpmService(string $version, ?Runtime $runtime = null): string
     {
-        return 'php' . $version . '-fpm';
+        $layout = DistroPaths::for($runtime ?? new FakeRuntime(), $this);
+        if ($runtime !== null) {
+            return $layout->phpFpmUnit($version);
+        }
+
+        return $layout->phpFpmUnitCandidates($version)[0];
+    }
+
+    /** @return list<string> */
+    public function phpFpmServiceCandidates(string $version, ?Runtime $runtime = null): array
+    {
+        return DistroPaths::for($runtime ?? new FakeRuntime(), $this)->phpFpmUnitCandidates($version);
+    }
+
+    public function resolveMariadbServerCnf(?Runtime $runtime = null): ?string
+    {
+        if ($runtime !== null) {
+            return DistroPaths::for($runtime, $this)->mariadbServerCnf();
+        }
+        $candidates = array_values(array_unique(array_filter([
+            $this->mariadbServerCnf,
+            ...DistroPaths::probeList('mariadb.server_cnf'),
+        ])));
+        foreach ($candidates as $path) {
+            if ($path !== '' && is_file($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     public function phpFpmSocket(string $version, ?Runtime $runtime = null): string
     {
-        $paths = [
-            '/run/php/php-fpm.sock',
-            "/run/php/php{$version}-fpm.sock",
-            '/run/php-fpm/www.sock',
-        ];
-        foreach ($paths as $path) {
-            if (str_contains($path, 'azerioid-panel')) {
-                continue;
-            }
-            $exists = $runtime !== null ? $runtime->fileExists($path) : is_file($path);
-            if ($exists) {
+        $layout = DistroPaths::for($runtime ?? new FakeRuntime(), $this);
+        if ($runtime !== null) {
+            return 'unix/' . $layout->phpFpmUnixSocket($version);
+        }
+        foreach ($layout->phpFpmSocketPaths($version) as $path) {
+            if ($path !== '' && is_file($path)) {
                 return 'unix/' . $path;
             }
         }
-        return "unix//run/php/php{$version}-fpm.sock";
+
+        return 'unix/' . $layout->phpFpmUnixSocket($version);
     }
 
     public function phpFpmUnixPath(string $version, ?Runtime $runtime = null): string
     {
         $sock = $this->phpFpmSocket($version, $runtime);
-        return preg_replace('#^unix/+#', '/', $sock) ?? "/run/php/php{$version}-fpm.sock";
+
+        return preg_replace('#^unix/+#', '/', $sock) ?? DistroPaths::for($runtime ?? new FakeRuntime(), $this)->phpFpmUnixSocket($version);
     }
 
-    public function phpIniPath(string $version): string
+    public function phpIniPath(string $version, ?Runtime $runtime = null): string
     {
-        return "/etc/php/{$version}/fpm/php.ini";
+        $layout = DistroPaths::for($runtime ?? new FakeRuntime(), $this);
+        if ($runtime !== null) {
+            return $layout->phpIni($version) ?? ($layout->phpIniCandidates($version)[0] ?? '/etc/php.ini');
+        }
+        foreach ($layout->phpIniCandidates($version) as $path) {
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return $layout->phpIniCandidates($version)[0] ?? '/etc/php.ini';
     }
 
     public function controllableServiceList(Runtime $runtime): array
@@ -345,7 +385,11 @@ final class Config
             $list[] = $unit;
         }
         foreach ($runtime->phpVersions() as $ver) {
-            $list[] = $this->phpFpmService($ver);
+            $unit = $this->phpFpmService($ver, $runtime);
+            if (Systemd::loadState($runtime, $unit) === 'not-found') {
+                continue;
+            }
+            $list[] = $unit;
         }
         return array_values(array_unique($list));
     }

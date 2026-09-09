@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Database;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Systemd;
 
@@ -32,12 +33,7 @@ final class DbAccessBind
     private function mariadb(bool $public): array
     {
         $want = $public ? '0.0.0.0' : '127.0.0.1';
-        $path = $this->firstExisting([
-            $this->config->mariadbServerCnf,
-            '/etc/mysql/mariadb.conf.d/50-server.cnf',
-            '/etc/my.cnf.d/server.cnf',
-            '/etc/my.cnf.d/mariadb-server.cnf',
-        ]);
+        $path = DistroPaths::for($this->runtime, $this->config)->mariadbServerCnf();
         if ($path === null) {
             return ['changed' => false, 'listen' => $want, 'path' => null, 'restarted' => false];
         }
@@ -63,11 +59,8 @@ final class DbAccessBind
     {
         $want = $public ? '*' : 'localhost';
         $quoted = "'" . $want . "'";
-        $path = $this->firstExisting(array_merge(
-            $this->runtime->glob('/etc/postgresql/*/main/postgresql.conf'),
-            $this->runtime->glob('/var/lib/pgsql/*/data/postgresql.conf'),
-            ['/var/lib/pgsql/data/postgresql.conf']
-        ));
+        $files = DistroPaths::for($this->runtime, $this->config)->postgresqlConfFiles();
+        $path = $files[0] ?? null;
         if ($path === null) {
             return ['changed' => false, 'listen' => $want, 'path' => null, 'restarted' => false];
         }
@@ -90,7 +83,7 @@ final class DbAccessBind
     private function mongodb(bool $public): array
     {
         $want = $public ? '0.0.0.0' : '127.0.0.1';
-        $path = $this->firstExisting(['/etc/mongod.conf', '/etc/mongodb.conf']);
+        $path = DistroPaths::for($this->runtime, $this->config)->mongodbConfig();
         if ($path === null) {
             return ['changed' => false, 'listen' => $want, 'path' => null, 'restarted' => false];
         }
@@ -133,26 +126,6 @@ final class DbAccessBind
     /** @return list<string> */
     private function postgresUnits(): array
     {
-        $units = [];
-        foreach ($this->runtime->glob('/etc/postgresql/*/main/postgresql.conf') as $path) {
-            if (preg_match('#/postgresql/(\d+)/main/#', $path, $m) === 1) {
-                $units[] = 'postgresql@' . $m[1] . '-main';
-            }
-        }
-        $units[] = 'postgresql';
-
-        return array_values(array_unique($units));
-    }
-
-    /** @param  list<string>  $paths */
-    private function firstExisting(array $paths): ?string
-    {
-        foreach ($paths as $path) {
-            if ($path !== '' && $this->runtime->fileExists($path)) {
-                return $path;
-            }
-        }
-
-        return null;
+        return DistroPaths::for($this->runtime, $this->config)->postgresqlUnits();
     }
 }

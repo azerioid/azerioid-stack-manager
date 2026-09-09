@@ -9,6 +9,11 @@ fi
 
 PREFIX="${PREFIX:-/usr/local/lib/azerioid-panel}"
 PANEL_PHP_VERSION="${PANEL_PHP_VERSION:-8.4}"
+UNINSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${UNINSTALL_DIR}/lib/os-paths.sh" ]]; then
+    # shellcheck source=lib/os-paths.sh
+    source "${UNINSTALL_DIR}/lib/os-paths.sh"
+fi
 MANAGED_MANIFEST="/var/lib/azerioid-panel/managed-components.json"
 DROP_DB=0
 REMOVE_BOOTSTRAP=0
@@ -60,7 +65,19 @@ purge_managed_components() {
     ids="$(python3 - "${MANAGED_MANIFEST}" <<'PY'
 import json, pathlib, sys
 data = json.loads(pathlib.Path(sys.argv[1]).read_text())
-for cid in sorted(data.get("components", {}).keys(), reverse=True):
+comps = data.get("components", {})
+ids = []
+if isinstance(comps, dict):
+    ids = list(comps.keys())
+elif isinstance(comps, list):
+    for item in comps:
+        if isinstance(item, str) and item.strip():
+            ids.append(item.strip())
+        elif isinstance(item, dict):
+            cid = item.get("id") or item.get("component_id")
+            if isinstance(cid, str) and cid.strip():
+                ids.append(cid.strip())
+for cid in sorted(ids, reverse=True):
     print(cid)
 PY
 )" || return 0
@@ -171,10 +188,18 @@ PY
 
 purge_backend_dropins() {
     echo "==> Removing Caddy-front-router backend drop-ins"
-    rm -f /etc/apache2/conf-available/azerioid-backend.conf \
-        /etc/apache2/conf-enabled/azerioid-backend.conf \
-        /etc/httpd/conf.d/azerioid-backend.conf \
-        /etc/nginx/conf.d/00-azerioid-backend.conf 2>/dev/null || true
+    local f
+    if declare -F apache_backend_dropins >/dev/null 2>&1; then
+        while IFS= read -r f; do
+            rm -f "${f}" 2>/dev/null || true
+        done < <(apache_backend_dropins; nginx_backend_dropins)
+    else
+        rm -f /etc/apache2/conf-available/azerioid-backend.conf \
+            /etc/apache2/conf-enabled/azerioid-backend.conf \
+            /etc/httpd/conf.d/azerioid-backend.conf \
+            /etc/httpd/conf.d/00-azerioid-remoteip.conf \
+            /etc/nginx/conf.d/00-azerioid-backend.conf 2>/dev/null || true
+    fi
 }
 
 
@@ -266,13 +291,10 @@ rm -f /run/azerioid-panel-php-fpm.pid
 semodule -r azerioid_panel_fpm 2>/dev/null || true
 semanage fcontext -d -t bin_t '/usr/local/lib/azerioid-panel/sbin(/.*)?' 2>/dev/null || true
 
-POOL=""
-[[ -d "/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d" ]] && POOL="/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d"
-[[ -z "${POOL}" && -d /etc/php-fpm.d ]] && POOL=/etc/php-fpm.d
-rm -f "${POOL}/azerioid-panel.conf" 2>/dev/null || true
+POOL="$(pool_dir || true)"
+rm -f "${POOL:+${POOL}/azerioid-panel.conf}" 2>/dev/null || true
 
-UNIT="php${PANEL_PHP_VERSION}-fpm"
-systemctl cat php-fpm.service >/dev/null 2>&1 && UNIT=php-fpm
+UNIT="$(fpm_unit)"
 rm -f "/etc/systemd/system/${UNIT}.service.d/azerioid-panel.conf" 2>/dev/null || true
 systemctl daemon-reload
 systemctl restart "${UNIT}" 2>/dev/null || true

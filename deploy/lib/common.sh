@@ -40,21 +40,8 @@ path.write_text("\n".join(lines) + "\n")
 PY
 }
 
-pool_dir() {
-    if [[ -d "/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d" ]]; then
-        echo "/etc/php/${PANEL_PHP_VERSION}/fpm/pool.d"
-    elif [[ -d /etc/php-fpm.d ]]; then
-        echo /etc/php-fpm.d
-    fi
-}
-
-fpm_ini() {
-    if [[ -f "/etc/php/${PANEL_PHP_VERSION}/fpm/php.ini" ]]; then
-        echo "/etc/php/${PANEL_PHP_VERSION}/fpm/php.ini"
-    elif [[ -f /etc/php.ini ]]; then
-        echo /etc/php.ini
-    fi
-}
+# shellcheck source=os-paths.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os-paths.sh"
 
 fpm_bin() {
     local c
@@ -74,28 +61,6 @@ fpm_bin() {
         fi
     done
     return 1
-}
-
-fpm_unit() {
-    if systemctl cat "php${PANEL_PHP_VERSION}-fpm.service" >/dev/null 2>&1; then
-        echo "php${PANEL_PHP_VERSION}-fpm"
-        return
-    fi
-    if systemctl cat "php-fpm.service" >/dev/null 2>&1; then
-        echo "php-fpm"
-        return
-    fi
-    echo "php${PANEL_PHP_VERSION}-fpm"
-}
-
-# Panel UI FPM. On EL the distro php-fpm master is httpd_t; sudo to the broker
-# is denied (often dontaudit). A dedicated unit runs unconfined_service_t.
-panel_fpm_unit() {
-    if [[ "${DISTRO_FAMILY:-}" == "el" ]]; then
-        echo "azerioid-panel-php-fpm"
-        return
-    fi
-    fpm_unit
 }
 
 php_bin() {

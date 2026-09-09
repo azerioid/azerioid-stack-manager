@@ -9,6 +9,7 @@
         "web_log_dir": "/var/log/caddy",
         "apache_ctl": "",
         "audit_log": "/var/log/azerioid-panel/broker-audit.log",
+        "mariadb_server_cnf": "/etc/mysql/mariadb.conf.d/50-server.cnf",
         "artisan": "/usr/local/lib/azerioid-panel/web/artisan",
         "staging_dir": "/var/lib/azerioid-panel/staging",
         "cron_d": "/etc/cron.d/azerioid-panel",

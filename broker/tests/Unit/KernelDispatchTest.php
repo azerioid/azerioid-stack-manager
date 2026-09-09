@@ -109,7 +109,9 @@ final class KernelDispatchTest extends TestCase
         $rt->script(['/usr/bin/systemctl', 'restart', 'ssh'], 0);
         [$code] = $this->capture($this->kernel($rt), ['broker', 'service.restart', 'ssh']);
         $this->assertNotSame(0, $code);
-        $this->assertSame([], $rt->execLog);
+        foreach ($rt->execLog as $entry) {
+            $this->assertNotSame(['/usr/bin/systemctl', 'restart', 'ssh'], $entry['command']);
+        }
     }
 
     public function test_service_restart_failure_includes_journal(): void

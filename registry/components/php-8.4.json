@@ -37,6 +37,17 @@
         "gpg_fingerprint": "B188E2B6957258CB978A068AC3E4FAA2224E5DC7",
         "keyring": "/usr/share/keyrings/deb.sury.org-php.gpg",
         "signed_by": "/usr/share/keyrings/deb.sury.org-php.gpg"
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/php/8.4/fpm/php.ini"
+        ],
+        "fpm_socket": [
+          "/run/php/php8.4-fpm.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/php/8.4/fpm/pool.d/*.conf"
+        ]
       }
     },
     "ubuntu": {
@@ -63,23 +74,34 @@
         "gpg_fingerprint": "B188E2B6957258CB978A068AC3E4FAA2224E5DC7",
         "keyring": "/usr/share/keyrings/deb.sury.org-php.gpg",
         "signed_by": "/usr/share/keyrings/deb.sury.org-php.gpg"
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/php/8.4/fpm/php.ini"
+        ],
+        "fpm_socket": [
+          "/run/php/php8.4-fpm.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/php/8.4/fpm/pool.d/*.conf"
+        ]
       }
     },
     "el": {
       "packages": [
-        "phpphp84-php-fpm",
-        "phpphp84-php-cli",
-        "phpphp84-php-common",
-        "phpphp84-php-mysqlnd",
-        "phpphp84-php-pdo",
-        "phpphp84-php-xml",
-        "phpphp84-php-mbstring",
-        "phpphp84-php-zip"
+        "php-fpm",
+        "php-cli",
+        "php-common",
+        "php-mysqlnd",
+        "php-pdo",
+        "php-xml",
+        "php-mbstring",
+        "php-zip"
       ],
       "unit_name": "php-fpm",
       "detect": {
         "packages": [
-          "phpphp84-php-fpm"
+          "php-fpm"
         ],
         "unit": "php-fpm",
         "command": "php -v"
@@ -89,6 +111,20 @@
         "gpg_fingerprint": "",
         "keyring": "/etc/pki/rpm-gpg/RPM-GPG-KEY-remi",
         "signed_by": ""
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/php.ini",
+          "/etc/opt/remi/php84/php.ini"
+        ],
+        "fpm_socket": [
+          "/run/php-fpm/www.sock",
+          "/var/opt/remi/php84/run/php-fpm/www.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/php-fpm.d/*.conf",
+          "/etc/opt/remi/php84/php-fpm.d/*.conf"
+        ]
       }
     }
   },

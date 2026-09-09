@@ -12,7 +12,7 @@ final class MariadbBindRollback
 {
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
-        $path = $config->mariadbServerCnf;
+        $path = $config->resolveMariadbServerCnf($runtime) ?? $config->mariadbServerCnf;
         $backup = (string) ($args[0] ?? $input['backup_path'] ?? '');
         $backup = trim($backup);
         $dir = dirname($path);

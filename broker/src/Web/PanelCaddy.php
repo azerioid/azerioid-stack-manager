@@ -366,7 +366,7 @@ CADDY;
     {
         $unit = $config->panelFpmUnit !== ''
             ? $config->panelFpmUnit
-            : $config->phpFpmService($config->panelPhpVersion);
+            : $config->phpFpmService($config->panelPhpVersion, $runtime);
         try {
             $runtime->exec(['/usr/bin/systemctl', 'reload', $unit], null, 30);
         } catch (\Throwable) {

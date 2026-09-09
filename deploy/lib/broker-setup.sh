@@ -35,6 +35,10 @@ EOF
     chmod 0440 "${sudoers}"
     visudo -c >/dev/null
 
+    local mariadb_cnf
+    mariadb_cnf="$(mariadb_server_cnf || true)"
+    mariadb_cnf="${mariadb_cnf:-/etc/mysql/mariadb.conf.d/50-server.cnf}"
+
     if [[ ! -f /etc/azerioid-panel/broker.json ]]; then
         cat > /etc/azerioid-panel/broker.json <<EOF
 {
@@ -52,6 +56,7 @@ EOF
         "web_log_dir": "/var/log/caddy",
         "apache_ctl": "",
         "audit_log": "/var/log/azerioid-panel/broker-audit.log",
+        "mariadb_server_cnf": "${mariadb_cnf}",
         "artisan": "${PREFIX}/web/artisan",
         "staging_dir": "/var/lib/azerioid-panel/staging",
         "cron_d": "/etc/cron.d/azerioid-panel",

@@ -6,27 +6,78 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [
-    { "port": 8082, "bind": "127.0.0.1", "owner": "nginx", "protocol": "tcp" }
+    {
+      "port": 8082,
+      "bind": "127.0.0.1",
+      "owner": "nginx",
+      "protocol": "tcp"
+    }
   ],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["nginx"],
+      "packages": [
+        "nginx"
+      ],
       "unit_name": "nginx",
-      "detect": { "packages": ["nginx"], "unit": "nginx", "command": "nginx -v" }
+      "detect": {
+        "packages": [
+          "nginx"
+        ],
+        "unit": "nginx",
+        "command": "nginx -v"
+      },
+      "paths": {
+        "vhost_dir": "/etc/nginx/sites-enabled",
+        "vhost_available": "/etc/nginx/sites-available",
+        "web_log_dir": "/var/log/nginx"
+      }
     },
     "debian": {
-      "packages": ["nginx"],
+      "packages": [
+        "nginx"
+      ],
       "unit_name": "nginx",
-      "detect": { "packages": ["nginx"], "unit": "nginx", "command": "nginx -v" }
+      "detect": {
+        "packages": [
+          "nginx"
+        ],
+        "unit": "nginx",
+        "command": "nginx -v"
+      },
+      "paths": {
+        "vhost_dir": "/etc/nginx/sites-enabled",
+        "vhost_available": "/etc/nginx/sites-available",
+        "web_log_dir": "/var/log/nginx"
+      }
     },
     "el": {
-      "packages": ["nginx"],
+      "packages": [
+        "nginx"
+      ],
       "unit_name": "nginx",
-      "detect": { "packages": ["nginx"], "unit": "nginx", "command": "nginx -v" }
+      "detect": {
+        "packages": [
+          "nginx"
+        ],
+        "unit": "nginx",
+        "command": "nginx -v"
+      },
+      "paths": {
+        "vhost_dir": "/etc/nginx/conf.d",
+        "vhost_available": "/etc/nginx/conf.d",
+        "web_log_dir": "/var/log/nginx"
+      }
     }
   },
-  "preflight": { "min_disk_gb": 1, "min_ram_mb": 512 }
+  "preflight": {
+    "min_disk_gb": 1,
+    "min_ram_mb": 512
+  }
 }

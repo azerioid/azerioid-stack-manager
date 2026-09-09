@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Vhost;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 
@@ -137,7 +138,7 @@ final class VhostUser
         if ($changed) {
             // Supplementary groups are copied at process start; FPM/apache/nginx
             // otherwise keep serving 404 "File not found" until restart.
-            foreach (array_unique([$config->panelFpmUnit, 'php8.4-fpm', 'php-fpm', 'apache2', 'nginx', 'httpd']) as $unit) {
+            foreach (DistroPaths::for($runtime, $config)->reloadableServiceUnits() as $unit) {
                 if ($unit === '') {
                     continue;
                 }
@@ -151,15 +152,11 @@ final class VhostUser
      */
     private static function readerUsers(Runtime $runtime, Config $config): array
     {
-        $candidates = [
-            $config->webUser,
-            $config->phpUser,
-            'caddy',
-            'www-data',
-            'nginx',
-            'apache',
-            SupervisedUser::USERNAME,
-        ];
+        $candidates = array_merge(
+            [$config->webUser, $config->phpUser],
+            DistroPaths::for($runtime, $config)->webProcessUsers(),
+            [SupervisedUser::USERNAME],
+        );
         $out = [];
         foreach ($candidates as $user) {
             $user = trim((string) $user);

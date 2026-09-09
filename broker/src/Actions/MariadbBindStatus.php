@@ -13,8 +13,9 @@ final class MariadbBindStatus
     {
         $public = ProcMetrics::mariadbBindFromProcNet($runtime);
         $cnfValue = null;
-        if ($runtime->fileExists($config->mariadbServerCnf)) {
-            $cnf = $runtime->readFile($config->mariadbServerCnf);
+        $path = $config->resolveMariadbServerCnf($runtime);
+        if ($path !== null) {
+            $cnf = $runtime->readFile($path);
             if (preg_match('/^\s*bind-address\s*=\s*(\S+)/mi', $cnf, $m)) {
                 $cnfValue = $m[1];
             }
@@ -22,7 +23,7 @@ final class MariadbBindStatus
         return [
             'listening_public' => $public,
             'bind_address_config' => $cnfValue,
-            'config_path' => $config->mariadbServerCnf,
+            'config_path' => $path ?? $config->mariadbServerCnf,
         ];
     }
 }

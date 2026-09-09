@@ -15,6 +15,9 @@ final class StatusAll
     {
         $controlled = [];
         foreach ($config->controllableServiceList($runtime) as $unit) {
+            if (Systemd::loadState($runtime, $unit) === 'not-found') {
+                continue;
+            }
             $info = Systemd::show($runtime, $unit) + ['controllable' => true];
             if (($info['active_state'] ?? '') === 'failed') {
                 $info['journal'] = Systemd::journal($runtime, $unit, 40);
@@ -46,7 +49,7 @@ final class StatusAll
         };
 
         foreach (['redis-server', 'redis'] as $unit) {
-            if (!self::unitLoaded($runtime, $unit)) {
+            if (!Systemd::isLoaded($runtime, $unit)) {
                 continue;
             }
             $info = Systemd::show($runtime, $unit);
@@ -77,7 +80,7 @@ final class StatusAll
             if (!preg_match(Validator::SERVICE_PATTERN, $entry)) {
                 continue;
             }
-            if (!self::unitLoaded($runtime, $entry)) {
+            if (!Systemd::isLoaded($runtime, $entry)) {
                 continue;
             }
             $info = Systemd::show($runtime, $entry);
@@ -112,12 +115,6 @@ final class StatusAll
             $rows[] = self::probePort($runtime, 'upstream-' . $host . '-' . $port, $host, $port, $desc);
         }
         return $rows;
-    }
-
-    private static function unitLoaded(Runtime $runtime, string $unit): bool
-    {
-        $result = $runtime->exec(['/usr/bin/systemctl', 'show', $unit, '--property=LoadState', '--no-pager']);
-        return str_contains($result->stdout, 'LoadState=loaded');
     }
 
     private static function isBindSpec(string $spec): bool

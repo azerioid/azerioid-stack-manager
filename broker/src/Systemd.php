@@ -5,6 +5,27 @@ namespace AzerioidPanel\Broker;
 
 final class Systemd
 {
+    public static function loadState(Runtime $runtime, string $unit): string
+    {
+        $result = $runtime->exec([
+            '/usr/bin/systemctl',
+            'show',
+            $unit,
+            '--property=LoadState',
+            '--no-pager',
+        ]);
+        if (preg_match('/^LoadState=(.*)$/m', $result->stdout, $m) === 1) {
+            return trim($m[1]);
+        }
+
+        return '';
+    }
+
+    public static function isLoaded(Runtime $runtime, string $unit): bool
+    {
+        return in_array(self::loadState($runtime, $unit), ['loaded', 'masked'], true);
+    }
+
     public static function show(Runtime $runtime, string $unit): array
     {
         $result = $runtime->exec([

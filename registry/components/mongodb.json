@@ -6,27 +6,81 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [
-    { "port": 27017, "bind": "127.0.0.1", "owner": "mongod", "protocol": "tcp" }
+    {
+      "port": 27017,
+      "bind": "127.0.0.1",
+      "owner": "mongod",
+      "protocol": "tcp"
+    }
   ],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["mongodb-org"],
+      "packages": [
+        "mongodb-org"
+      ],
       "unit_name": "mongod",
-      "detect": { "packages": ["mongodb-org"], "unit": "mongod", "command": "mongod --version" }
+      "detect": {
+        "packages": [
+          "mongodb-org"
+        ],
+        "unit": "mongod",
+        "command": "mongod --version"
+      },
+      "paths": {
+        "config": [
+          "/etc/mongod.conf",
+          "/etc/mongodb.conf"
+        ]
+      }
     },
     "debian": {
-      "packages": ["mongodb-org"],
+      "packages": [
+        "mongodb-org"
+      ],
       "unit_name": "mongod",
-      "detect": { "packages": ["mongodb-org"], "unit": "mongod", "command": "mongod --version" }
+      "detect": {
+        "packages": [
+          "mongodb-org"
+        ],
+        "unit": "mongod",
+        "command": "mongod --version"
+      },
+      "paths": {
+        "config": [
+          "/etc/mongod.conf",
+          "/etc/mongodb.conf"
+        ]
+      }
     },
     "el": {
-      "packages": ["mongodb-org"],
+      "packages": [
+        "mongodb-org"
+      ],
       "unit_name": "mongod",
-      "detect": { "packages": ["mongodb-org"], "unit": "mongod", "command": "mongod --version" }
+      "detect": {
+        "packages": [
+          "mongodb-org"
+        ],
+        "unit": "mongod",
+        "command": "mongod --version"
+      },
+      "paths": {
+        "config": [
+          "/etc/mongod.conf",
+          "/etc/mongodb.conf"
+        ]
+      }
     }
   },
-  "preflight": { "min_disk_gb": 2, "min_ram_mb": 1024 }
+  "preflight": {
+    "min_disk_gb": 2,
+    "min_ram_mb": 1024
+  }
 }

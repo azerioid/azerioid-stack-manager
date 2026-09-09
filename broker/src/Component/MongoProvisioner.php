@@ -7,6 +7,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\BrokerConfigWriter;
 use AzerioidPanel\Broker\ExecResult;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Secrets;
 
@@ -209,12 +210,6 @@ final class MongoProvisioner
 
     private function mongodConfPath(): ?string
     {
-        foreach (['/etc/mongod.conf', '/etc/mongodb.conf'] as $path) {
-            if ($this->runtime->fileExists($path)) {
-                return $path;
-            }
-        }
-
-        return null;
+        return DistroPaths::for($this->runtime, $this->config)->mongodbConfig();
     }
 }

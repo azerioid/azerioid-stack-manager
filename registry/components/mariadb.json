@@ -6,27 +6,88 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [
-    { "port": 3306, "bind": "127.0.0.1", "owner": "mariadb", "protocol": "tcp" }
+    {
+      "port": 3306,
+      "bind": "127.0.0.1",
+      "owner": "mariadb",
+      "protocol": "tcp"
+    }
   ],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["mariadb-server"],
+      "packages": [
+        "mariadb-server"
+      ],
       "unit_name": "mariadb",
-      "detect": { "packages": ["mariadb-server"], "unit": "mariadb", "command": "mariadb --version" }
+      "detect": {
+        "packages": [
+          "mariadb-server"
+        ],
+        "unit": "mariadb",
+        "command": "mariadb --version"
+      },
+      "paths": {
+        "server_cnf": [
+          "/etc/mysql/mariadb.conf.d/50-server.cnf"
+        ],
+        "socket": [
+          "/run/mysqld/mysqld.sock"
+        ]
+      }
     },
     "debian": {
-      "packages": ["mariadb-server"],
+      "packages": [
+        "mariadb-server"
+      ],
       "unit_name": "mariadb",
-      "detect": { "packages": ["mariadb-server"], "unit": "mariadb", "command": "mariadb --version" }
+      "detect": {
+        "packages": [
+          "mariadb-server"
+        ],
+        "unit": "mariadb",
+        "command": "mariadb --version"
+      },
+      "paths": {
+        "server_cnf": [
+          "/etc/mysql/mariadb.conf.d/50-server.cnf"
+        ],
+        "socket": [
+          "/run/mysqld/mysqld.sock"
+        ]
+      }
     },
     "el": {
-      "packages": ["mariadb-server"],
+      "packages": [
+        "mariadb-server"
+      ],
       "unit_name": "mariadb",
-      "detect": { "packages": ["mariadb-server"], "unit": "mariadb", "command": "mariadb --version" }
+      "detect": {
+        "packages": [
+          "mariadb-server"
+        ],
+        "unit": "mariadb",
+        "command": "mariadb --version"
+      },
+      "paths": {
+        "server_cnf": [
+          "/etc/my.cnf.d/mariadb-server.cnf",
+          "/etc/my.cnf.d/server.cnf"
+        ],
+        "socket": [
+          "/var/lib/mysql/mysql.sock"
+        ]
+      }
     }
   },
-  "preflight": { "min_disk_gb": 2, "min_ram_mb": 1024 }
+  "preflight": {
+    "min_disk_gb": 2,
+    "min_ram_mb": 1024
+  }
 }

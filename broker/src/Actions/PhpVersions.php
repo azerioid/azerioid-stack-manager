@@ -13,12 +13,12 @@ final class PhpVersions
     {
         $versions = [];
         foreach ($runtime->phpVersions() as $ver) {
-            $unit = $config->phpFpmService($ver);
+            $unit = $config->phpFpmService($ver, $runtime);
             $versions[] = [
                 'version' => $ver,
                 'fpm_service' => $unit,
-                'socket' => $config->phpFpmSocket($ver),
-                'ini' => $config->phpIniPath($ver),
+                'socket' => $config->phpFpmSocket($ver, $runtime),
+                'ini' => $config->phpIniPath($ver, $runtime),
                 'status' => Systemd::show($runtime, $unit),
             ];
         }

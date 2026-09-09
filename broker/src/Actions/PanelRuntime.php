@@ -20,7 +20,9 @@ final class PanelRuntime
             'php_version' => $config->panelPhpVersion,
             'fpm_socket' => $config->panelFpmSocket,
             'fpm_pool' => $config->panelFpmPool,
-            'fpm_service' => $config->phpFpmService($config->panelPhpVersion),
+            'fpm_service' => $config->panelFpmUnit !== ''
+                ? $config->panelFpmUnit
+                : $config->phpFpmService($config->panelPhpVersion, $runtime),
             'queue_unit' => $queueUnit,
             'queue_active' => ($queueStatus['active'] ?? '') === 'active',
             'queue_status' => $queueStatus,

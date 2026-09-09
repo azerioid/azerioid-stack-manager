@@ -58,7 +58,7 @@ final class ComponentInstaller
             $this->runShellSteps($distro['post_install'] ?? [], $log, 'post_install');
             $this->runShellSteps($distro['secure'] ?? [], $log, 'secure');
             if (str_starts_with($componentId, 'php-')) {
-                $patched = (new SitePhpTimeouts())->patchPools($this->runtime);
+                $patched = (new SitePhpTimeouts())->patchPools($this->runtime, $this->config);
                 if ($patched !== []) {
                     $log->info('Applied FPM request_terminate_timeout on: ' . implode(', ', $patched));
                 }

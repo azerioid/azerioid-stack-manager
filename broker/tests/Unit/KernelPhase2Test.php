@@ -130,6 +130,36 @@ final class KernelPhase2Test extends TestCase
         $this->assertStringContainsString('bind-address = 127.0.0.1', $rt->files['/etc/mysql/mariadb.conf.d/50-server.cnf']);
     }
 
+    public function test_mariadb_bind_fix_uses_el_cnf_path(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dirs['/etc/my.cnf.d'] = true;
+        $rt->files['/etc/my.cnf.d/mariadb-server.cnf'] = "[mysqld]\nbind-address = 0.0.0.0\n";
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'mariadb.bind.fix']);
+        $this->assertSame(0, $code);
+        $this->assertSame('/etc/my.cnf.d/mariadb-server.cnf', $json['data']['config_path']);
+        $this->assertStringContainsString('bind-address = 127.0.0.1', $rt->files['/etc/my.cnf.d/mariadb-server.cnf']);
+    }
+
+    public function test_mariadb_bind_fix_refuses_while_database_is_global(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dirs['/etc/my.cnf.d'] = true;
+        $rt->files['/etc/my.cnf.d/mariadb-server.cnf'] = "[mysqld]\nbind-address = 0.0.0.0\n";
+        $rt->files['/var/lib/azerioid-panel/db-access.json'] = json_encode([
+            'mariadb' => [
+                'ahh' => ['mode' => 'global', 'ips' => []],
+                'vahh' => ['mode' => 'localhost', 'ips' => []],
+            ],
+        ], JSON_THROW_ON_ERROR);
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'mariadb.bind.fix']);
+        $this->assertNotSame(0, $code);
+        $this->assertFalse($json['ok']);
+        $this->assertStringContainsString("'ahh' is set to Global (any IP)", $json['error']);
+        $this->assertStringContainsString("Change ahh's access mode to Localhost only first.", $json['error']);
+        $this->assertStringContainsString('bind-address = 0.0.0.0', $rt->files['/etc/my.cnf.d/mariadb-server.cnf']);
+    }
+
     public function test_archive_crypto_roundtrip(): void
     {
         $blob = ArchiveCrypto::encrypt('hello-backup', 'abcdefghijklmnopqrst');

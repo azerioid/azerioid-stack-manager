@@ -17,7 +17,7 @@ final class PhpIniSet
         $key = Validator::phpIniKey($args[1] ?? ($input['key'] ?? ''));
         $value = Validator::phpIniValue($key, (string) ($args[2] ?? ($input['value'] ?? '')));
 
-        $path = $config->phpIniPath($version);
+        $path = $config->phpIniPath($version, $runtime);
         if (!$runtime->fileExists($path)) {
             throw new BrokerException('php.ini not found for this version.', 3);
         }
@@ -29,7 +29,7 @@ final class PhpIniSet
             $ini = rtrim($ini) . "\n{$key} = {$value}\n";
         }
         $runtime->writeFile($path, $ini, 0644);
-        Systemd::control($runtime, 'reload', $config->phpFpmService($version));
+        Systemd::control($runtime, 'reload', $config->phpFpmService($version, $runtime));
 
         return ['php_version' => $version, 'key' => $key, 'value' => $value];
     }

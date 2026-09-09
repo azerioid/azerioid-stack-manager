@@ -6,28 +6,92 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [
-    { "port": 5432, "bind": "127.0.0.1", "owner": "postgres", "protocol": "tcp" }
+    {
+      "port": 5432,
+      "bind": "127.0.0.1",
+      "owner": "postgres",
+      "protocol": "tcp"
+    }
   ],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["postgresql"],
+      "packages": [
+        "postgresql"
+      ],
       "unit_name": "postgresql",
-      "detect": { "packages": ["postgresql"], "unit": "postgresql", "command": "psql --version" }
+      "detect": {
+        "packages": [
+          "postgresql"
+        ],
+        "unit": "postgresql",
+        "command": "psql --version"
+      },
+      "paths": {
+        "conf_globs": [
+          "/etc/postgresql/*/main/postgresql.conf"
+        ],
+        "hba_globs": [
+          "/etc/postgresql/*/main/pg_hba.conf"
+        ]
+      }
     },
     "debian": {
-      "packages": ["postgresql"],
+      "packages": [
+        "postgresql"
+      ],
       "unit_name": "postgresql",
-      "detect": { "packages": ["postgresql"], "unit": "postgresql", "command": "psql --version" }
+      "detect": {
+        "packages": [
+          "postgresql"
+        ],
+        "unit": "postgresql",
+        "command": "psql --version"
+      },
+      "paths": {
+        "conf_globs": [
+          "/etc/postgresql/*/main/postgresql.conf"
+        ],
+        "hba_globs": [
+          "/etc/postgresql/*/main/pg_hba.conf"
+        ]
+      }
     },
     "el": {
-      "packages": ["postgresql-server"],
+      "packages": [
+        "postgresql-server"
+      ],
       "unit_name": "postgresql",
-      "detect": { "packages": ["postgresql-server"], "unit": "postgresql", "command": "psql --version" },
-      "post_install": ["postgresql-setup --initdb"]
+      "detect": {
+        "packages": [
+          "postgresql-server"
+        ],
+        "unit": "postgresql",
+        "command": "psql --version"
+      },
+      "post_install": [
+        "postgresql-setup --initdb"
+      ],
+      "paths": {
+        "conf_globs": [
+          "/var/lib/pgsql/*/data/postgresql.conf",
+          "/var/lib/pgsql/data/postgresql.conf"
+        ],
+        "hba_globs": [
+          "/var/lib/pgsql/*/data/pg_hba.conf",
+          "/var/lib/pgsql/data/pg_hba.conf"
+        ]
+      }
     }
   },
-  "preflight": { "min_disk_gb": 2, "min_ram_mb": 1024 }
+  "preflight": {
+    "min_disk_gb": 2,
+    "min_ram_mb": 1024
+  }
 }

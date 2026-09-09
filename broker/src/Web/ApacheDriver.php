@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Web;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Tls\TlsMode;
@@ -396,15 +397,20 @@ final class ApacheDriver implements WebServerDriver
         ];
     }
 
-    public function mainConfigPath(Config $config): string
+    public function mainConfigPath(Config $config, ?Runtime $runtime = null): string
     {
+        if ($runtime !== null) {
+            return DistroPaths::for($runtime, $config)->apacheMainConfig()
+                ?? ($config->webService === 'httpd' ? self::HTTPD_CONF : self::APACHE2_CONF);
+        }
+
         return $config->webService === 'httpd' ? self::HTTPD_CONF : self::APACHE2_CONF;
     }
 
     private function validate(Runtime $runtime, Config $config): void
     {
         $ctl = $this->apacheCtl($runtime, $config);
-        foreach (array_merge($ctl, [$this->mainConfigPath($config), $config->vhostDir, $config->vhostAvailableDir]) as $token) {
+        foreach (array_merge($ctl, [$this->mainConfigPath($config, $runtime), $config->vhostDir, $config->vhostAvailableDir]) as $token) {
             if ($token !== '' && preg_match('/\s/', $token) === 1) {
                 throw new BrokerException("Apache path contains whitespace: '{$token}'", 1);
             }
@@ -422,17 +428,23 @@ final class ApacheDriver implements WebServerDriver
     /** @return list<string> */
     private function apacheCtl(Runtime $runtime, Config $config): array
     {
-        foreach ([$config->apacheCtl, '/usr/sbin/apache2ctl', '/usr/sbin/apachectl', '/usr/sbin/httpd'] as $bin) {
-            if ($runtime->fileExists($bin)) {
-                return [$bin];
-            }
+        $bin = DistroPaths::for($runtime, $config)->apacheCtlBin();
+        if ($bin !== null) {
+            return [$bin];
         }
+
         return ['/usr/sbin/apachectl'];
     }
 
     private function debianLayout(Runtime $runtime, Config $config): bool
     {
-        return $runtime->isDir($config->vhostAvailableDir) || $runtime->isDir(self::SITES_AVAILABLE);
+        $available = rtrim((string) $config->vhostAvailableDir, '/');
+        $enabled = rtrim($config->vhostDir, '/');
+        if ($available !== '' && $available !== $enabled && $runtime->isDir($available)) {
+            return true;
+        }
+
+        return DistroPaths::for($runtime, $config)->apacheHelper('a2ensite') !== null;
     }
 
     private function siteAvailablePath(Config $config, string $domain): string
@@ -521,8 +533,9 @@ final class ApacheDriver implements WebServerDriver
 
     private function enableSite(Runtime $runtime, Config $config, string $domain, string $confPath): void
     {
-        if ($this->debianLayout($runtime, $config) && $runtime->fileExists('/usr/sbin/a2ensite')) {
-            $r = $runtime->exec(['/usr/sbin/a2ensite', $domain], null, 15);
+        $a2ensite = DistroPaths::for($runtime, $config)->apacheHelper('a2ensite');
+        if ($this->debianLayout($runtime, $config) && $a2ensite !== null) {
+            $r = $runtime->exec([$a2ensite, $domain], null, 15);
             if (!$r->ok()) {
                 throw new BrokerException(trim($r->stderr . "\n" . $r->stdout) ?: 'a2ensite failed.', 1);
             }
@@ -536,8 +549,9 @@ final class ApacheDriver implements WebServerDriver
 
     private function disableSite(Runtime $runtime, Config $config, string $domain): void
     {
-        if ($this->debianLayout($runtime, $config) && $runtime->fileExists('/usr/sbin/a2dissite')) {
-            $runtime->exec(['/usr/sbin/a2dissite', $domain], null, 15);
+        $a2dissite = DistroPaths::for($runtime, $config)->apacheHelper('a2dissite');
+        if ($this->debianLayout($runtime, $config) && $a2dissite !== null) {
+            $runtime->exec([$a2dissite, $domain], null, 15);
         }
     }
 

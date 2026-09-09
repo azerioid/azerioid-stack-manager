@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace AzerioidPanel\Broker\Database;
 
 use AzerioidPanel\Broker\BrokerException;
+use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Validator;
@@ -14,8 +16,15 @@ use AzerioidPanel\Broker\Validator;
  */
 final class PostgreSQLAccess
 {
-    public function __construct(private readonly Runtime $runtime)
+    public function __construct(
+        private readonly Runtime $runtime,
+        private readonly ?Config $config = null,
+    ) {
+    }
+
+    private function layout(): DistroPaths
     {
+        return DistroPaths::for($this->runtime, $this->config ?? new Config());
     }
 
     /**
@@ -56,7 +65,7 @@ final class PostgreSQLAccess
             }
         }
         if ($this->runtime->fileExists('/usr/bin/pg_ctlcluster')) {
-            foreach ($this->runtime->glob('/etc/postgresql/*/main/pg_hba.conf') as $hba) {
+            foreach ($this->layout()->postgresqlHbaFiles() as $hba) {
                 if (preg_match('#/postgresql/(\d+)/main/#', $hba, $m) === 1) {
                     $result = $this->runtime->exec(['/usr/bin/pg_ctlcluster', $m[1], 'main', 'reload'], null, 30);
                     if ($result->ok()) {
@@ -74,15 +83,7 @@ final class PostgreSQLAccess
     /** @return list<string> */
     private function postgresUnits(): array
     {
-        $units = [];
-        foreach ($this->runtime->glob('/etc/postgresql/*/main/postgresql.conf') as $path) {
-            if (preg_match('#/postgresql/(\d+)/main/#', $path, $m) === 1) {
-                $units[] = 'postgresql@' . $m[1] . '-main';
-            }
-        }
-        $units[] = 'postgresql';
-
-        return array_values(array_unique($units));
+        return $this->layout()->postgresqlUnits();
     }
 
     /**
@@ -136,11 +137,7 @@ final class PostgreSQLAccess
 
     private function hbaPath(): string
     {
-        $candidates = array_merge(
-            $this->runtime->glob('/etc/postgresql/*/main/pg_hba.conf'),
-            $this->runtime->glob('/var/lib/pgsql/*/data/pg_hba.conf'),
-            ['/var/lib/pgsql/data/pg_hba.conf']
-        );
+        $candidates = $this->layout()->postgresqlHbaFiles();
         foreach ($candidates as $path) {
             if ($this->runtime->fileExists($path)) {
                 return $path;

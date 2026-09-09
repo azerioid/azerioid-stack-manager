@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Php;
 use AzerioidPanel\Broker\CaddyApply;
 use AzerioidPanel\Broker\CaddyCli;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Web\WebServers;
@@ -29,7 +30,7 @@ final class SitePhpTimeouts
      */
     public function ensure(Runtime $runtime, Config $config, bool $reloadWeb = true): array
     {
-        $pools = $this->patchPools($runtime);
+        $pools = $this->patchPools($runtime, $config);
         $ini = $this->ensurePhpIni($runtime, $config);
         $vhosts = $this->ensureVhostProxies($runtime, $config);
         $reloaded = [];
@@ -59,7 +60,7 @@ final class SitePhpTimeouts
      */
     public function ensureSitePools(Runtime $runtime, Config $config): array
     {
-        $changed = $this->patchPools($runtime);
+        $changed = $this->patchPools($runtime, $config);
         if ($changed !== []) {
             $this->reloadFpm($runtime, $config);
         }
@@ -70,10 +71,10 @@ final class SitePhpTimeouts
     /**
      * @return list<string>
      */
-    public function patchPools(Runtime $runtime): array
+    public function patchPools(Runtime $runtime, ?Config $config = null): array
     {
         $changed = [];
-        foreach ($this->poolPaths($runtime) as $path) {
+        foreach ($this->poolPaths($runtime, $config ?? new Config()) as $path) {
             $isPanel = str_contains($path, 'azerioid-panel');
             $aclUsers = $isPanel ? [] : $this->existingDialUsers();
             if (!$this->patchFile($runtime, $path, fn (string $text): string => $this->patchPool($text, $isPanel, $aclUsers))) {
@@ -192,7 +193,7 @@ final class SitePhpTimeouts
     {
         $changed = [];
         foreach ($runtime->phpVersions() as $ver) {
-            $path = $config->phpIniPath($ver);
+            $path = $config->phpIniPath($ver, $runtime);
             if (!$runtime->fileExists($path)) {
                 continue;
             }
@@ -309,7 +310,7 @@ final class SitePhpTimeouts
     private function existingDialUsers(): array
     {
         $found = [];
-        foreach (['caddy', 'www-data', 'apache', 'nginx'] as $user) {
+        foreach (DistroPaths::webProcessUserNames() as $user) {
             if (function_exists('posix_getpwnam') && posix_getpwnam($user) !== false) {
                 $found[] = $user;
             }
@@ -341,13 +342,10 @@ final class SitePhpTimeouts
     }
 
     /** @return list<string> */
-    private function poolPaths(Runtime $runtime): array
+    private function poolPaths(Runtime $runtime, Config $config): array
     {
-        $paths = array_merge(
-            $runtime->glob('/etc/php/*/fpm/pool.d/*.conf'),
-            $runtime->glob('/etc/opt/remi/php*/php-fpm.d/*.conf'),
-            $runtime->glob('/etc/php-fpm.d/*.conf'),
-        );
+        $layout = DistroPaths::for($runtime, $config);
+        $paths = $layout->expandGlobs($layout->phpFpmPoolGlobs());
         $out = [];
         foreach ($paths as $path) {
             $base = basename($path);
@@ -368,15 +366,11 @@ final class SitePhpTimeouts
     /** @return list<string> */
     private function nginxVhostPaths(Runtime $runtime, Config $config): array
     {
-        $dirs = [
-            '/etc/nginx/sites-available',
-            '/etc/nginx/sites-enabled',
-            '/etc/nginx/conf.d',
-        ];
-        $avail = rtrim((string) $config->vhostAvailableDir, '/');
-        if ($avail !== '' && str_contains($avail, 'nginx')) {
-            $dirs[] = $avail;
-        }
+        $layout = DistroPaths::for($runtime, $config);
+        $dirs = array_merge($layout->nginxVhostScanDirs(), [
+            rtrim((string) $config->vhostAvailableDir, '/'),
+            rtrim((string) $config->vhostDir, '/'),
+        ]);
 
         return $this->confsIn($runtime, $dirs);
     }
@@ -384,15 +378,11 @@ final class SitePhpTimeouts
     /** @return list<string> */
     private function apacheVhostPaths(Runtime $runtime, Config $config): array
     {
-        $dirs = [
-            '/etc/apache2/sites-available',
-            '/etc/apache2/sites-enabled',
-            '/etc/httpd/conf.d/vhost',
-        ];
-        $avail = rtrim((string) $config->vhostAvailableDir, '/');
-        if ($avail !== '' && (str_contains($avail, 'apache') || str_contains($avail, 'httpd'))) {
-            $dirs[] = $avail;
-        }
+        $layout = DistroPaths::for($runtime, $config);
+        $dirs = array_merge($layout->apacheVhostScanDirs(), [
+            rtrim((string) $config->vhostAvailableDir, '/'),
+            rtrim((string) $config->vhostDir, '/'),
+        ]);
 
         return $this->confsIn($runtime, $dirs);
     }
@@ -421,7 +411,7 @@ final class SitePhpTimeouts
     {
         $reloaded = [];
         foreach ($runtime->phpVersions() as $ver) {
-            $unit = $config->phpFpmService($ver);
+            $unit = $config->phpFpmService($ver, $runtime);
             $st = $runtime->exec(['/usr/bin/systemctl', 'is-active', $unit], null, 10);
             if (trim($st->stdout) !== 'active') {
                 continue;

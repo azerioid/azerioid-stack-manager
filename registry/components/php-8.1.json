@@ -6,25 +6,93 @@
   "managed": true,
   "system": false,
   "installable": true,
-  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
   "ports": [],
   "conflicts": [],
   "distros": {
     "ubuntu": {
-      "packages": ["php8.1-fpm", "php8.1-cli"],
+      "packages": [
+        "php8.1-fpm",
+        "php8.1-cli"
+      ],
       "unit_name": "php8.1-fpm",
-      "detect": { "packages": ["php8.1-fpm"], "unit": "php8.1-fpm", "command": "php8.1 -v" }
+      "detect": {
+        "packages": [
+          "php8.1-fpm"
+        ],
+        "unit": "php8.1-fpm",
+        "command": "php8.1 -v"
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/php/8.1/fpm/php.ini"
+        ],
+        "fpm_socket": [
+          "/run/php/php8.1-fpm.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/php/8.1/fpm/pool.d/*.conf"
+        ]
+      }
     },
     "debian": {
-      "packages": ["php8.1-fpm", "php8.1-cli"],
+      "packages": [
+        "php8.1-fpm",
+        "php8.1-cli"
+      ],
       "unit_name": "php8.1-fpm",
-      "detect": { "packages": ["php8.1-fpm"], "unit": "php8.1-fpm", "command": "php8.1 -v" }
+      "detect": {
+        "packages": [
+          "php8.1-fpm"
+        ],
+        "unit": "php8.1-fpm",
+        "command": "php8.1 -v"
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/php/8.1/fpm/php.ini"
+        ],
+        "fpm_socket": [
+          "/run/php/php8.1-fpm.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/php/8.1/fpm/pool.d/*.conf"
+        ]
+      }
     },
     "el": {
-      "packages": ["php81-php-fpm", "php81-php-cli"],
+      "packages": [
+        "php81-php-fpm",
+        "php81-php-cli"
+      ],
       "unit_name": "php81-php-fpm",
-      "detect": { "packages": ["php81-php-fpm"], "unit": "php81-php-fpm", "command": "php81 -v" }
+      "detect": {
+        "packages": [
+          "php81-php-fpm"
+        ],
+        "unit": "php81-php-fpm",
+        "command": "php81 -v"
+      },
+      "paths": {
+        "php_ini": [
+          "/etc/opt/remi/php81/php.ini"
+        ],
+        "fpm_socket": [
+          "/var/opt/remi/php81/run/php-fpm/www.sock",
+          "/run/php-fpm/www.sock"
+        ],
+        "fpm_pool_globs": [
+          "/etc/opt/remi/php81/php-fpm.d/*.conf"
+        ]
+      }
     }
   },
-  "preflight": { "min_disk_gb": 0.5, "min_ram_mb": 256 }
+  "preflight": {
+    "min_disk_gb": 0.5,
+    "min_ram_mb": 256
+  }
 }

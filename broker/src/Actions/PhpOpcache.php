@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 
@@ -13,7 +14,7 @@ final class PhpOpcache
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $version = Validator::phpVersion((string) ($args[0] ?? ''), $runtime->phpVersions());
-        $sock = '/run/php/php' . $version . '-fpm.sock';
+        $sock = DistroPaths::for($runtime, $config)->phpFpmUnixSocket($version);
         $cachetool = $runtime->fileExists('/usr/local/bin/cachetool')
             ? '/usr/local/bin/cachetool'
             : ($runtime->fileExists('/usr/bin/cachetool') ? '/usr/bin/cachetool' : null);

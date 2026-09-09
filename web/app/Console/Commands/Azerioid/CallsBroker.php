@@ -44,6 +44,11 @@ trait CallsBroker
 
     protected function configureBrokerForCli(): void
     {
+        // PHPUnit sets APP_ENV=testing and BROKER_DRIVER=fake. Never promote to
+        // the live sudo broker just because this host also has a panel install.
+        if (app()->environment('testing')) {
+            return;
+        }
         $path = (string) config('azerioid.broker.path', '/usr/local/lib/azerioid-panel/broker');
         if (is_file($path) && is_executable($path)) {
             config([

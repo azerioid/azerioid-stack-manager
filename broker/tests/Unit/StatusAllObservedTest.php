@@ -148,7 +148,9 @@ final class StatusAllObservedTest extends TestCase
         $this->assertNotSame(0, $code);
         $this->assertFalse($json['ok']);
         $this->assertStringContainsString('allowlist', $json['error']);
-        $this->assertSame([], $rt->execLog);
+        foreach ($rt->execLog as $entry) {
+            $this->assertNotSame(['/usr/bin/systemctl', 'start', 'redis-server'], $entry['command']);
+        }
         $audit = $rt->files['/var/log/azerioid-panel/broker-audit.log'] ?? '';
         $this->assertStringContainsString('service.start', $audit);
         $this->assertStringContainsString('redis-server', $audit);

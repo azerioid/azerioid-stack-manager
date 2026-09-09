@@ -14,7 +14,7 @@
                 <div class="flex items-start justify-between">
                     <div>
                         <div class="font-mono text-sm">{{ $svc['unit'] }}</div>
-                        <div class="text-xs text-zinc-500">{{ $svc['description'] }} · pid {{ $svc['main_pid'] ?? 0 }}</div>
+                        <div class="text-xs text-zinc-500">{{ $svc['description'] }} · {{ $svc['active_state'] ?? '' }} · {{ $svc['sub_state'] ?? '' }} · pid {{ $svc['main_pid'] ?? 0 }}</div>
                     </div>
                     <span class="led {{ ($svc['running'] ?? false) ? 'led-on' : 'led-bad' }}"></span>
                 </div>
@@ -41,7 +41,7 @@
                         <span class="font-mono text-sm">{{ $svc['unit'] }}</span>
                         <span class="led {{ ($svc['running'] ?? false) ? 'led-on' : 'led-off' }}"></span>
                     </div>
-                    <div class="mt-1 text-xs text-zinc-500">{{ $svc['description'] ?? '' }}</div>
+                    <div class="mt-1 font-mono text-xs text-zinc-400">{{ $svc['active_state'] ?? '' }} · {{ $svc['sub_state'] ?? '' }}</div>
                 </div>
             @endforeach
         </div>
