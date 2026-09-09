@@ -373,10 +373,13 @@ final class KernelPhase2Test extends TestCase
     public function test_logs_search_uses_fixed_string_grep(): void
     {
         $rt = new FakeRuntime();
-        $rt->files['/var/log/caddy/access.log'] = "GET / 200\n";
-        $rt->script(['/usr/bin/grep', '-F', '-n', '-m', '200', '--', 'GET', '/var/log/caddy/access.log'], 0, "1:GET / 200\n");
+        // Config default (and panel Caddyfile) use access_azerioid-panel.log.
+        $path = '/var/log/caddy/access_azerioid-panel.log';
+        $rt->files[$path] = "GET / 200\n";
+        $rt->script(['/usr/bin/grep', '-F', '-n', '-m', '200', '--', 'GET', $path], 0, "1:GET / 200\n");
         [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'logs.search', 'caddy', 'GET']);
         $this->assertSame(0, $code);
+        $this->assertSame($path, $json['data']['path']);
         $this->assertSame(['1:GET / 200'], $json['data']['lines']);
     }
 

@@ -36,7 +36,7 @@ class SmokePagesTest extends TestCase
         $this->get('/audit')->assertOk()->assertSee('Audit', false);
         $this->get('/alerts')->assertOk()->assertSee('Telegram', false);
         $this->get('/updates')->assertOk()
-            ->assertSee('Pending updates', false)
+            ->assertSee('Pending OS packages', false)
             ->assertSee('Reboot required', false);
         $this->get('/backups')->assertOk()->assertSee('DigitalOcean Spaces', false);
         $this->get('/security')->assertOk()->assertSee('SSH / auth.log', false);
