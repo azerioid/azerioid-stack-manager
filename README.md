@@ -190,6 +190,8 @@ Generated database passwords are printed **once** in the command’s stdout at c
 
 DNS-01 provider API tokens use the same rule: set `AZERIOID_DNS_API_TOKEN` (or `DNS_API_TOKEN`) in the environment before `vhost add`/`edit` with `--tls=dns`. Tokens are stored by the broker and never echoed back.
 
+Backup passphrase: saved via the Backups UI, or set `AZERIOID_BACKUP_PASSPHRASE` for CLI create/restore. TOTP re-auth: `AZERIOID_ADMIN_PASSWORD` and `AZERIOID_TOTP_CODE`. None of these may be passed as argv flags.
+
 ### Security guarantees (CLI = UI)
 
 - The panel’s own vhost (readonly / managed externally) **cannot** be deleted or edited via CLI — same refusal as the dashboard.
@@ -377,6 +379,66 @@ azerioid process restart app-node
 azerioid process del app-node
 ```
 
+
+### OS package updates
+
+Pending host OS packages (apt or dnf) — **not** panel self-update. Same broker actions as the Updates page.
+
+| Command | Description |
+|---------|-------------|
+| `azerioid updates check [--json]` | Pending count, security count, package manager, sample package list |
+| `azerioid updates apply --confirm [--security]` | Apply all pending OS updates, or security-only with `--security`. **Requires `--confirm`** (maps to `APPLY-ALL` / `APPLY-SECURITY`) |
+
+```bash
+azerioid updates check
+azerioid updates check --json
+# Refused without confirm:
+azerioid updates apply
+# Security-only (unattended-upgrade / dnf update --security):
+azerioid updates apply --security --confirm
+```
+
+### Backups (local / Spaces)
+
+Encrypted archives via the same `backup.*` broker path as the Backups page. Default destination is **local** (`/var/lib/azerioid-panel/backups/`). Passphrase comes from the saved Backups UI secret or `AZERIOID_BACKUP_PASSPHRASE` — never argv.
+
+| Command | Description |
+|---------|-------------|
+| `azerioid backup create [--local|--spaces] [--db=<name|all>] [--keep=N]` | Run `mysqldump`, encrypt, store locally (default) or upload to Spaces; local mode prunes to keep-last-N |
+| `azerioid backup list [--local|--spaces] [--json]` | List local files or Spaces objects |
+| `azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]` | Restore into a DB name. **Requires `--confirm`**. `--overwrite` sends broker `OVERWRITE` |
+
+```bash
+azerioid backup create --local --db=azerioid_proof_src --keep=2
+azerioid backup list --local --json
+azerioid backup restore --file=/var/lib/azerioid-panel/backups/db/azerioid_proof_src/….bin \
+  --target=azerioid_restore_tmp --confirm
+```
+
+### TOTP (admin 2FA)
+
+Panel-app controls (same `TotpService` / Settings policy — not broker). Re-auth uses env secrets only.
+
+| Command | Description |
+|---------|-------------|
+| `azerioid totp status [--email=] [--json]` | Enrollment status and `PANEL_REQUIRE_TOTP` |
+| `azerioid totp disable --email=<admin>` | Disable TOTP (blocked when `PANEL_REQUIRE_TOTP=true`) |
+| `azerioid totp reset --email=<admin>` | New secret (printed once, unconfirmed) |
+| `azerioid totp confirm --email=<admin>` | Confirm pending secret with a code from the **new** authenticator |
+
+```bash
+export AZERIOID_ADMIN_PASSWORD='…'   # never argv
+export AZERIOID_TOTP_CODE='123456'   # current code when enrolled
+azerioid totp disable --email=admin@example.com
+azerioid totp reset --email=admin@example.com
+# Then set AZERIOID_TOTP_CODE from the NEW secret and:
+azerioid totp confirm --email=admin@example.com
+```
+
+### Log rotation
+
+Panel logs under `/var/log/azerioid-panel/*.log` are rotated by **system `logrotate`** (`/etc/logrotate.d/azerioid-panel`, installed at bootstrap). There is **no** `azerioid logs rotate` command: the Updates/Backups/Settings UI has no force-rotate action either, and wrapping `logrotate -f` would be a second control plane outside the broker. Operators who need an on-demand rotation use `logrotate -f /etc/logrotate.d/azerioid-panel` as root.
+
 ### Audit
 
 ```bash
@@ -394,15 +456,15 @@ These broker actions exist in the panel but have **no** `azerioid` subcommand. T
 | Area | Broker actions | Why CLI-omitted (v1) |
 |------|----------------|----------------------|
 | Terminal | `terminal.session.*` | Needs a PTY + websocket; File Manager CLI covers the same Unix identity |
-| Logs | `logs.tail`, `logs.search` | Dashboard Logs page |
+| Logs search/tail | `logs.tail`, `logs.search` | Dashboard Logs page (`azerioid audit` covers panel-audit) |
+| Log rotation | n/a (system logrotate) | Installed at bootstrap; no UI force-rotate either — use `logrotate -f` as root if needed |
 | PHP | `php.versions`, `php.ini.*`, `php.opcache.*` | Settings / PHP pages |
-| Backups | `backup.*` | Backups page |
 | Firewall / fail2ban | `firewall.*` | Settings |
 | Cron | `cron.*` | Settings |
-| Updates | `updates.*` | Settings |
 | Metrics | `metrics.system` | Dashboard |
 | TLS DNS credentials | `tls.dns-credential.*` | Settings / env `AZERIOID_DNS_API_TOKEN` |
 | MariaDB bind helper | `mariadb.bind.*` | Internal / Settings |
+| Spaces-only schedule | `azerioid:backup-scheduled` | Cron/scheduler; interactive create/list/restore are under `azerioid backup` |
 
 ## Smoke tests
 

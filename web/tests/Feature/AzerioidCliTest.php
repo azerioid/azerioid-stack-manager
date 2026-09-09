@@ -331,4 +331,164 @@ class AzerioidCliTest extends TestCase
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('already a site vhost', Artisan::output());
     }
+
+    public function test_help_lists_updates_backup_totp(): void
+    {
+        $code = Artisan::call('azerioid:help');
+        $this->assertSame(0, $code);
+        $out = Artisan::output();
+        $this->assertStringContainsString('azerioid updates check', $out);
+        $this->assertStringContainsString('azerioid backup create', $out);
+        $this->assertStringContainsString('azerioid totp disable', $out);
+        $this->assertStringContainsString('AZERIOID_BACKUP_PASSPHRASE', $out);
+        $this->assertStringContainsString('AZERIOID_ADMIN_PASSWORD', $out);
+        $this->assertStringContainsString('no CLI', $out);
+    }
+
+    public function test_updates_check_json(): void
+    {
+        $code = Artisan::call('azerioid:updates', ['action' => 'check', '--json' => true]);
+        $out = Artisan::output();
+        $this->assertSame(0, $code, $out);
+        $this->assertNotSame('', $out, 'expected JSON stdout, got empty');
+        $decoded = json_decode($out, true);
+        $this->assertIsArray($decoded, 'output was: '.$out);
+        $this->assertSame(12, $decoded['total'] ?? null);
+        $this->assertSame('os-packages', $decoded['scope'] ?? null);
+    }
+
+    public function test_updates_apply_requires_confirm(): void
+    {
+        $code = Artisan::call('azerioid:updates', ['action' => 'apply']);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('--confirm', Artisan::output());
+    }
+
+    public function test_updates_apply_with_confirm_reaches_broker(): void
+    {
+        $code = Artisan::call('azerioid:updates', [
+            'action' => 'apply',
+            '--confirm' => true,
+            '--json' => true,
+        ]);
+        $out = Artisan::output();
+        $this->assertSame(0, $code, $out);
+        $decoded = json_decode($out, true);
+        $this->assertIsArray($decoded, $out);
+        $this->assertSame('updates.apply.all', $decoded['action'] ?? null);
+    }
+
+    public function test_backup_create_local_uses_env_passphrase(): void
+    {
+        putenv('AZERIOID_BACKUP_PASSPHRASE=abcdefghijklmnopqrst');
+        try {
+            $code = Artisan::call('azerioid:backup', [
+                'action' => 'create',
+                '--local' => true,
+                '--db' => 'all',
+                '--json' => true,
+            ]);
+            $out = Artisan::output();
+            $this->assertSame(0, $code, $out);
+            $decoded = json_decode($out, true);
+            $this->assertIsArray($decoded, $out);
+            $this->assertSame('local', $decoded['destination'] ?? null);
+            $this->assertStringContainsString('/var/lib/azerioid-panel/backups/', (string) ($decoded['key'] ?? ''));
+        } finally {
+            putenv('AZERIOID_BACKUP_PASSPHRASE');
+        }
+    }
+
+    public function test_backup_restore_requires_confirm(): void
+    {
+        putenv('AZERIOID_BACKUP_PASSPHRASE=abcdefghijklmnopqrst');
+        try {
+            $code = Artisan::call('azerioid:backup', [
+                'action' => 'restore',
+                '--local' => true,
+                '--file' => '/var/lib/azerioid-panel/backups/db/all/fixture.bin',
+                '--target' => 'projob_restore_1',
+            ]);
+            $this->assertNotSame(0, $code);
+            $this->assertStringContainsString('--confirm', Artisan::output());
+        } finally {
+            putenv('AZERIOID_BACKUP_PASSPHRASE');
+        }
+    }
+
+    public function test_totp_disable_blocked_when_required(): void
+    {
+        config(['azerioid.require_totp' => true]);
+        $totp = new \App\Services\TotpService();
+        $secret = $totp->generateSecret();
+        $user = User::factory()->create([
+            'email' => 'cli-totp@example.com',
+            'password' => 'password',
+            'two_factor_secret' => \Illuminate\Support\Facades\Crypt::encryptString($secret),
+            'two_factor_confirmed_at' => now(),
+        ]);
+        putenv('AZERIOID_ADMIN_PASSWORD=password');
+        putenv('AZERIOID_TOTP_CODE='.(new \PragmaRX\Google2FA\Google2FA())->getCurrentOtp($secret));
+        try {
+            $code = Artisan::call('azerioid:totp', [
+                'action' => 'disable',
+                '--email' => $user->email,
+            ]);
+            $this->assertNotSame(0, $code);
+            $this->assertStringContainsString('PANEL_REQUIRE_TOTP', Artisan::output());
+            $this->assertTrue($user->fresh()->hasTwoFactorEnabled());
+        } finally {
+            putenv('AZERIOID_ADMIN_PASSWORD');
+            putenv('AZERIOID_TOTP_CODE');
+        }
+    }
+
+    public function test_totp_disable_and_reset_via_env_reauth(): void
+    {
+        config(['azerioid.require_totp' => false]);
+        $totp = new \App\Services\TotpService();
+        $secret = $totp->generateSecret();
+        $user = User::factory()->create([
+            'email' => 'cli-totp2@example.com',
+            'password' => 'password',
+            'two_factor_secret' => \Illuminate\Support\Facades\Crypt::encryptString($secret),
+            'two_factor_confirmed_at' => now(),
+        ]);
+        $codeNow = (new \PragmaRX\Google2FA\Google2FA())->getCurrentOtp($secret);
+        putenv('AZERIOID_ADMIN_PASSWORD=password');
+        putenv('AZERIOID_TOTP_CODE='.$codeNow);
+        try {
+            $code = Artisan::call('azerioid:totp', [
+                'action' => 'disable',
+                '--email' => $user->email,
+            ]);
+            $out = Artisan::output();
+            $this->assertSame(0, $code, $out);
+            $this->assertFalse($user->fresh()->hasTwoFactorEnabled());
+
+            $code = Artisan::call('azerioid:totp', [
+                'action' => 'reset',
+                '--email' => $user->email,
+            ]);
+            $out = Artisan::output();
+            $this->assertSame(0, $code, $out);
+            $this->assertStringContainsString('One-time secret', $out);
+            $user = $user->fresh();
+            $this->assertFalse($user->hasTwoFactorEnabled());
+            $this->assertNotNull($user->plainTwoFactorSecret());
+
+            $newSecret = $user->plainTwoFactorSecret();
+            putenv('AZERIOID_TOTP_CODE='.(new \PragmaRX\Google2FA\Google2FA())->getCurrentOtp($newSecret));
+            $code = Artisan::call('azerioid:totp', [
+                'action' => 'confirm',
+                '--email' => $user->email,
+            ]);
+            $out = Artisan::output();
+            $this->assertSame(0, $code, $out);
+            $this->assertTrue($user->fresh()->hasTwoFactorEnabled());
+        } finally {
+            putenv('AZERIOID_ADMIN_PASSWORD');
+            putenv('AZERIOID_TOTP_CODE');
+        }
+    }
 }

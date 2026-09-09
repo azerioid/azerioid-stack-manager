@@ -49,13 +49,28 @@ Usage:
   azerioid process start|stop|restart|del <name>
   azerioid process logs <name> [--follow] [--lines=100]
 
+  azerioid updates check [--json]
+  azerioid updates apply [--security] --confirm
+
+  azerioid backup create [--local|--spaces] [--db=<name|all>] [--keep=N]
+  azerioid backup list   [--local|--spaces] [--json]
+  azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]
+
+  azerioid totp status  [--email=] [--json]
+  azerioid totp disable --email=<admin>
+  azerioid totp reset   --email=<admin>
+  azerioid totp confirm --email=<admin>
+
   azerioid audit tail [--follow] [--lines=50] [--json]
 
 Secrets:
   DB passwords are generated and printed once — never accepted via argv.
   DNS-01 API tokens: set AZERIOID_DNS_API_TOKEN (or DNS_API_TOKEN) in the environment — never argv.
+  Backup passphrase: saved in the Backups UI, or AZERIOID_BACKUP_PASSPHRASE — never argv.
+  TOTP re-auth: AZERIOID_ADMIN_PASSWORD and AZERIOID_TOTP_CODE — never argv.
   Bare --tls means --tls=auto. Aliases: dns→dns01, self→internal, on→auto. Use --staging for Let's Encrypt staging (rate-limit safe).
   vhost files write reads new content from stdin (not argv). Upload/download is UI-only.
+  updates apply / backup restore require --confirm. Log rotation is system logrotate (no CLI).
 TXT);
 
         return self::SUCCESS;
