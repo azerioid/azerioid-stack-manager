@@ -35,8 +35,11 @@ final class ManagedVhost
         ?string $root,
         string $type,
         array $readonlyVhosts,
+        bool $panelManaged = false,
     ): bool {
-        if ($type === 'proxy') {
+        // Adopted/external reverse-proxies stay read-only; panel-managed proxies
+        // (# azerioid-managed) are editable/deletable like php/static sites.
+        if ($type === 'proxy' && ! $panelManaged) {
             return true;
         }
 

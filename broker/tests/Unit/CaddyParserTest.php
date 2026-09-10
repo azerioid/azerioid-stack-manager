@@ -22,6 +22,25 @@ final class CaddyParserTest extends TestCase
         $this->assertTrue($parsed['tls']);
     }
 
+    public function test_panel_managed_proxy_is_not_readonly(): void
+    {
+        $contents = <<<'CADDY'
+# azerioid-managed engine=caddy type=proxy root=/data/www/node-app.test
+node-app.test {
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+    }
+}
+CADDY;
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/node-app.test.conf', $contents, []);
+
+        $this->assertSame('proxy', $parsed['type']);
+        $this->assertSame('127.0.0.1:3001', $parsed['reverse_proxy']);
+        $this->assertSame('/data/www/node-app.test', $parsed['root']);
+        $this->assertFalse($parsed['readonly']);
+    }
+
     public function test_marks_reverse_proxy_readonly(): void
     {
         $contents = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');

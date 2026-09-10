@@ -63,9 +63,12 @@ final class VhostEdit
         if (array_key_exists('engine', $input)) {
             $changes['engine'] = Validator::vhostEngine((string) $input['engine']);
         }
+        if (array_key_exists('upstream', $input) || isset($args[4])) {
+            $changes['upstream'] = Validator::localUpstream((string) ($args[4] ?? $input['upstream']));
+        }
 
         if ($changes === []) {
-            throw new BrokerException('No editable fields provided (root, php_version, tls, tls_mode, engine).', 2);
+            throw new BrokerException('No editable fields provided (root, php_version, tls, tls_mode, engine, upstream).', 2);
         }
 
         $mode = null;

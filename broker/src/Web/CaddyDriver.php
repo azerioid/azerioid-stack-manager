@@ -10,6 +10,7 @@ use AzerioidPanel\Broker\CaddyParser;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostUser;
@@ -87,11 +88,8 @@ final class CaddyDriver implements WebServerDriver
         }
         // One-time welcome page for empty php/static docroots (never on edit/reload).
         VhostWelcomePage::seedIfEmpty($runtime, $domain, $root, $type);
-        if ($type !== 'proxy') {
-            VhostUser::ensure($runtime, $config, $domain, $root);
-        } else {
-            $runtime->chown($root, $config->phpUser, $config->phpGroup);
-        }
+        // Proxy sites get a dedicated vhost user too (Files/Terminal + ACL for supervised processes).
+        VhostUser::ensure($runtime, $config, $domain, $root);
         $this->ensureAccessLog($runtime, $config, $domain);
 
         $this->assertCaddyfile($runtime, $config);
@@ -404,7 +402,16 @@ PROXY;
                 $phpBlock = SitePhpTimeouts::caddyPhpFastcgiBlock($sock);
             }
             if ($type === 'proxy' && $upstream !== null) {
-                $proxyBlock = "    reverse_proxy {$upstream}\n";
+                $proxyBlock = <<<PROXY
+    reverse_proxy {$upstream} {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+PROXY;
             }
             $rootBlock = $type === 'proxy' ? '' : "    root * {$root}\n";
             $fileServer = $type === 'proxy' ? '' : "    file_server {\n        index index.html index.php\n    }\n";
@@ -454,6 +461,9 @@ EOF;
         $internal = VhostEngine::inferFromProxy(is_string($upstream) ? $upstream : null, $config);
         if ($internal !== null) {
             $upstream = $parsed['type'] === 'proxy' ? $upstream : null;
+        }
+        if ($type === 'proxy' && array_key_exists('upstream', $changes)) {
+            $upstream = Validator::localUpstream((string) $changes['upstream']);
         }
 
         if (isset($changes['tls_mode'])) {

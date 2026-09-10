@@ -69,6 +69,11 @@ final class CaddyParser
             $type = 'php';
         }
 
+        // Proxy (and other) sites store docroot only in the managed comment — no `root *` directive.
+        if (($root === null || $root === '') && isset($managed['root']) && $managed['root'] !== '') {
+            $root = $managed['root'];
+        }
+
         $phpVersion = $managed['php'] ?? null;
         if ($phpVersion === null && $phpSocket !== null && preg_match('/php([0-9]+\.[0-9]+)-fpm\.sock/', $phpSocket, $m)) {
             $phpVersion = $m[1];
@@ -102,7 +107,14 @@ final class CaddyParser
             'tls_key' => $tlsKey,
             'reverse_proxy' => $proxy,
             'engine' => $engine,
-            'readonly' => $active && ManagedVhost::isReadonly($path, $domains, $root, $type, $readonlyVhosts),
+            'readonly' => $active && ManagedVhost::isReadonly(
+                $path,
+                $domains,
+                $root,
+                $type,
+                $readonlyVhosts,
+                ($managed['engine'] ?? null) !== null || ($managed['type'] ?? null) !== null,
+            ),
             'enabled' => true,
             'active' => $active,
             'source' => $path,

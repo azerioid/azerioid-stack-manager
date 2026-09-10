@@ -190,11 +190,14 @@ class VhostCommand extends Command
             if ($this->option('engine')) {
                 $payload['engine'] = Validator::vhostEngine((string) $this->option('engine'));
             }
+            if ($this->option('upstream')) {
+                $payload['upstream'] = Validator::localUpstream((string) $this->option('upstream'));
+            }
             $tlsPayload = $this->buildTlsPayload($domain);
             if ($tlsPayload !== null) {
                 $payload = array_merge($payload, $tlsPayload);
-            } elseif (! $this->option('root') && ! $this->option('php') && ! $this->option('engine')) {
-                throw new \RuntimeException('Nothing to edit. Pass --root=, --php=, --engine=, and/or --tls=.');
+            } elseif (! $this->option('root') && ! $this->option('php') && ! $this->option('engine') && ! $this->option('upstream')) {
+                throw new \RuntimeException('Nothing to edit. Pass --root=, --php=, --engine=, --upstream=, and/or --tls=.');
             }
 
             $res = $this->brokerCall('vhost.edit', [$domain], $payload);
