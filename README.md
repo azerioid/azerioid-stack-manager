@@ -380,7 +380,32 @@ azerioid process del app-node
 ```
 
 
+### Panel self-update
+
+Updates the stack manager itself (not OS packages). Channel: **`origin/main`** only for now (no stable/tag channel yet).
+
+The live install under `/usr/local/lib/azerioid-panel` is **not** a git working tree. The broker keeps a managed checkout at `/var/lib/azerioid-panel/src`, fast-forwards it, then re-deploys (rsync + `composer install --no-dev` + `artisan migrate` + cache rebuild + PHP-FPM reload). Queue worker restart is deferred a few seconds so the background job can finish recording status.
+
+| Command | What it does |
+|---------|----------------|
+| `azerioid panel update check [--json]` | Fetch `origin/main`, compare to deployed `COMMIT`, show oneline summary |
+| `azerioid panel update apply --confirm` | Queue background apply (same as Updates UI). **Requires `--confirm`** |
+
+Guarantees:
+- Dirty source working tree → apply refused (no silent discard of local changes).
+- Non-fast-forward → refused (no force-reset).
+- Any failure after the pre-update commit is recorded → `git reset --hard` to that commit, redeploy, leave the panel on last-known-good.
+- Registry-only updates (components JSON without panel code) are out of scope for now.
+
+```bash
+azerioid panel update check
+azerioid panel update check --json
+azerioid panel update apply            # refused
+azerioid panel update apply --confirm
+```
+
 ### OS package updates
+
 
 Pending host OS packages (apt or dnf) — **not** panel self-update. Same broker actions as the Updates page.
 

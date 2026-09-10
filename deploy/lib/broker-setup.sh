@@ -21,6 +21,11 @@ install_broker() {
     if [[ -f "${ROOT}/VERSION" ]]; then
         install -m 0644 -o root -g root "${ROOT}/VERSION" "${PREFIX}/VERSION"
     fi
+    if command -v git >/dev/null 2>&1 && [[ -d "${ROOT}/.git" ]]; then
+        git -C "${ROOT}" rev-parse HEAD > "${PREFIX}/COMMIT" 2>/dev/null \
+            && chmod 0644 "${PREFIX}/COMMIT" \
+            || true
+    fi
     if [[ -f "${ROOT}/deploy/bin/azerioid" ]]; then
         install -m 0755 -o root -g root "${ROOT}/deploy/bin/azerioid" /usr/local/bin/azerioid
     fi
@@ -64,6 +69,8 @@ EOF
         "local_backup_dir": "/var/lib/azerioid-panel/backups",
         "cron_d": "/etc/cron.d/azerioid-panel",
         "panel_root": "${PREFIX}",
+        "panel_source": "/var/lib/azerioid-panel/src",
+        "panel_git_remote": "https://github.com/azerioid/azerioid-stack-manager.git",
         "registry_components": "${PREFIX}/registry/components",
         "managed_components": "/var/lib/azerioid-panel/managed-components.json",
         "ttyd_bin": "/usr/local/bin/ttyd",

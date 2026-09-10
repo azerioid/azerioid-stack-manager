@@ -43,6 +43,8 @@ Usage:
   azerioid panel domain show [--json]
   azerioid panel domain set  --domain=<d> [--tls=auto|internal|dns01] [--dns-provider=…] [--staging]
   azerioid panel domain clear
+  azerioid panel update check [--json]
+  azerioid panel update apply --confirm
 
   azerioid process list [--json]
   azerioid process create --command=<cmd> (--vhost=<domain>|--freeform) [--name=<n>] [--directory=<path>]
@@ -70,7 +72,8 @@ Secrets:
   TOTP re-auth: AZERIOID_ADMIN_PASSWORD and AZERIOID_TOTP_CODE — never argv.
   Bare --tls means --tls=auto. Aliases: dns→dns01, self→internal, on→auto. Use --staging for Let's Encrypt staging (rate-limit safe).
   vhost files write reads new content from stdin (not argv). Upload/download is UI-only.
-  updates apply / backup restore require --confirm. Log rotation is system logrotate (no CLI).
+  updates apply / backup restore / panel update apply require --confirm. Log rotation is system logrotate (no CLI).
+  Panel self-update tracks origin/main only (no stable channel yet); dirty source trees are refused; failures roll back.
 TXT);
 
         return self::SUCCESS;

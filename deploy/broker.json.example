@@ -14,6 +14,8 @@
         "staging_dir": "/var/lib/azerioid-panel/staging",
         "cron_d": "/etc/cron.d/azerioid-panel",
         "panel_root": "/usr/local/lib/azerioid-panel",
+        "panel_source": "/var/lib/azerioid-panel/src",
+        "panel_git_remote": "https://github.com/azerioid/azerioid-stack-manager.git",
         "registry_components": "/usr/local/lib/azerioid-panel/registry/components",
         "managed_components": "/var/lib/azerioid-panel/managed-components.json",
         "ttyd_bin": "/usr/local/bin/ttyd",

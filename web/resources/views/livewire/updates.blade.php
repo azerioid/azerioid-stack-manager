@@ -1,4 +1,9 @@
-<div class="space-y-6">
+<div
+    class="space-y-6"
+    @if ($panelOperation && in_array($panelOperation['status'] ?? '', ['queued', 'running'], true))
+        wire:poll.2s="pollPanelOperation"
+    @endif
+>
     @if ($flash)
         <div class="rounded-md border border-good/30 bg-good/10 px-4 py-3 text-sm text-good">{{ $flash }}</div>
     @endif
@@ -6,10 +11,90 @@
         <pre class="max-h-64 overflow-auto rounded-md border border-bad/40 bg-bad/10 px-4 py-3 font-mono text-xs text-bad">{{ $error }}</pre>
     @endif
 
+    {{-- Panel self-update (distinct from OS packages) --}}
+    <section class="panel space-y-4 p-5">
+        <div>
+            <h2 class="text-sm font-medium text-zinc-100">Panel self-update</h2>
+            <p class="mt-1 text-sm text-zinc-400">
+                Updates the AZERIOID Stack Manager itself (git channel <span class="font-mono">origin/main</span>),
+                not host OS packages. Runs as a background job with rollback to the previous commit on failure.
+                No stable/tag channel yet.
+            </p>
+        </div>
+
+        @if (!empty($panelUpdate['error']))
+            <pre class="max-h-40 overflow-auto rounded-md border border-bad/40 bg-bad/10 px-3 py-2 font-mono text-xs text-bad">{{ $panelUpdate['error'] }}</pre>
+        @else
+            <div class="grid gap-3 sm:grid-cols-3">
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-zinc-500">Deployed</div>
+                    <div class="mt-1 font-mono text-sm">
+                        {{ $panelUpdate['deployed_commit_short'] ?? '—' }}
+                        @if (!empty($panelUpdate['version']))
+                            <span class="text-zinc-500">· v{{ $panelUpdate['version'] }}</span>
+                        @endif
+                    </div>
+                </div>
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-zinc-500">origin/main</div>
+                    <div class="mt-1 font-mono text-sm">{{ $panelUpdate['remote_commit_short'] ?? '—' }}</div>
+                </div>
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-zinc-500">Status</div>
+                    <div class="mt-1 font-mono text-sm {{ !empty($panelUpdate['update_available']) ? 'text-warn' : 'text-good' }}">
+                        @if (!empty($panelUpdate['dirty']))
+                            dirty source — refused
+                        @elseif (!empty($panelUpdate['up_to_date']))
+                            up to date
+                        @elseif (!empty($panelUpdate['update_available']))
+                            update available
+                        @else
+                            —
+                        @endif
+                    </div>
+                </div>
+            </div>
+
+            @if (!empty($panelUpdate['log_summary']))
+                <div>
+                    <div class="mb-1 text-xs uppercase tracking-wide text-zinc-500">Would change</div>
+                    <pre class="max-h-40 overflow-auto rounded-md border border-white/5 bg-black/20 px-3 py-2 font-mono text-[11px] text-zinc-300">{{ implode("\n", $panelUpdate['log_summary']) }}</pre>
+                </div>
+            @endif
+        @endif
+
+        @if ($panelOperation && in_array($panelOperation['status'] ?? '', ['queued', 'running'], true))
+            <div class="rounded-md border border-white/10 bg-black/20 p-3">
+                <div class="text-xs uppercase tracking-wide text-zinc-500">
+                    Job {{ $panelOperation['status'] }} · #{{ $panelOperation['id'] }}
+                </div>
+                <pre class="mt-2 max-h-48 overflow-auto font-mono text-[11px] text-zinc-300">{{ $panelOperation['log'] ?: 'Waiting for broker log…' }}</pre>
+            </div>
+        @else
+            <form class="space-y-3" onsubmit="return false;">
+                <p class="text-sm text-zinc-400">
+                    Type <span class="font-mono text-zinc-200">{{ \AzerioidPanel\Broker\Panel\PanelUpdater::CONFIRM }}</span>, then apply.
+                    Dirty working trees are refused. Failures roll back to the prior COMMIT.
+                </p>
+                <input class="field max-w-md" wire:model="panelConfirm" placeholder="PANEL-UPDATE">
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" class="btn-ghost" wire:click="reloadPanelCheck">Refresh check</button>
+                    <button
+                        type="button"
+                        class="btn-primary"
+                        wire:click="queuePanelUpdate"
+                        wire:confirm="Apply panel self-update from origin/main? The panel will reload its own PHP-FPM/queue after deploy."
+                        @disabled(empty($panelUpdate['update_available']) || !empty($panelUpdate['dirty']) || !empty($panelUpdate['error']))
+                    >Apply panel update</button>
+                </div>
+            </form>
+        @endif
+    </section>
+
     <p class="text-sm text-zinc-400">
         Counts pending <strong class="font-medium text-zinc-200">OS package updates</strong> on this host
         ({{ $pkgMgr !== '' ? $pkgMgr : 'package manager' }}{{ $updateSource !== '' ? ' · '.$updateSource : '' }}{{ $distro !== '' ? ' · '.$distro : '' }}).
-        This is not a panel self-update — the stack manager itself is not upgraded from this page.
+        Separate from panel self-update above.
     </p>
 
     <section class="grid gap-4 sm:grid-cols-3">

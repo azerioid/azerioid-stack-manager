@@ -36,6 +36,9 @@ use AzerioidPanel\Broker\Actions\MariadbBindStatus;
 use AzerioidPanel\Broker\Actions\MetricsSystem;
 use AzerioidPanel\Broker\Actions\PanelDomainSet;
 use AzerioidPanel\Broker\Actions\PanelRuntime;
+use AzerioidPanel\Broker\Actions\PanelUpdateApply;
+use AzerioidPanel\Broker\Actions\PanelUpdateCheck;
+use AzerioidPanel\Broker\Actions\PanelUpdateOperationLog;
 use AzerioidPanel\Broker\Actions\PhpIniGet;
 use AzerioidPanel\Broker\Actions\PhpIniSet;
 use AzerioidPanel\Broker\Actions\PhpOpcache;
@@ -72,6 +75,9 @@ final class Kernel
         'panel.runtime' => PanelRuntime::class,
         'panel.domain.set' => PanelDomainSet::class,
         'panel.domain.show' => PanelDomainSet::class,
+        'panel.update.check' => PanelUpdateCheck::class,
+        'panel.update.apply' => PanelUpdateApply::class,
+        'panel.update.operation.log' => PanelUpdateOperationLog::class,
         'component.list' => ComponentList::class,
         'component.status' => ComponentStatus::class,
         'component.preflight' => ComponentPreflightAction::class,

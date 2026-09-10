@@ -42,6 +42,11 @@ final class Config
     public string $phpGroup = 'caddy';
     public string $mariadbServerCnf = '/etc/mysql/mariadb.conf.d/50-server.cnf';
     public string $panelRoot = '/usr/local/lib/azerioid-panel';
+
+    /** Managed git checkout used for panel self-update (PREFIX itself is not a git tree). */
+    public string $panelSourcePath = '/var/lib/azerioid-panel/src';
+
+    public string $panelGitRemote = 'https://github.com/azerioid/azerioid-stack-manager.git';
     public string $artisanPath = '/usr/local/lib/azerioid-panel/web/artisan';
     public string $stagingDir = '/var/lib/azerioid-panel/staging';
     public string $localBackupDir = '/var/lib/azerioid-panel/backups';
@@ -143,6 +148,8 @@ final class Config
         $cfg->auditLog = (string) ($data['paths']['audit_log'] ?? $cfg->auditLog);
         $cfg->mariadbServerCnf = (string) ($data['paths']['mariadb_server_cnf'] ?? $cfg->mariadbServerCnf);
         $cfg->panelRoot = (string) ($data['paths']['panel_root'] ?? $cfg->panelRoot);
+        $cfg->panelSourcePath = (string) ($data['paths']['panel_source'] ?? $cfg->panelSourcePath);
+        $cfg->panelGitRemote = (string) ($data['paths']['panel_git_remote'] ?? $cfg->panelGitRemote);
         $cfg->registryComponentsPath = (string) ($data['paths']['registry_components'] ?? $cfg->panelRoot.'/registry/components');
         $cfg->managedComponentsPath = (string) ($data['paths']['managed_components'] ?? $cfg->managedComponentsPath);
         $cfg->artisanPath = (string) ($data['paths']['artisan'] ?? $cfg->artisanPath);
