@@ -25,6 +25,12 @@ install_broker() {
         git -C "${ROOT}" rev-parse HEAD > "${PREFIX}/COMMIT" 2>/dev/null \
             && chmod 0644 "${PREFIX}/COMMIT" \
             || true
+        # Prefer an exact matching semver tag for this commit; else leave TAG unset.
+        tag="$(git -C "${ROOT}" describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2>/dev/null || true)"
+        if [[ -n "${tag}" ]]; then
+            printf '%s\n' "${tag}" > "${PREFIX}/TAG"
+            chmod 0644 "${PREFIX}/TAG"
+        fi
     fi
     if [[ -f "${ROOT}/deploy/bin/azerioid" ]]; then
         install -m 0755 -o root -g root "${ROOT}/deploy/bin/azerioid" /usr/local/bin/azerioid
