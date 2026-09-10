@@ -478,6 +478,21 @@ final class PanelUpdater
 
         $this->runtime->exec(['/usr/bin/chown', '-R', $webUser . ':' . $webUser, $prefix . '/web'], null, 120);
 
+        // Panel SQLite + state dir must remain accessible to the FPM/queue user (web_user).
+        $stateDir = '/var/lib/azerioid-panel';
+        if ($this->runtime->isDir($stateDir)) {
+            $this->runtime->exec(['/usr/bin/chown', $webUser . ':' . $webUser, $stateDir], null, 30);
+            $db = $stateDir . '/panel.sqlite';
+            if ($this->runtime->fileExists($db)) {
+                $this->runtime->exec(['/usr/bin/chown', $webUser . ':' . $webUser, $db], null, 15);
+                foreach ([$db . '-shm', $db . '-wal'] as $side) {
+                    if ($this->runtime->fileExists($side)) {
+                        $this->runtime->exec(['/usr/bin/chown', $webUser . ':' . $webUser, $side], null, 15);
+                    }
+                }
+            }
+        }
+
         $php = $this->phpBin();
         $composer = $this->composerBin();
         $log->info('composer install --no-dev --optimize-autoloader');
