@@ -405,6 +405,18 @@ final class PanelUpdater
             $this->runtime->chmod('/usr/local/bin/azerioid', 0755);
         }
 
+        // Keep sudoers aligned with broker.json web_user (FPM/queue must be able to invoke the broker).
+        $sudoers = "/etc/sudoers.d/azerioid-panel";
+        $sudoBody = "# AZERIOID Stack Manager — sudoers (panel self-update)\n"
+            . "Defaults:{$webUser} !requiretty\n"
+            . "Defaults:{$webUser} umask=0022\n"
+            . "{$webUser} ALL=(root) NOPASSWD: {$prefix}/broker\n";
+        $this->runtime->writeFile($sudoers, $sudoBody, 0440);
+        $visudo = $this->runtime->exec(['/usr/sbin/visudo', '-c'], null, 15);
+        if (!$visudo->ok()) {
+            throw new BrokerException('Generated sudoers failed visudo -c: ' . $this->execDetail($visudo), 1);
+        }
+
         // Registry
         if ($this->runtime->isDir($source . '/registry')) {
             if (!$this->runtime->isDir($prefix . '/registry')) {
