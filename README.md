@@ -382,26 +382,29 @@ azerioid process del app-node
 
 ### Panel self-update
 
-Updates the stack manager itself (not OS packages). Channel: **`origin/main`** only for now (no stable/tag channel yet).
+Updates the stack manager itself (not OS packages) from **semver git tags** (`vX.Y.Z`). Omitting `--v` installs the **latest tag by real semver comparison** (not lexical order, not `main` HEAD). `--v <tag>` pins to that tag (including intentional downgrades).
 
-The live install under `/usr/local/lib/azerioid-panel` is **not** a git working tree. The broker keeps a managed checkout at `/var/lib/azerioid-panel/src`, fast-forwards it, then re-deploys (rsync + `composer install --no-dev` + `artisan migrate` + cache rebuild + PHP-FPM reload). Queue worker restart is deferred a few seconds so the background job can finish recording status.
+The live install under `/usr/local/lib/azerioid-panel` is **not** a git working tree. Markers: `COMMIT` + `TAG`. The broker keeps a managed checkout at `/var/lib/azerioid-panel/src`, checks out the target tag, then re-deploys (rsync + `composer install --no-dev` + `artisan migrate` + cache rebuild + PHP-FPM reload). Queue worker restart is deferred a few seconds so the background job can finish recording status.
 
 | Command | What it does |
 |---------|----------------|
-| `azerioid panel update check [--json]` | Fetch `origin/main`, compare to deployed `COMMIT`, show oneline summary |
-| `azerioid panel update apply --confirm` | Queue background apply (same as Updates UI). **Requires `--confirm`** |
+| `azerioid panel update check [--json]` | Fetch tags, show deployed/latest tag, available tags, oneline summary |
+| `azerioid panel update apply --confirm` | Queue apply to **latest** semver tag. **Requires `--confirm`** |
+| `azerioid panel update apply --v=v0.2.1 --confirm` | Queue apply (or downgrade) to a specific tag |
 
 Guarantees:
 - Dirty source working tree → apply refused (no silent discard of local changes).
-- Non-fast-forward → refused (no force-reset).
-- Any failure after the pre-update commit is recorded → `git reset --hard` to that commit, redeploy, leave the panel on last-known-good.
+- Unknown `--v` tag → refused with a clear error (and a close-match suggestion when possible).
+- Downgrade via `--v` is allowed, with an explicit warning that newer migrations are not auto-reversed.
+- Any failure after the pre-update commit/tag is recorded → check out prior commit, redeploy, leave the panel on last-known-good.
 - Registry-only updates (components JSON without panel code) are out of scope for now.
 
 ```bash
 azerioid panel update check
 azerioid panel update check --json
-azerioid panel update apply            # refused
+azerioid panel update apply            # refused without --confirm
 azerioid panel update apply --confirm
+azerioid panel update apply --v=v0.2.1 --confirm
 ```
 
 ### OS package updates

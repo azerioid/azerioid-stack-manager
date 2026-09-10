@@ -46,6 +46,8 @@ class UpdatesPage extends Component
 
     public string $panelConfirm = '';
 
+    public string $panelTargetTag = '';
+
     /** @var array<string, mixed>|null */
     public ?array $panelOperation = null;
 
@@ -134,16 +136,26 @@ class UpdatesPage extends Component
             return;
         }
 
+        $requested = trim($this->panelTargetTag);
+        if ($requested === '') {
+            $requested = (string) ($this->panelUpdate['latest_tag'] ?? '');
+        }
+
         $operation = PanelUpdateOperation::query()->create([
             'user_id' => Auth::id(),
             'status' => 'queued',
             'from_commit' => $this->panelUpdate['deployed_commit'] ?? null,
-            'to_commit' => $this->panelUpdate['remote_commit'] ?? null,
+            'to_commit' => $this->panelUpdate['latest_commit'] ?? ($this->panelUpdate['remote_commit'] ?? null),
+            'target_tag' => $requested !== '' ? $requested : null,
+            'from_tag' => $this->panelUpdate['deployed_tag'] ?? null,
+            'to_tag' => $requested !== '' ? $requested : null,
         ]);
 
         RunPanelUpdateJob::dispatch($operation->id);
         $this->panelConfirm = '';
-        $this->flash = 'Panel self-update queued (background job).';
+        $this->flash = 'Panel self-update queued'
+            .($requested !== '' ? ' → '.$requested : '')
+            .' (background job).';
         $this->loadPanelOperation();
     }
 

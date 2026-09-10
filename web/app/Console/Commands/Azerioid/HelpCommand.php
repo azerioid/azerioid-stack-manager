@@ -44,7 +44,7 @@ Usage:
   azerioid panel domain set  --domain=<d> [--tls=auto|internal|dns01] [--dns-provider=…] [--staging]
   azerioid panel domain clear
   azerioid panel update check [--json]
-  azerioid panel update apply --confirm
+  azerioid panel update apply [--v=<tag>] --confirm
 
   azerioid process list [--json]
   azerioid process create --command=<cmd> (--vhost=<domain>|--freeform) [--name=<n>] [--directory=<path>]
@@ -73,7 +73,7 @@ Secrets:
   Bare --tls means --tls=auto. Aliases: dns→dns01, self→internal, on→auto. Use --staging for Let's Encrypt staging (rate-limit safe).
   vhost files write reads new content from stdin (not argv). Upload/download is UI-only.
   updates apply / backup restore / panel update apply require --confirm. Log rotation is system logrotate (no CLI).
-  Panel self-update tracks origin/main only (no stable channel yet); dirty source trees are refused; failures roll back.
+  Panel self-update targets semver git tags (latest by real semver, or --v=<tag>); dirty source trees are refused; failures roll back.
 TXT);
 
         return self::SUCCESS;

@@ -21,7 +21,16 @@ final class PanelUpdateApply
             );
         }
         $operationId = Validator::operationId((string) ($input['operation_id'] ?? ''));
+        $tag = isset($input['tag']) ? trim((string) $input['tag']) : null;
+        if ($tag === '') {
+            $tag = null;
+        }
+        // Accept CLI-style aliases.
+        if ($tag === null && isset($input['v'])) {
+            $tag = trim((string) $input['v']);
+            $tag = $tag !== '' ? $tag : null;
+        }
 
-        return (new PanelUpdater($config, $runtime))->apply($operationId, $confirm);
+        return (new PanelUpdater($config, $runtime))->apply($operationId, $confirm, $tag);
     }
 }

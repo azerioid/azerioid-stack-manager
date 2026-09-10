@@ -16,9 +16,9 @@
         <div>
             <h2 class="text-sm font-medium text-zinc-100">Panel self-update</h2>
             <p class="mt-1 text-sm text-zinc-400">
-                Updates the AZERIOID Stack Manager itself (git channel <span class="font-mono">origin/main</span>),
-                not host OS packages. Runs as a background job with rollback to the previous commit on failure.
-                No stable/tag channel yet.
+                Updates the AZERIOID Stack Manager itself from <span class="font-mono">vX.Y.Z</span> git tags
+                (semver), not host OS packages and not raw <span class="font-mono">main</span> HEAD.
+                Runs as a background job with rollback to the previous release on failure.
             </p>
         </div>
 
@@ -29,15 +29,16 @@
                 <div>
                     <div class="text-xs uppercase tracking-wide text-zinc-500">Deployed</div>
                     <div class="mt-1 font-mono text-sm">
-                        {{ $panelUpdate['deployed_commit_short'] ?? '—' }}
-                        @if (!empty($panelUpdate['version']))
-                            <span class="text-zinc-500">· v{{ $panelUpdate['version'] }}</span>
-                        @endif
+                        {{ $panelUpdate['deployed_tag'] ?? 'untagged' }}
+                        <span class="text-zinc-500">· {{ $panelUpdate['deployed_commit_short'] ?? '—' }}</span>
                     </div>
                 </div>
                 <div>
-                    <div class="text-xs uppercase tracking-wide text-zinc-500">origin/main</div>
-                    <div class="mt-1 font-mono text-sm">{{ $panelUpdate['remote_commit_short'] ?? '—' }}</div>
+                    <div class="text-xs uppercase tracking-wide text-zinc-500">Latest tag</div>
+                    <div class="mt-1 font-mono text-sm">
+                        {{ $panelUpdate['latest_tag'] ?? '—' }}
+                        <span class="text-zinc-500">· {{ $panelUpdate['latest_commit_short'] ?? '—' }}</span>
+                    </div>
                 </div>
                 <div>
                     <div class="text-xs uppercase tracking-wide text-zinc-500">Status</div>
@@ -73,18 +74,27 @@
         @else
             <form class="space-y-3" onsubmit="return false;">
                 <p class="text-sm text-zinc-400">
-                    Type <span class="font-mono text-zinc-200">{{ \AzerioidPanel\Broker\Panel\PanelUpdater::CONFIRM }}</span>, then apply.
-                    Dirty working trees are refused. Failures roll back to the prior COMMIT.
+                    Pick a release tag (blank = latest by semver), type
+                    <span class="font-mono text-zinc-200">{{ \AzerioidPanel\Broker\Panel\PanelUpdater::CONFIRM }}</span>, then apply.
+                    Dirty working trees are refused. Failures roll back to the prior release. Pinning an older tag is allowed (downgrade) with a migrations warning.
                 </p>
-                <input class="field max-w-md" wire:model="panelConfirm" placeholder="PANEL-UPDATE">
+                <div class="flex flex-wrap gap-2">
+                    <select class="field max-w-xs" wire:model="panelTargetTag">
+                        <option value="">Latest ({{ $panelUpdate['latest_tag'] ?? '—' }})</option>
+                        @foreach (($panelUpdate['tags'] ?? []) as $tag)
+                            <option value="{{ $tag }}">{{ $tag }}</option>
+                        @endforeach
+                    </select>
+                    <input class="field max-w-md" wire:model="panelConfirm" placeholder="PANEL-UPDATE">
+                </div>
                 <div class="flex flex-wrap gap-2">
                     <button type="button" class="btn-ghost" wire:click="reloadPanelCheck">Refresh check</button>
                     <button
                         type="button"
                         class="btn-primary"
                         wire:click="queuePanelUpdate"
-                        wire:confirm="Apply panel self-update from origin/main? The panel will reload its own PHP-FPM/queue after deploy."
-                        @disabled(empty($panelUpdate['update_available']) || !empty($panelUpdate['dirty']) || !empty($panelUpdate['error']))
+                        wire:confirm="Apply panel self-update to the selected release tag? The panel will reload its own PHP-FPM/queue after deploy."
+                        @disabled(!empty($panelUpdate['dirty']) || !empty($panelUpdate['error']) || empty($panelUpdate['latest_tag']))
                     >Apply panel update</button>
                 </div>
             </form>

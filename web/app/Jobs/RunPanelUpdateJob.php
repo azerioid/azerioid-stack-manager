@@ -46,13 +46,17 @@ class RunPanelUpdateJob implements ShouldQueue
         $operationKey = 'panel-up-' . $operation->id;
 
         try {
+            $stdin = [
+                'operation_id' => $operationKey,
+                'confirm' => PanelUpdater::CONFIRM,
+            ];
+            if (is_string($operation->target_tag) && $operation->target_tag !== '') {
+                $stdin['tag'] = $operation->target_tag;
+            }
             $response = $broker->call(
                 'panel.update.apply',
                 [],
-                [
-                    'operation_id' => $operationKey,
-                    'confirm' => PanelUpdater::CONFIRM,
-                ],
+                $stdin,
                 900,
             );
 
@@ -79,6 +83,8 @@ class RunPanelUpdateJob implements ShouldQueue
                 'log' => $logText,
                 'from_commit' => $response->data['from_commit'] ?? null,
                 'to_commit' => $response->data['to_commit'] ?? null,
+                'from_tag' => $response->data['from_tag'] ?? null,
+                'to_tag' => $response->data['to_tag'] ?? null,
                 'rolled_back' => (bool) ($response->data['rolled_back'] ?? false),
                 'finished_at' => now(),
             ]);

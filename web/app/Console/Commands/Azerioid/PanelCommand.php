@@ -19,6 +19,7 @@ class PanelCommand extends Command
         {--tls-mode= : Alias of --tls=}
         {--dns-provider= : cloudflare|digitalocean (dns01)}
         {--staging : Let\'s Encrypt staging}
+        {--v= : Target release tag (e.g. v0.2.2); omit to use latest semver tag}
         {--confirm : Required for panel update apply}
         {--json : JSON output}';
 
@@ -74,7 +75,7 @@ class PanelCommand extends Command
 
     private function badUpdateOp(): int
     {
-        $this->error('Use: azerioid panel update check|apply [--confirm] [--json]');
+        $this->error('Use: azerioid panel update check|apply [--v=<tag>] [--confirm] [--json]');
 
         return self::INVALID;
     }
@@ -90,9 +91,18 @@ class PanelCommand extends Command
             return $this->emitData($data);
         }
 
-        $this->line('Channel: origin/'.($data['channel'] ?? 'main'));
-        $this->line('Deployed: '.($data['deployed_commit_short'] ?? '—').(isset($data['version']) ? ' (v'.$data['version'].')' : ''));
-        $this->line('Remote:   '.($data['remote_commit_short'] ?? '—'));
+        $this->line('Channel: semver tags');
+        $depTag = $data['deployed_tag'] ?? null;
+        $this->line(
+            'Deployed: '.($depTag ?: 'untagged')
+            .' · '.($data['deployed_commit_short'] ?? '—')
+            .(isset($data['version']) && $data['version'] !== '' ? ' (VERSION '.$data['version'].')' : '')
+        );
+        $this->line('Latest:   '.($data['latest_tag'] ?? '—').' · '.($data['latest_commit_short'] ?? '—'));
+        if (! empty($data['tags']) && is_array($data['tags'])) {
+            $shown = array_slice($data['tags'], 0, 12);
+            $this->line('Tags:     '.implode(', ', $shown).( ! empty($data['tags_truncated']) ? ' …' : ''));
+        }
         if (! empty($data['dirty'])) {
             $this->warn('Source working tree is dirty — apply will be refused.');
             foreach (array_slice($data['dirty_entries'] ?? [], 0, 12) as $line) {
@@ -101,13 +111,10 @@ class PanelCommand extends Command
         } elseif (! empty($data['up_to_date'])) {
             $this->info('Up to date.');
         } elseif (! empty($data['update_available'])) {
-            $this->warn('Update available.');
+            $this->warn('Update available → '.($data['latest_tag'] ?? ''));
             foreach ($data['log_summary'] ?? [] as $line) {
                 $this->line('  '.$line);
             }
-        }
-        if (! empty($data['limitation'])) {
-            $this->line($data['limitation']);
         }
 
         return self::SUCCESS;
@@ -138,14 +145,21 @@ class PanelCommand extends Command
             return self::FAILURE;
         }
 
+        $targetTag = trim((string) ($this->option('v') ?: ''));
+        if ($targetTag === '') {
+            $targetTag = (string) ($check['latest_tag'] ?? '');
+        }
         $operation = PanelUpdateOperation::query()->create([
             'user_id' => null,
             'status' => 'queued',
             'from_commit' => $check['deployed_commit'] ?? null,
-            'to_commit' => $check['remote_commit'] ?? null,
+            'to_commit' => $check['latest_commit'] ?? ($check['remote_commit'] ?? null),
+            'target_tag' => $targetTag !== '' ? $targetTag : null,
+            'from_tag' => $check['deployed_tag'] ?? null,
+            'to_tag' => $targetTag !== '' ? $targetTag : null,
         ]);
         RunPanelUpdateJob::dispatch($operation->id);
-        $this->info('Queued panel self-update job #'.$operation->id.'.');
+        $this->info('Queued panel self-update job #'.$operation->id.($targetTag !== '' ? ' → '.$targetTag : '').'.');
         $this->line('Poll with: azerioid panel update check');
         $this->line('Broker log key: panel-up-'.$operation->id);
 
@@ -170,7 +184,7 @@ class PanelCommand extends Command
                 continue;
             }
             if ($row->status === 'completed') {
-                $this->info('Panel update completed → '.substr((string) ($row->to_commit ?? ''), 0, 7));
+                $this->info('Panel update completed → '.($row->to_tag ?: substr((string) ($row->to_commit ?? ''), 0, 7)));
 
                 return self::SUCCESS;
             }

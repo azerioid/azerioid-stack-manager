@@ -11,17 +11,18 @@ use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Validator;
 
 /**
- * Panel self-update against origin/main via a managed git source tree + PREFIX rsync deploy.
+ * Panel self-update against semver git tags (vX.Y.Z) via a managed source tree + PREFIX rsync deploy.
  *
  * PREFIX (/usr/local/lib/azerioid-panel) is not itself a git checkout — install uses rsync.
- * Updates clone/fetch into paths.panel_source, then redeploy like install_broker/install_panel_app.
+ * Updates fetch tags into paths.panel_source, check out the target tag, then redeploy.
  */
 final class PanelUpdater
 {
     public const CONFIRM = 'PANEL-UPDATE';
-    public const CHANNEL = 'main';
+    public const CHANNEL = 'main'; // clone default branch only — releases are tags
     public const DEFAULT_REMOTE = 'https://github.com/azerioid/azerioid-stack-manager.git';
     public const LOG_SUMMARY_LIMIT = 30;
+    public const TAG_LIST_LIMIT = 50;
 
     public function __construct(
         private readonly Config $config,
@@ -34,43 +35,58 @@ final class PanelUpdater
     {
         $source = $this->sourcePath();
         $this->ensureSourceRepo($source, null);
+        $this->fetchTags($source);
 
-        $fetch = $this->git($source, ['fetch', '--prune', 'origin'], 120);
-        if (!$fetch->ok()) {
-            throw new BrokerException(
-                'git fetch origin failed: ' . $this->execDetail($fetch),
-                1
-            );
-        }
-
-        $remote = $this->revParse($source, 'origin/' . self::CHANNEL);
-        $deployed = $this->readDeployedCommit();
+        $tags = $this->listReleaseTags($source);
+        $latest = Semver::latest($tags);
+        $deployedCommit = $this->readDeployedCommit();
+        $deployedTag = $this->readDeployedTag();
         $dirty = $this->dirtyEntries($source);
-        $behind = $deployed !== null && $deployed !== $remote;
-        $logLines = [];
-        if ($deployed !== null && $behind) {
-            $logLines = $this->logOneline($source, $deployed, $remote);
-        } elseif ($deployed === null) {
-            $logLines = $this->logOneline($source, $remote . '~10', $remote);
+
+        $latestCommit = $latest !== null ? $this->revParse($source, $latest) : null;
+        $updateAvailable = false;
+        $upToDate = false;
+        if ($latest !== null) {
+            if ($deployedTag !== null) {
+                $cmp = Semver::compare($deployedTag, $latest);
+                $updateAvailable = $cmp < 0;
+                $upToDate = $cmp === 0 && ($deployedCommit === null || $deployedCommit === $latestCommit);
+            } elseif ($deployedCommit !== null && $latestCommit !== null) {
+                $updateAvailable = $deployedCommit !== $latestCommit;
+                $upToDate = $deployedCommit === $latestCommit;
+            } else {
+                $updateAvailable = true;
+            }
         }
 
-        $version = $this->readVersionFile();
+        $logLines = [];
+        if ($deployedCommit !== null && $latestCommit !== null && $deployedCommit !== $latestCommit) {
+            $logLines = $this->logOneline($source, $deployedCommit, $latestCommit);
+        } elseif ($deployedTag !== null && $latest !== null && $deployedTag !== $latest) {
+            $logLines = $this->logOneline($source, $deployedTag, $latest);
+        }
 
         return [
-            'channel' => self::CHANNEL,
+            'channel' => 'tags',
             'remote' => $this->gitRemote(),
             'source_path' => $source,
-            'deployed_commit' => $deployed,
-            'deployed_commit_short' => $deployed !== null ? substr($deployed, 0, 7) : null,
-            'remote_commit' => $remote,
-            'remote_commit_short' => substr($remote, 0, 7),
-            'update_available' => $deployed === null ? true : $behind,
-            'up_to_date' => $deployed !== null && !$behind,
+            'deployed_tag' => $deployedTag,
+            'deployed_commit' => $deployedCommit,
+            'deployed_commit_short' => $deployedCommit !== null ? substr($deployedCommit, 0, 7) : null,
+            'latest_tag' => $latest,
+            'latest_commit' => $latestCommit,
+            'latest_commit_short' => $latestCommit !== null ? substr($latestCommit, 0, 7) : null,
+            // Back-compat keys for older UI/CLI while migrating:
+            'remote_commit' => $latestCommit,
+            'remote_commit_short' => $latestCommit !== null ? substr($latestCommit, 0, 7) : null,
+            'update_available' => $updateAvailable,
+            'up_to_date' => $upToDate,
             'dirty' => $dirty !== [],
             'dirty_entries' => $dirty,
             'log_summary' => $logLines,
-            'version' => $version,
-            'limitation' => 'Tracks origin/' . self::CHANNEL . ' only — no stable/tag channel yet.',
+            'tags' => array_slice($tags, 0, self::TAG_LIST_LIMIT),
+            'tags_truncated' => count($tags) > self::TAG_LIST_LIMIT,
+            'version' => $this->readVersionFile(),
             'scope' => 'panel-self-update',
         ];
     }
@@ -78,7 +94,7 @@ final class PanelUpdater
     /**
      * @return array<string, mixed>
      */
-    public function apply(string $operationId, string $confirm): array
+    public function apply(string $operationId, string $confirm, ?string $requestedTag = null): array
     {
         Validator::typedConfirm($confirm, self::CONFIRM);
         $operationId = Validator::operationId($operationId);
@@ -86,11 +102,13 @@ final class PanelUpdater
         $source = $this->sourcePath();
         $prefix = rtrim($this->config->panelRoot, '/');
         $preCommit = $this->readDeployedCommit();
+        $preTag = $this->readDeployedTag();
         $rolledBack = false;
+        $targetTag = null;
         $target = null;
 
         try {
-            $log->info('Panel self-update starting (channel=origin/' . self::CHANNEL . ').');
+            $log->info('Panel self-update starting (semver tags).');
             $this->ensureSourceRepo($source, $log);
 
             $dirty = $this->dirtyEntries($source);
@@ -103,30 +121,45 @@ final class PanelUpdater
                 );
             }
 
-            $fetch = $this->git($source, ['fetch', '--prune', 'origin'], 120);
-            if (!$fetch->ok()) {
-                throw new BrokerException('git fetch failed: ' . $this->execDetail($fetch), 1);
+            $this->fetchTags($source);
+            $tags = $this->listReleaseTags($source);
+            if ($tags === []) {
+                throw new BrokerException(
+                    'No release tags (vX.Y.Z) found on origin. Create and push a semver tag before updating.',
+                    3
+                );
             }
 
-            $target = $this->revParse($source, 'origin/' . self::CHANNEL);
+            $targetTag = $this->resolveTargetTag($requestedTag, $tags);
+            $target = $this->revParse($source, $targetTag);
+            $log->info('Target tag: ' . $targetTag . ' (' . substr($target, 0, 7) . ')');
+
             if ($preCommit === null) {
-                $log->warn('No COMMIT marker under PREFIX; treating pre-update rollback point as current source HEAD after sync.');
-                // Align source to whatever we are about to leave behind if deploy fails mid-way:
-                // use current origin tip's parent only after we have deployed something once.
-                // For first apply: snapshot source at target before merge is N/A — checkout target,
-                // and on failure re-deploy is best-effort from whatever COMMIT we write only after success.
+                $log->warn('No COMMIT marker under PREFIX; using current source HEAD as rollback point.');
                 $preCommit = $this->revParse($source, 'HEAD');
             }
 
-            if ($preCommit === $target) {
-                $log->info('Already on ' . substr($target, 0, 7) . ' — nothing to apply.');
-                $this->writeDeployedCommit($target);
+            $downgrade = $preTag !== null && Semver::compare($targetTag, $preTag) < 0;
+            if ($downgrade) {
+                $log->warn(
+                    'Downgrade requested: ' . $preTag . ' → ' . $targetTag
+                    . '. Migrations applied by newer releases are NOT automatically reversed; '
+                    . 'verify schema compatibility before relying on this panel.'
+                );
+            }
+
+            if ($preCommit === $target && $preTag === $targetTag) {
+                $log->info('Already on ' . $targetTag . ' — nothing to apply.');
+                $this->writeDeployedMarkers($target, $targetTag);
 
                 return [
-                    'channel' => self::CHANNEL,
+                    'channel' => 'tags',
+                    'from_tag' => $preTag,
+                    'to_tag' => $targetTag,
                     'from_commit' => $preCommit,
                     'to_commit' => $target,
                     'changed' => false,
+                    'downgrade' => false,
                     'rolled_back' => false,
                     'migrations' => 'none',
                     'operation_id' => $operationId,
@@ -134,46 +167,34 @@ final class PanelUpdater
                 ];
             }
 
-            $log->info('Rollback point: ' . $preCommit);
-            $log->info('Target origin/' . self::CHANNEL . ': ' . $target);
+            $log->info('Rollback point: ' . ($preTag ?? '(untagged)') . ' @ ' . $preCommit);
 
-            // Ensure source is on pre-commit before fast-forward (so reset --hard pre is meaningful).
-            $checkoutPre = $this->git($source, ['checkout', '-f', 'main'], 60);
-            if (!$checkoutPre->ok()) {
-                $checkoutPre = $this->git($source, ['checkout', '-f', '-B', 'main', $preCommit], 60);
-            }
-            $resetPre = $this->git($source, ['reset', '--hard', $preCommit], 60);
-            if (!$resetPre->ok()) {
+            $checkout = $this->git($source, ['checkout', '-f', '--detach', $target], 60);
+            if (!$checkout->ok()) {
                 throw new BrokerException(
-                    'Could not align source tree to rollback point ' . $preCommit . ': ' . $this->execDetail($resetPre),
+                    'Could not check out ' . $targetTag . ': ' . $this->execDetail($checkout),
                     1
                 );
             }
-
-            $merge = $this->git($source, ['merge', '--ff-only', $target], 60);
-            if (!$merge->ok()) {
-                throw new BrokerException(
-                    'Fast-forward to origin/' . self::CHANNEL . ' is not possible (refusing non-FF update). '
-                    . $this->execDetail($merge),
-                    3
-                );
-            }
-            $log->info('Fast-forward OK.');
+            $log->info('Checked out ' . $targetTag . '.');
 
             $this->deployFromSource($source, $prefix, $log);
             $migrations = $this->runMigrations($prefix, $log);
             $this->rebuildCaches($prefix, $log);
-            $this->writeDeployedCommit($target);
+            $this->writeDeployedMarkers($target, $targetTag);
             $this->writeVersionFromSource($source, $prefix);
             $this->reloadRuntime($log, deferQueueRestart: true);
 
-            $log->info('Panel self-update completed successfully → ' . substr($target, 0, 7));
+            $log->info('Panel self-update completed successfully → ' . $targetTag);
 
             return [
-                'channel' => self::CHANNEL,
+                'channel' => 'tags',
+                'from_tag' => $preTag,
+                'to_tag' => $targetTag,
                 'from_commit' => $preCommit,
                 'to_commit' => $target,
                 'changed' => true,
+                'downgrade' => $downgrade,
                 'rolled_back' => false,
                 'migrations' => $migrations,
                 'operation_id' => $operationId,
@@ -183,16 +204,19 @@ final class PanelUpdater
             $log->warn('Update failed: ' . $e->getMessage());
             if ($preCommit !== null) {
                 try {
-                    $log->info('Rolling back to ' . $preCommit . ' …');
-                    $this->git($source, ['reset', '--hard', $preCommit], 60);
+                    $log->info('Rolling back to ' . ($preTag ?? substr($preCommit, 0, 7)) . ' …');
+                    $this->git($source, ['checkout', '-f', '--detach', $preCommit], 60);
                     $this->deployFromSource($source, $prefix, $log);
                     $this->runMigrations($prefix, $log);
                     $this->rebuildCaches($prefix, $log);
-                    $this->writeDeployedCommit($preCommit);
+                    $this->writeDeployedMarkers($preCommit, $preTag);
                     $this->writeVersionFromSource($source, $prefix);
                     $this->reloadRuntime($log, deferQueueRestart: true);
                     $rolledBack = true;
-                    $log->info('Rollback completed; panel left on ' . substr($preCommit, 0, 7) . '.');
+                    $log->info(
+                        'Rollback completed; panel left on '
+                        . ($preTag ?? substr($preCommit, 0, 7)) . '.'
+                    );
                 } catch (\Throwable $rollbackError) {
                     $log->warn('Rollback failed: ' . $rollbackError->getMessage());
                     throw new BrokerException(
@@ -206,7 +230,7 @@ final class PanelUpdater
 
             throw new BrokerException(
                 ($rolledBack
-                    ? 'Panel update failed and was rolled back to the previous commit. '
+                    ? 'Panel update failed and was rolled back to the previous release. '
                     : 'Panel update failed (no rollback point available). ')
                 . $e->getMessage(),
                 1
@@ -333,6 +357,76 @@ final class PanelUpdater
         return array_values(array_filter(array_map('trim', $lines), static fn ($l) => $l !== ''));
     }
 
+    private function fetchTags(string $source): void
+    {
+        $fetch = $this->git($source, ['fetch', '--prune', '--tags', 'origin'], 120);
+        if (!$fetch->ok()) {
+            // Older remotes may reject --tags with prune; retry without prune flags combo.
+            $fetch = $this->git($source, ['fetch', '--tags', 'origin'], 120);
+        }
+        if (!$fetch->ok()) {
+            throw new BrokerException('git fetch --tags failed: ' . $this->execDetail($fetch), 1);
+        }
+    }
+
+    /** @return list<string> newest-first normalized release tags */
+    private function listReleaseTags(string $source): array
+    {
+        $listed = $this->git($source, ['tag', '-l', 'v*'], 30);
+        if (!$listed->ok()) {
+            throw new BrokerException('git tag -l failed: ' . $this->execDetail($listed), 1);
+        }
+        $raw = preg_split('/\r\n|\r|\n/', trim($listed->stdout)) ?: [];
+        $tags = [];
+        foreach ($raw as $line) {
+            $line = trim($line);
+            if ($line !== '') {
+                $tags[] = $line;
+            }
+        }
+
+        return Semver::sortDescending($tags);
+    }
+
+    /**
+     * @param  list<string>  $tags
+     */
+    private function resolveTargetTag(?string $requestedTag, array $tags): string
+    {
+        if ($requestedTag === null || trim($requestedTag) === '') {
+            $latest = Semver::latest($tags);
+            if ($latest === null) {
+                throw new BrokerException('No valid semver tags available.', 3);
+            }
+
+            return $latest;
+        }
+
+        $normalized = Semver::normalize($requestedTag);
+        if ($normalized === null) {
+            throw new BrokerException(
+                'Invalid tag "' . trim($requestedTag) . '". Expected semver like v0.2.1.',
+                2
+            );
+        }
+
+        $available = [];
+        foreach ($tags as $tag) {
+            $available[Semver::normalize($tag) ?? $tag] = $tag;
+        }
+        if (!isset($available[$normalized])) {
+            $suggestion = Semver::suggest($normalized, $tags);
+            $hint = $suggestion !== null ? ' Did you mean ' . $suggestion . '?' : '';
+            throw new BrokerException(
+                'Unknown release tag "' . $normalized . '".' . $hint
+                . ' Available (newest first): ' . implode(', ', array_slice($tags, 0, 12)),
+                3
+            );
+        }
+
+        return $normalized;
+    }
+
     private function readDeployedCommit(): ?string
     {
         $path = rtrim($this->config->panelRoot, '/') . '/COMMIT';
@@ -347,10 +441,31 @@ final class PanelUpdater
         return $hash;
     }
 
+    private function readDeployedTag(): ?string
+    {
+        $path = rtrim($this->config->panelRoot, '/') . '/TAG';
+        if (!$this->runtime->fileExists($path)) {
+            return null;
+        }
+
+        return Semver::normalize(trim($this->runtime->readFile($path)));
+    }
+
+    private function writeDeployedMarkers(string $hash, ?string $tag): void
+    {
+        $prefix = rtrim($this->config->panelRoot, '/');
+        $this->runtime->writeFile($prefix . '/COMMIT', $hash . "\n", 0644);
+        $tagPath = $prefix . '/TAG';
+        if ($tag !== null && Semver::isValid($tag)) {
+            $this->runtime->writeFile($tagPath, Semver::normalize($tag) . "\n", 0644);
+        } elseif ($this->runtime->fileExists($tagPath)) {
+            $this->runtime->deleteFile($tagPath);
+        }
+    }
+
     private function writeDeployedCommit(string $hash): void
     {
-        $path = rtrim($this->config->panelRoot, '/') . '/COMMIT';
-        $this->runtime->writeFile($path, $hash . "\n", 0644);
+        $this->writeDeployedMarkers($hash, $this->readDeployedTag());
     }
 
     private function readVersionFile(): ?string
