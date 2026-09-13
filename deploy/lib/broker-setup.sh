@@ -162,6 +162,10 @@ install_panel_app() {
     chown "${WEB_USER}:${WEB_USER}" "${COMPOSER_HOME}"
     export COMPOSER_HOME
 
+    if [[ -z "${PHP_BIN:-}" || -z "${COMPOSER_BIN:-}" ]]; then
+        echo "PHP_BIN/COMPOSER_BIN not set before panel composer install (PHP_BIN='${PHP_BIN:-}' COMPOSER_BIN='${COMPOSER_BIN:-}')." >&2
+        exit 1
+    fi
     run_as_web "${PHP_BIN} ${COMPOSER_BIN} install --no-dev --optimize-autoloader --no-interaction --no-scripts"
     rm -f "${PREFIX}/web/bootstrap/cache/packages.php" "${PREFIX}/web/bootstrap/cache/services.php"
     run_as_web "${PHP_BIN} artisan package:discover --ansi --no-interaction"

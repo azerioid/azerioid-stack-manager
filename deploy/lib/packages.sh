@@ -23,12 +23,32 @@ bootstrap_packages() {
             ;;
     esac
 
-    if ! command -v composer >/dev/null 2>&1; then
+    # Non-interactive SSH / minimal images may omit /usr/local/bin from PATH.
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:${PATH:-}"
+
+    if ! command -v composer >/dev/null 2>&1 && [[ ! -x /usr/local/bin/composer ]]; then
         echo "==> Installing Composer"
         curl -fsSL https://getcomposer.org/installer \
             | "$(php_bin)" -- --install-dir=/usr/local/bin --filename=composer
         chmod 0755 /usr/local/bin/composer
+        hash -r 2>/dev/null || true
     fi
-    export COMPOSER_BIN="$(command -v composer)"
+    # Prefer absolute paths (same as PanelUpdater::composerBin) so an empty
+    # `command -v` result cannot become `php install` → "Could not open input file".
+    if [[ -x /usr/local/bin/composer ]]; then
+        export COMPOSER_BIN=/usr/local/bin/composer
+    elif [[ -x /usr/bin/composer ]]; then
+        export COMPOSER_BIN=/usr/bin/composer
+    else
+        export COMPOSER_BIN="$(command -v composer || true)"
+    fi
+    if [[ -z "${COMPOSER_BIN}" || ! -x "${COMPOSER_BIN}" ]]; then
+        echo "Composer binary not found after bootstrap (expected /usr/local/bin/composer)." >&2
+        exit 1
+    fi
     export PHP_BIN="$(php_bin)"
+    if [[ -z "${PHP_BIN}" || ! -x "${PHP_BIN}" ]]; then
+        echo "PHP CLI binary not found after bootstrap." >&2
+        exit 1
+    fi
 }
