@@ -332,7 +332,11 @@ final class PanelUpdater
 
     private function revParse(string $source, string $ref): string
     {
-        $r = $this->git($source, ['rev-parse', $ref], 30);
+        // Peel annotated tags to the underlying commit (plain rev-parse returns the tag object).
+        $r = $this->git($source, ['rev-parse', $ref . '^{commit}'], 30);
+        if (!$r->ok()) {
+            $r = $this->git($source, ['rev-parse', $ref], 30);
+        }
         if (!$r->ok()) {
             throw new BrokerException('git rev-parse ' . $ref . ' failed: ' . $this->execDetail($r), 1);
         }
