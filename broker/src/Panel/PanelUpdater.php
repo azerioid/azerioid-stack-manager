@@ -52,8 +52,17 @@ final class PanelUpdater
                 $updateAvailable = $cmp < 0;
                 $upToDate = $cmp === 0 && ($deployedCommit === null || $deployedCommit === $latestCommit);
             } elseif ($deployedCommit !== null && $latestCommit !== null) {
-                $updateAvailable = $deployedCommit !== $latestCommit;
-                $upToDate = $deployedCommit === $latestCommit;
+                if ($deployedCommit === $latestCommit) {
+                    $updateAvailable = false;
+                    $upToDate = true;
+                } elseif ($this->isAncestor($source, $latestCommit, $deployedCommit)) {
+                    // Installed from main tip (or similar) that is already ahead of the latest release tag.
+                    $updateAvailable = false;
+                    $upToDate = true;
+                } else {
+                    $updateAvailable = true;
+                    $upToDate = false;
+                }
             } else {
                 $updateAvailable = true;
             }
@@ -137,6 +146,23 @@ final class PanelUpdater
             if ($preCommit === null) {
                 $log->warn('No COMMIT marker under PREFIX; using current source HEAD as rollback point.');
                 $preCommit = $this->revParse($source, 'HEAD');
+            }
+
+            // Implicit "apply latest" must not walk backwards from an untagged tip that is
+            // already past the newest release tag (fresh install from main). Explicit --v= is fine.
+            if (
+                $requestedTag === null
+                && $preCommit !== $target
+                && $this->isAncestor($source, $target, $preCommit)
+            ) {
+                throw new BrokerException(
+                    'Refusing panel update: deployed commit '
+                    . substr($preCommit, 0, 7)
+                    . ' is already ahead of latest tag '
+                    . $targetTag
+                    . '. Create a newer release tag, or pass --v=<tag> explicitly to move to that tag.',
+                    3
+                );
             }
 
             $downgrade = $preTag !== null && Semver::compare($targetTag, $preTag) < 0;
@@ -334,18 +360,27 @@ final class PanelUpdater
     {
         // Peel annotated tags to the underlying commit (plain rev-parse returns the tag object).
         $r = $this->git($source, ['rev-parse', $ref . '^{commit}'], 30);
-        if (!$r->ok()) {
+        $hash = $r->ok() ? trim($r->stdout) : '';
+        if (!preg_match('/^[0-9a-f]{40}$/', $hash)) {
             $r = $this->git($source, ['rev-parse', $ref], 30);
+            if (!$r->ok()) {
+                throw new BrokerException('git rev-parse ' . $ref . ' failed: ' . $this->execDetail($r), 1);
+            }
+            $hash = trim($r->stdout);
         }
-        if (!$r->ok()) {
-            throw new BrokerException('git rev-parse ' . $ref . ' failed: ' . $this->execDetail($r), 1);
-        }
-        $hash = trim($r->stdout);
         if (!preg_match('/^[0-9a-f]{40}$/', $hash)) {
             throw new BrokerException('Unexpected git rev-parse output for ' . $ref . '.', 1);
         }
 
         return $hash;
+    }
+
+    /** True when $maybeAncestor is an ancestor of (or equal to) $descendant. */
+    private function isAncestor(string $source, string $maybeAncestor, string $descendant): bool
+    {
+        $r = $this->git($source, ['merge-base', '--is-ancestor', $maybeAncestor, $descendant], 30);
+
+        return $r->ok();
     }
 
     /** @return list<string> */

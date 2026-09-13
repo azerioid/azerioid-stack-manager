@@ -97,6 +97,108 @@ final class PanelUpdaterTest extends TestCase
         $this->assertSame('panel-self-update', $result['scope']);
     }
 
+    public function test_check_untagged_tip_ahead_of_latest_tag_is_up_to_date(): void
+    {
+        $runtime = new FakeRuntime();
+        $config = new Config();
+        $config->panelSourcePath = '/var/lib/azerioid-panel/src';
+        $config->panelRoot = '/usr/local/lib/azerioid-panel';
+        $latest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        $ahead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+        $runtime->dirs[$config->panelSourcePath] = true;
+        $runtime->dirs[$config->panelSourcePath . '/.git'] = true;
+        $runtime->files[$config->panelRoot . '/COMMIT'] = $ahead . "\n";
+        $runtime->files[$config->panelRoot . '/VERSION'] = "0.2.2\n";
+
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            0,
+            ''
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            0,
+            "v0.2.1\nv0.2.2\n"
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'rev-parse', 'v0.2.2^{commit}'],
+            0,
+            $latest . "\n"
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'merge-base', '--is-ancestor', $latest, $ahead],
+            0,
+            ''
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'status', '--porcelain'],
+            0,
+            ''
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'log', $ahead . '..' . $latest, '--oneline', '-n', '30'],
+            0,
+            ''
+        );
+
+        $result = (new PanelUpdater($config, $runtime))->check();
+        $this->assertSame('v0.2.2', $result['latest_tag']);
+        $this->assertFalse($result['update_available']);
+        $this->assertTrue($result['up_to_date']);
+        $this->assertNull($result['deployed_tag']);
+        $this->assertSame($ahead, $result['deployed_commit']);
+    }
+
+    public function test_apply_refuses_implicit_downgrade_from_untagged_ahead_tip(): void
+    {
+        $runtime = new FakeRuntime();
+        $config = new Config();
+        $config->panelSourcePath = '/var/lib/azerioid-panel/src';
+        $config->panelRoot = '/usr/local/lib/azerioid-panel';
+        $latest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        $ahead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+        $runtime->dirs[$config->panelSourcePath] = true;
+        $runtime->dirs[$config->panelSourcePath . '/.git'] = true;
+        $runtime->files[$config->panelRoot . '/COMMIT'] = $ahead . "\n";
+        $runtime->files['/usr/sbin/runuser'] = '';
+        $runtime->files['/usr/bin/php8.4'] = '';
+        $runtime->files['/usr/local/bin/composer'] = '';
+
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'status', '--porcelain'],
+            0,
+            ''
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            0,
+            ''
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            0,
+            "v0.2.2\n"
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'rev-parse', 'v0.2.2^{commit}'],
+            0,
+            $latest . "\n"
+        );
+        $runtime->script(
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'merge-base', '--is-ancestor', $latest, $ahead],
+            0,
+            ''
+        );
+
+        try {
+            (new PanelUpdater($config, $runtime))->apply('op-ahead1', PanelUpdater::CONFIRM);
+            $this->fail('Expected refusal when tip is ahead of latest tag');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('already ahead of latest tag', $e->getMessage());
+            $this->assertStringContainsString('v0.2.2', $e->getMessage());
+        }
+    }
+
     public function test_apply_rejects_unknown_tag(): void
     {
         $runtime = new FakeRuntime();
