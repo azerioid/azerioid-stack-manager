@@ -85,6 +85,20 @@ final class BackendEngineBind
                 $this->apacheForwardedClientConf($addr),
                 0644
             );
+            // EL httpd uses IncludeOptional conf.d/*.conf only — it does not recurse
+            // into conf.d/vhost/, so managed backend vhosts would never load.
+            $vhostDir = rtrim((string) ($layout->apacheSiteLayout()['vhost_dir'] ?? ''), '/');
+            if ($vhostDir !== '' && str_ends_with($vhostDir, '/conf.d/vhost')) {
+                if (!$this->runtime->isDir($vhostDir)) {
+                    $this->runtime->mkdir($vhostDir, 0755);
+                }
+                $this->runtime->writeFile(
+                    rtrim($confD, '/') . '/00-azerioid-vhosts.conf',
+                    "# AZERIOID — load managed backend vhosts (EL conf.d is non-recursive)\n"
+                    . "IncludeOptional conf.d/vhost/*.conf\n",
+                    0644
+                );
+            }
         }
         $avail = $layout->apacheConfAvailableDir();
         if ($avail !== null) {
