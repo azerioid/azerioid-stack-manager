@@ -143,7 +143,7 @@ final class ComponentInstaller
                 $this->runtime->exec(['/usr/bin/systemctl', 'disable', $unit], null, 60);
             }
             $log->info('Removing packages: ' . implode(', ', $distro['packages']));
-            $this->removePackages($os, $distro['packages'], $log);
+            $this->removePackages($os, $this->packagesForRemoval($componentId, $os, $distro['packages']), $log);
             ManagedManifest::remove($this->runtime, $this->config->managedComponentsPath, $componentId);
             $log->info('Uninstall completed.');
         } finally {
@@ -270,6 +270,38 @@ final class ComponentInstaller
             $log->warn(trim($result->stderr . "\n" . $result->stdout));
             throw new BrokerException('Package removal failed.', 1);
         }
+        if ($os->pkgMgr === 'apt') {
+            $auto = $this->runtime->exec(
+                ['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=120', '-y', 'autoremove', '--purge'],
+                null,
+                600
+            );
+            if (!$auto->ok()) {
+                $log->warn('apt-get autoremove --purge: ' . trim($auto->stderr . "\n" . $auto->stdout));
+            }
+        }
+    }
+
+    /**
+     * Expand the registry package list for apt removals that leave versioned dependents behind
+     * (Debian/Ubuntu `postgresql` metapackage → `postgresql-17`, clients, common).
+     *
+     * @param list<string> $packages
+     * @return list<string>
+     */
+    private function packagesForRemoval(string $componentId, OsRelease $os, array $packages): array
+    {
+        if ($os->pkgMgr !== 'apt' || $componentId !== 'postgresql') {
+            return $packages;
+        }
+        $extra = PackageQuery::listInstalledMatching($this->runtime, '/^postgresql/', 'apt');
+        if ($extra === []) {
+            return $packages;
+        }
+        $merged = array_values(array_unique([...$packages, ...$extra]));
+        sort($merged);
+
+        return $merged;
     }
 
     /** @param list<string> $steps */

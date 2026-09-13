@@ -246,6 +246,12 @@ if [[ "${PURGE_MANAGED}" -eq 1 ]]; then
     purge_managed_components
     purge_backend_dropins
     if command -v apt-get >/dev/null 2>&1; then
+        # Broker removes the postgresql metapackage; versioned server/client packages can remain.
+        mapfile -t pg_pkgs < <(dpkg-query -W -f='${Package} ${Status}\n' 2>/dev/null | awk '/install ok installed$/ && $1 ~ /^postgresql/ {print $1}')
+        if [[ ${#pg_pkgs[@]} -gt 0 ]]; then
+            echo "==> Purging leftover PostgreSQL packages: ${pg_pkgs[*]}"
+            apt-get -y remove --purge "${pg_pkgs[@]}" 2>/dev/null || true
+        fi
         apt-get -y autoremove --purge 2>/dev/null || true
     fi
 fi

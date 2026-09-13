@@ -52,8 +52,12 @@ final class ComponentDetector
         $packages = is_array($detect['packages'] ?? null) ? array_map('strval', $detect['packages']) : [];
         $unit = trim((string) ($detect['unit'] ?? $distroBlock['unit_name'] ?? ''));
         $command = trim((string) ($detect['command'] ?? ''));
+        $packageRegex = trim((string) ($detect['package_regex'] ?? ''));
 
         $packagesPresent = PackageQuery::anyInstalled($this->runtime, $packages, $this->os->pkgMgr);
+        if (!$packagesPresent && $packageRegex !== '') {
+            $packagesPresent = PackageQuery::anyNameMatching($this->runtime, $packageRegex, $this->os->pkgMgr);
+        }
         $unitInfo = $unit !== '' ? Systemd::show($this->runtime, $unit) : null;
         $unitLoaded = $unit !== '' && $this->unitLoaded($unit);
 
@@ -72,7 +76,8 @@ final class ComponentDetector
                     ? 'Unit '.$unit.' is '.($unitInfo['active_state'] ?? 'unknown').'.'
                     : 'Runtime package detected.';
             }
-        } elseif ($command !== '') {
+        } elseif ($command !== '' && $packages === [] && $packageRegex === '') {
+            // Command probe only when no package criteria exist (avoids client-only false positives).
             $parts = preg_split('/\s+/', $command, 2);
             if (is_array($parts) && ($parts[0] ?? '') !== '') {
                 $probe = $this->runtime->exec([$parts[0], ...array_slice($parts, 1)]);

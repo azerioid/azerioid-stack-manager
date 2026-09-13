@@ -52,4 +52,60 @@ final class PackageQuery
         }
         return true;
     }
+
+    /**
+     * True when any installed package name matches $regex (full-match).
+     * Used for versioned stacks (e.g. Debian postgresql-17) where the metapackage may be gone.
+     */
+    public static function anyNameMatching(Runtime $runtime, string $regex, string $pkgMgr): bool
+    {
+        return self::listInstalledMatching($runtime, $regex, $pkgMgr) !== [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function listInstalledMatching(Runtime $runtime, string $regex, string $pkgMgr): array
+    {
+        $regex = trim($regex);
+        if ($regex === '') {
+            return [];
+        }
+        // Anchor callers may pass ^...$; accept either.
+        $pattern = $regex;
+        if ($pattern[0] !== '/') {
+            $pattern = '/' . $pattern . '/';
+        }
+
+        $names = [];
+        if ($pkgMgr === 'apt') {
+            $result = $runtime->exec(['/usr/bin/dpkg-query', '-W', '-f=${Package} ${Status}\n']);
+            if (!$result->ok()) {
+                return [];
+            }
+            foreach (preg_split('/\r\n|\r|\n/', $result->stdout) ?: [] as $line) {
+                $line = trim($line);
+                if ($line === '' || !str_contains($line, 'install ok installed')) {
+                    continue;
+                }
+                $name = trim(explode(' ', $line, 2)[0]);
+                if ($name !== '' && preg_match($pattern, $name) === 1) {
+                    $names[] = $name;
+                }
+            }
+        } else {
+            $result = $runtime->exec(['/usr/bin/rpm', '-qa', '--qf', '%{NAME}\n']);
+            if (!$result->ok()) {
+                return [];
+            }
+            foreach (preg_split('/\r\n|\r|\n/', $result->stdout) ?: [] as $name) {
+                $name = trim($name);
+                if ($name !== '' && preg_match($pattern, $name) === 1) {
+                    $names[] = $name;
+                }
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
 }

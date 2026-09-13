@@ -30,8 +30,8 @@
         "packages": [
           "postgresql"
         ],
-        "unit": "postgresql",
-        "command": "psql --version"
+        "package_regex": "^postgresql-[0-9]+$",
+        "unit": "postgresql"
       },
       "paths": {
         "conf_globs": [
@@ -51,8 +51,8 @@
         "packages": [
           "postgresql"
         ],
-        "unit": "postgresql",
-        "command": "psql --version"
+        "package_regex": "^postgresql-[0-9]+$",
+        "unit": "postgresql"
       },
       "paths": {
         "conf_globs": [
