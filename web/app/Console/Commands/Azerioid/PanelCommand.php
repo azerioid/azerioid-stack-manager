@@ -145,7 +145,13 @@ class PanelCommand extends Command
             return self::FAILURE;
         }
 
-        $targetTag = trim((string) ($this->option('v') ?: ''));
+        $explicitTag = trim((string) ($this->option('v') ?: ''));
+        $targetTag = $explicitTag;
+        if ($targetTag === '' && empty($check['update_available'])) {
+            $this->info('Already up to date — nothing to apply.');
+
+            return self::SUCCESS;
+        }
         if ($targetTag === '') {
             $targetTag = (string) ($check['latest_tag'] ?? '');
         }
@@ -154,7 +160,9 @@ class PanelCommand extends Command
             'status' => 'queued',
             'from_commit' => $check['deployed_commit'] ?? null,
             'to_commit' => $check['latest_commit'] ?? ($check['remote_commit'] ?? null),
-            'target_tag' => $targetTag !== '' ? $targetTag : null,
+            // Only record an explicit --v= as target_tag for the job; otherwise let the broker
+            // resolve "latest" so untagged ahead-of-tag tips are refused there too.
+            'target_tag' => $explicitTag !== '' ? $explicitTag : null,
             'from_tag' => $check['deployed_tag'] ?? null,
             'to_tag' => $targetTag !== '' ? $targetTag : null,
         ]);

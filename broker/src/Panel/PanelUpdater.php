@@ -148,29 +148,33 @@ final class PanelUpdater
                 $preCommit = $this->revParse($source, 'HEAD');
             }
 
-            // Implicit "apply latest" must not walk backwards from an untagged tip that is
-            // already past the newest release tag (fresh install from main). Explicit --v= is fine.
-            if (
-                $requestedTag === null
-                && $preCommit !== $target
-                && $this->isAncestor($source, $target, $preCommit)
-            ) {
+            // Untagged installs from main tip must not "update" backwards to an older release
+            // unless the operator passed an explicit --v=<tag> (queued as stdin tag).
+            $wouldMoveBack = $preCommit !== $target && $this->isAncestor($source, $target, $preCommit);
+            $downgrade = $preTag !== null && Semver::compare($targetTag, $preTag) < 0;
+            if ($wouldMoveBack && $requestedTag === null && ! $downgrade) {
                 throw new BrokerException(
                     'Refusing panel update: deployed commit '
                     . substr($preCommit, 0, 7)
-                    . ' is already ahead of latest tag '
+                    . ' is already ahead of '
                     . $targetTag
                     . '. Create a newer release tag, or pass --v=<tag> explicitly to move to that tag.',
                     3
                 );
             }
-
-            $downgrade = $preTag !== null && Semver::compare($targetTag, $preTag) < 0;
             if ($downgrade) {
                 $log->warn(
                     'Downgrade requested: ' . $preTag . ' → ' . $targetTag
                     . '. Migrations applied by newer releases are NOT automatically reversed; '
                     . 'verify schema compatibility before relying on this panel.'
+                );
+            } elseif ($wouldMoveBack && $requestedTag !== null) {
+                $log->warn(
+                    'Moving from untagged tip '
+                    . substr($preCommit, 0, 7)
+                    . ' back to '
+                    . $targetTag
+                    . ' (explicit --v).'
                 );
             }
 

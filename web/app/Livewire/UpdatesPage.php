@@ -136,9 +136,11 @@ class UpdatesPage extends Component
             return;
         }
 
-        $requested = trim($this->panelTargetTag);
-        if ($requested === '') {
-            $requested = (string) ($this->panelUpdate['latest_tag'] ?? '');
+        $explicit = trim($this->panelTargetTag);
+        if ($explicit === '' && empty($this->panelUpdate['update_available'])) {
+            $this->flash = 'Already up to date — nothing to apply.';
+
+            return;
         }
 
         $operation = PanelUpdateOperation::query()->create([
@@ -146,15 +148,18 @@ class UpdatesPage extends Component
             'status' => 'queued',
             'from_commit' => $this->panelUpdate['deployed_commit'] ?? null,
             'to_commit' => $this->panelUpdate['latest_commit'] ?? ($this->panelUpdate['remote_commit'] ?? null),
-            'target_tag' => $requested !== '' ? $requested : null,
+            'target_tag' => $explicit !== '' ? $explicit : null,
             'from_tag' => $this->panelUpdate['deployed_tag'] ?? null,
-            'to_tag' => $requested !== '' ? $requested : null,
+            'to_tag' => $explicit !== ''
+                ? $explicit
+                : ($this->panelUpdate['latest_tag'] ?? null),
         ]);
 
         RunPanelUpdateJob::dispatch($operation->id);
         $this->panelConfirm = '';
+        $display = $explicit !== '' ? $explicit : (string) ($this->panelUpdate['latest_tag'] ?? '');
         $this->flash = 'Panel self-update queued'
-            .($requested !== '' ? ' → '.$requested : '')
+            .($display !== '' ? ' → '.$display : '')
             .' (background job).';
         $this->loadPanelOperation();
     }

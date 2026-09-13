@@ -194,7 +194,7 @@ final class PanelUpdaterTest extends TestCase
             (new PanelUpdater($config, $runtime))->apply('op-ahead1', PanelUpdater::CONFIRM);
             $this->fail('Expected refusal when tip is ahead of latest tag');
         } catch (BrokerException $e) {
-            $this->assertStringContainsString('already ahead of latest tag', $e->getMessage());
+            $this->assertStringContainsString('already ahead of', $e->getMessage());
             $this->assertStringContainsString('v0.2.2', $e->getMessage());
         }
     }
