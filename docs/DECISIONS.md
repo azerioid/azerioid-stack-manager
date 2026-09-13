@@ -184,4 +184,31 @@ Opening remote access for **any** database on an engine may bind that engine pub
 **Status:** Accepted  
 **Decision:** Terminal and File Manager drop to a dedicated `az-vh-*` user in group `azerioid-vhosts` (same identity for every engine: Caddy / Apache / Nginx). Supervisor programs run as `azerioid-supervised`, never root / `caddy` / `www-data`. Read-only and system vhosts (panel snippet, reverse-proxy) refuse Terminal, Files, and delete/edit. Uninstall `--full` / `--drop-db` must remove these identities; `/usr/local/bin/azerioid` is removed on every uninstall.
 
+## A26 — PostgreSQL reinstall must not destroy leftover data dirs
+
+**Status:** Accepted (2026-09-13)  
+**Decision:** Component remove may leave the on-disk cluster. Reinstall must **never silently wipe or re-init** over existing data (same class of safety as vhost docroots and `/data/www`).
+
+| Family | Typical data path | Reinstall behavior |
+|--------|-------------------|--------------------|
+| **EL** (Alma/Rocky/RHEL) | `/var/lib/pgsql/data` (`PG_VERSION`) | `post_install`: `test -f /var/lib/pgsql/data/PG_VERSION \|\| postgresql-setup --initdb` — skip-if-exists (landed in `f1e82f7`). Reuses leftover cluster; does not overwrite. |
+| **apt** (Debian/Ubuntu) | `/var/lib/postgresql/<version>/main` | Cluster init is owned by `postgresql-common` package scripts; they also refuse to clobber an existing data directory. Panel does not run a destructive init step on apt. |
+
+**Unacceptable:** bare `postgresql-setup --initdb` (or equivalent) that could recreate/wipe when leftover data is present. Loud failure refusing init is acceptable; silent overwrite is not.
+
+**Evidence (Rocky 9, leftover `/var/lib/pgsql/data` after remove):** reinstall exited 0, `PG_VERSION`/`pg_hba.conf` hashes unchanged, marker file preserved, unit became `active`.
+
+## A27 — CLI failure exit codes
+
+**Status:** Accepted (2026-09-13)  
+**Decision:** `azerioid` CLI failures must exit non-zero. Shared mapping in `CallsBroker::failBroker` / `throwBrokerFailure`:
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Success only |
+| `2` | Validation / usage / policy (`Command::INVALID`; broker codes 2–3; CLI-local `RuntimeException`) |
+| `1` | Broker / operational failure (`Command::FAILURE`) |
+
+Broker JSON `code` must be preserved when rethrowing (do not wrap as bare `RuntimeException`, which defaults to code `0` and used to collapse distinct failures).
+
 
