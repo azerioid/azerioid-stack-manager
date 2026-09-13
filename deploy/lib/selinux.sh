@@ -28,8 +28,11 @@ apply_selinux() {
     semanage fcontext -a -t httpd_sys_rw_content_t '/usr/local/lib/azerioid-panel/web/storage(/.*)?' 2>/dev/null || true
     semanage fcontext -a -t httpd_sys_rw_content_t '/usr/local/lib/azerioid-panel/web/bootstrap/cache(/.*)?' 2>/dev/null || true
     semanage fcontext -a -t bin_t '/usr/local/lib/azerioid-panel/sbin(/.*)?' 2>/dev/null || true
+    # install -d under /var/log inherits var_log_t; Caddy (httpd_t) needs httpd_log_t
+    # or open(access_azerioid-panel.log) fails with EACCES (often dontaudit / no AVC).
+    semanage fcontext -a -t httpd_log_t '/var/log/caddy(/.*)?' 2>/dev/null || true
     install -d -m 0755 /data/www
-    restorecon -Rv /data/www /var/lib/azerioid-panel /usr/local/lib/azerioid-panel 2>/dev/null || true
+    restorecon -Rv /data/www /var/lib/azerioid-panel /usr/local/lib/azerioid-panel /var/log/caddy 2>/dev/null || true
     setsebool -P httpd_can_network_connect 1 2>/dev/null || true
     setsebool -P httpd_unified 1 2>/dev/null || true
     install_panel_fpm_selinux_module

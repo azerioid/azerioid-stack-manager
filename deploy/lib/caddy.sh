@@ -123,6 +123,10 @@ configure_panel_caddy() {
     chown "${caddy_user}:${caddy_user}" /var/log/caddy/access_azerioid-panel.log
     chmod 0640 /var/log/caddy/access_azerioid-panel.log
     chmod 0755 /var/log/caddy
+    # EL: freshly created paths are var_log_t until restorecon; httpd_t cannot write.
+    if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
+        restorecon -Rv /var/log/caddy >/dev/null 2>&1 || true
+    fi
 
     install -d -m 0755 "${CADDY_CONFD}"
     local snippet="${CADDY_CONFD}/azerioid-panel.conf"
