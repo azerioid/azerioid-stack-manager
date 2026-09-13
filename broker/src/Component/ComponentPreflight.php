@@ -34,7 +34,7 @@ final class ComponentPreflight
         }
         $ramMb = $this->memAvailableMb();
         if ($minRamMb > 0 && $ramMb < $minRamMb) {
-            $issues[] = "Need at least {$minRamMb} MB RAM available (found {$ramMb} MB).";
+            $issues[] = "Need at least {$minRamMb} MB memory available including free swap (found {$ramMb} MB).";
         }
         $required = (string) ($minOs[$this->os->distroKey] ?? '');
         if ($required !== '' && version_compare($this->os->versionId, $required, '<')) {
@@ -95,18 +95,25 @@ final class ComponentPreflight
         return 0.0;
     }
 
+    /**
+     * Effective install headroom: MemAvailable + SwapFree (kB → MB).
+     * Small droplets (512 MB) are expected to install with swap; counting only
+     * physical MemAvailable falsely fails every component install.
+     */
     private function memAvailableMb(): int
     {
         if (!$this->runtime->fileExists('/proc/meminfo')) {
             return 0;
         }
-        $available = 0;
+        $memAvailable = 0;
+        $swapFree = 0;
         foreach (explode("\n", $this->runtime->readFile('/proc/meminfo')) as $line) {
             if (str_starts_with($line, 'MemAvailable:')) {
-                $available = (int) preg_replace('/\D/', '', $line);
-                break;
+                $memAvailable = (int) preg_replace('/\D/', '', $line);
+            } elseif (str_starts_with($line, 'SwapFree:')) {
+                $swapFree = (int) preg_replace('/\D/', '', $line);
             }
         }
-        return (int) round($available / 1024);
+        return (int) round(($memAvailable + $swapFree) / 1024);
     }
 }
