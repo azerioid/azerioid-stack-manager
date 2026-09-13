@@ -94,10 +94,47 @@ trait CallsBroker
         return self::SUCCESS;
     }
 
+    /**
+     * Map CLI/broker failures to process exit codes.
+     *
+     * Convention (matches Symfony Console + broker JSON `code`):
+     * - 0 = success
+     * - 2 = validation / usage / policy refusal (Command::INVALID)
+     * - 1 = operational / broker failure (Command::FAILURE)
+     *
+     * Never returns 0: plain RuntimeException defaults to getCode()===0, which
+     * must not be treated as success if an error was printed.
+     */
     protected function failBroker(\Throwable $e): int
     {
         $this->error($e->getMessage());
 
+        $code = match (true) {
+            $e instanceof BrokerCallException => $e->errorCode,
+            $e instanceof \AzerioidPanel\Broker\BrokerException => $e->errorCode,
+            default => (int) $e->getCode(),
+        };
+
+        // Broker: 2 = validation/usage, 3 = policy/refusal.
+        if ($code === 2 || $code === 3) {
+            return self::INVALID;
+        }
+
+        // CLI-local validation uses bare RuntimeException (default code 0).
+        // Never treat code 0 as success after printing an error.
+        if ($code <= 0 && $e instanceof \RuntimeException && ! $e instanceof BrokerCallException) {
+            return self::INVALID;
+        }
+
         return self::FAILURE;
+    }
+
+    /** Rethrow a failed BrokerResponse preserving its semantic exit code. */
+    protected function throwBrokerFailure(BrokerResponse $response): never
+    {
+        throw new BrokerCallException(
+            (string) ($response->error ?: 'Broker call failed.'),
+            $response->code > 0 ? $response->code : 1,
+        );
     }
 }

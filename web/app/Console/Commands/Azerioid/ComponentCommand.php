@@ -85,7 +85,7 @@ class ComponentCommand extends Command
                         $this->line((string) $line);
                     }
                 }
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info("Installed component {$id}.");
 
@@ -108,7 +108,7 @@ class ComponentCommand extends Command
                 'operation_id' => $operationId,
             ], 900);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info("Removed component {$id}.");
 

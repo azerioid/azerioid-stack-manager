@@ -198,7 +198,19 @@ class AzerioidCliTest extends TestCase
             'action' => 'install',
             'id' => 'not-a-real-component-xyz',
         ]);
-        $this->assertNotSame(0, $code);
+        $this->assertSame(2, $code, Artisan::output());
+    }
+
+    public function test_vhost_add_bogus_engine_exits_validation(): void
+    {
+        $code = Artisan::call('azerioid:vhost', [
+            'action' => 'add',
+            '--domain' => 'bogus-engine.example.com',
+            '--type' => 'static',
+            '--root' => '/data/www/bogus-engine.example.com',
+            '--engine' => 'bogus',
+        ]);
+        $this->assertSame(2, $code, Artisan::output());
     }
 
     public function test_process_create_uses_supervised_user_path(): void
@@ -256,7 +268,7 @@ class AzerioidCliTest extends TestCase
             '--mode' => 'global',
         ]);
         $out = Artisan::output();
-        $this->assertNotSame(0, $code, $out);
+        $this->assertSame(2, $code, $out);
         $this->assertStringContainsString('--confirm', $out);
 
         $inject = Artisan::call('azerioid:db', [
@@ -360,7 +372,7 @@ class AzerioidCliTest extends TestCase
     public function test_updates_apply_requires_confirm(): void
     {
         $code = Artisan::call('azerioid:updates', ['action' => 'apply']);
-        $this->assertNotSame(0, $code);
+        $this->assertSame(2, $code);
         $this->assertStringContainsString('--confirm', Artisan::output());
     }
 
@@ -409,7 +421,7 @@ class AzerioidCliTest extends TestCase
                 '--file' => '/var/lib/azerioid-panel/backups/db/all/fixture.bin',
                 '--target' => 'projob_restore_1',
             ]);
-            $this->assertNotSame(0, $code);
+            $this->assertSame(2, $code);
             $this->assertStringContainsString('--confirm', Artisan::output());
         } finally {
             putenv('AZERIOID_BACKUP_PASSPHRASE');

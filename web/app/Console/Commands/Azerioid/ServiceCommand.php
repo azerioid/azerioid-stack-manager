@@ -43,7 +43,7 @@ class ServiceCommand extends Command
             $brokerAction = 'service.' . $action;
             $res = $this->brokerCall($brokerAction, [$name]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info(ucfirst($action) . " issued for {$name}.");
 

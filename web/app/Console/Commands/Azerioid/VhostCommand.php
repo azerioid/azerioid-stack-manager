@@ -150,7 +150,7 @@ class VhostCommand extends Command
             $engine = $type === 'proxy' ? 'caddy' : Validator::vhostEngine((string) ($this->option('engine') ?: 'caddy'));
             $res = $this->brokerCall('vhost.add', $args, ['engine' => $engine]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
 
             $tlsPayload = $this->buildTlsPayload($domain);
@@ -202,7 +202,7 @@ class VhostCommand extends Command
 
             $res = $this->brokerCall('vhost.edit', [$domain], $payload);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->line("Updated vhost {$domain}.");
 
@@ -220,7 +220,7 @@ class VhostCommand extends Command
             $domain = Validator::domain($raw);
             $res = $this->brokerCall('vhost.del', [$domain], []);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->line("Deleted vhost {$domain}.");
 
@@ -265,7 +265,7 @@ class VhostCommand extends Command
                     'token' => $token,
                 ]);
                 if (! $store->ok) {
-                    throw new \RuntimeException((string) $store->error);
+                    $this->throwBrokerFailure($store);
                 }
                 $this->line("Stored DNS credentials for {$provider} (token not echoed).");
             }
@@ -355,7 +355,7 @@ class VhostCommand extends Command
             }
             $res = $this->brokerCall('vhost.files.' . $op, [$domain], $input, $timeout);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $data = is_array($res->data) ? $res->data : [];
             if ($op === 'read') {

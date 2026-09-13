@@ -110,7 +110,7 @@ class ProcessCommand extends Command
             // Broker validates directory against www_root / supervised home — do not bypass.
             $res = $this->brokerCall('supervisor.program.create', [], $payload);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info('Created process ' . $payload['name'] . '.');
             if (is_array($res->data)) {
@@ -132,7 +132,7 @@ class ProcessCommand extends Command
             $name = Validator::supervisorProgramName((string) ($this->argument('name') ?: $this->option('name')));
             $res = $this->brokerCall('supervisor.program.' . $action, [$name]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info(ucfirst($action) . " issued for {$name}.");
 
@@ -148,7 +148,7 @@ class ProcessCommand extends Command
             $name = Validator::supervisorProgramName((string) ($this->argument('name') ?: $this->option('name')));
             $res = $this->brokerCall('supervisor.program.delete', [$name], ['stop_first' => true]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info("Deleted process {$name}.");
 

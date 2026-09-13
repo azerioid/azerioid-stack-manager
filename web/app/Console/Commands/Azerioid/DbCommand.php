@@ -100,7 +100,7 @@ class DbCommand extends Command
                 'engine' => $engine,
             ]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
 
             $this->line("Created database {$name} (engine={$engine}, user={$user}).");
@@ -120,7 +120,7 @@ class DbCommand extends Command
             $name = Validator::dbName((string) $this->option('name'));
             $res = $this->brokerCall('db.del', [$name], ['engine' => $engine]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
             $this->info("Deleted database {$name}.");
 
@@ -146,7 +146,7 @@ class DbCommand extends Command
                 'engine' => $engine,
             ]);
             if (! $res->ok) {
-                throw new \RuntimeException((string) $res->error);
+                $this->throwBrokerFailure($res);
             }
 
             $this->line("Reset password for user {$user} (engine={$engine}).");
