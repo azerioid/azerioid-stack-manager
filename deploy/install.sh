@@ -45,7 +45,7 @@ usage() {
 Usage: stack-manager.sh [options]
        deploy/install.sh [options]
 
-AZERIOID Stack Manager bootstrap — installs Caddy, PHP 8.4 FPM, SQLite panel (no lcmp/lamp required).
+AZERIOID Stack Manager bootstrap — installs Caddy, PHP 8.4 FPM, and the SQLite-backed admin panel.
 
   --non-interactive       no prompts (also auto-enabled when stdin is not a TTY)
   --dry-run               print plan only

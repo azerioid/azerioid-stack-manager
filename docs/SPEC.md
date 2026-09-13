@@ -76,7 +76,7 @@ v1 Node.js is **runtime install only** — no PM2 or process manager integration
 
 ## Bootstrap mode (P1)
 
-The installer no longer requires `lcmp`/`lamp` on PATH. Default is `bootstrap-stack=minimal`:
+Default bootstrap is self-contained (`bootstrap-stack=minimal`):
 
 1. Caddy (official repo)
 2. PHP 8.4 FPM + CLI (Sury on deb, Remi on EL)

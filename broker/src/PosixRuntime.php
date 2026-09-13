@@ -91,7 +91,7 @@ final class PosixRuntime implements Runtime
      * systemd-run starts the broker with an empty environment. Child tools
      * need HOME/XDG so they do not write state into cwd. Prefer the env the
      * wrapper already set; otherwise Caddy's data dir if present, else the
-     * panel state dir (LAMP has no /var/lib/caddy).
+     * panel state dir (Apache-only stacks have no /var/lib/caddy).
      *
      * @return array<string,string>
      */
