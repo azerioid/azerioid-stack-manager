@@ -76,7 +76,7 @@
         "command": "psql --version"
       },
       "post_install": [
-        "postgresql-setup --initdb"
+        "test -f /var/lib/pgsql/data/PG_VERSION || postgresql-setup --initdb"
       ],
       "paths": {
         "conf_globs": [

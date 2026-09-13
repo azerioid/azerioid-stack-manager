@@ -59,6 +59,20 @@ install_panel_fpm_selinux_module() {
     work="$(mktemp -d)"
     checkmodule -M -m -o "${work}/azerioid_panel_fpm.mod" "${te}"
     semodule_package -o "${work}/azerioid_panel_fpm.pp" -m "${work}/azerioid_panel_fpm.mod"
-    semodule -i "${work}/azerioid_panel_fpm.pp"
+    # First install still reloads policy; on 512MB EL that often OOMs mid-bootstrap.
+    # Free page cache and retry once before failing the whole install.
+    sync 2>/dev/null || true
+    echo 3 >/proc/sys/vm/drop_caches 2>/dev/null || true
+    if ! semodule -i "${work}/azerioid_panel_fpm.pp"; then
+        echo "==> semodule install failed (often OOM on 512MB); retrying once after reclaim" >&2
+        sleep 2
+        sync 2>/dev/null || true
+        echo 3 >/proc/sys/vm/drop_caches 2>/dev/null || true
+        if ! semodule -i "${work}/azerioid_panel_fpm.pp"; then
+            rm -rf "${work}"
+            echo "Failed to load azerioid_panel_fpm SELinux module after retry (check free RAM/swap)." >&2
+            return 1
+        fi
+    fi
     rm -rf "${work}"
 }
