@@ -44,6 +44,12 @@ install_panel_fpm_selinux_module() {
         echo "missing ${te}" >&2
         return 1
     }
+    # Re-installing the same module reloads policy; on 512MB EL that often OOMs
+    # (`load_policy: Cannot allocate memory`) and aborts an otherwise healthy bootstrap.
+    if command -v semodule >/dev/null 2>&1 && semodule -l 2>/dev/null | grep -q '^azerioid_panel_fpm'; then
+        echo "==> SELinux module azerioid_panel_fpm already loaded"
+        return 0
+    fi
     command -v checkmodule >/dev/null 2>&1 || dnf -y install checkpolicy >/dev/null 2>&1 || true
     command -v checkmodule >/dev/null 2>&1 || {
         echo "checkmodule not found; cannot load azerioid_panel_fpm SELinux module" >&2
