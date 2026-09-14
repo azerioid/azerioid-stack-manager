@@ -232,10 +232,18 @@ final class ComponentInstaller
             return null;
         }
 
-        Validator::typedConfirm(
-            (string) ($options['confirm'] ?? ''),
-            Validator::REPLACE_MTA_CONFIRM
-        );
+        try {
+            Validator::typedConfirm((string) ($options['confirm'] ?? ''), Validator::REPLACE_MTA_CONFIRM);
+        } catch (BrokerException) {
+            // The generic confirmation error leaves the operator with nothing to act on;
+            // say what was found and what to type.
+            throw new BrokerException(
+                implode(' ', $detected['reasons'])
+                . ' Installing the mail component replaces it. Confirm with '
+                . Validator::REPLACE_MTA_CONFIRM . ' to proceed.',
+                3
+            );
+        }
         foreach ($detected['reasons'] as $reason) {
             $log->warn('Existing mail transport detected: ' . $reason);
         }
