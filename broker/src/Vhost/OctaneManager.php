@@ -512,12 +512,20 @@ final class OctaneManager
             'require',
             'laravel/octane',
             '--no-interaction',
-            '--no-scripts',
         ], $appDir, 600);
         $this->runtime->exec(['/bin/rm', '-rf', $composerHome], null, 30);
 
         if (!$result->ok()) {
             throw new BrokerException('composer require laravel/octane failed: ' . self::execDetail($result), 1);
+        }
+
+        // Ensure the octane:* artisan commands are registered even if scripts were skipped.
+        $discover = $this->runAsSupervised([$php, 'artisan', 'package:discover', '--ansi', '--no-interaction'], $appDir, 120);
+        if (!$discover->ok()) {
+            throw new BrokerException(
+                'artisan package:discover failed after installing laravel/octane: ' . self::execDetail($discover),
+                1
+            );
         }
     }
 
