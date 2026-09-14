@@ -505,6 +505,14 @@ CONF;
             }
         }
         $this->runtime->writeFile($trusted, "127.0.0.1\nlocalhost\n::1\n", 0640);
+        // writeFile runs as root; opendkim must own every table it opens (EL especially).
+        foreach ([$keyTable, $signingTable, $trusted] as $table) {
+            $this->runtime->exec(['/usr/bin/chown', 'opendkim:opendkim', $table], null, 15);
+            $this->runtime->exec(['/usr/bin/chmod', '0640', $table], null, 15);
+        }
+        if ($this->runtime->fileExists('/usr/sbin/restorecon')) {
+            $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $opendkimEtc, $socketDir], null, 30);
+        }
 
         $body = <<<CONF
 # AZERIOID Stack Manager — broker-generated; edits are overwritten
