@@ -755,6 +755,9 @@ final class MailManager
         );
         $this->runtime->exec(['/usr/bin/chmod', '0750', $domainDir], null, 15);
         $this->runtime->exec(['/usr/bin/chmod', '-R', '0700', $base], null, 15);
+        if ($this->runtime->fileExists('/usr/sbin/restorecon')) {
+            $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $domainDir], null, 30);
+        }
     }
 
     private function removeMaildirTree(string $domain): bool

@@ -280,9 +280,9 @@ Constraints:
 
 Port range `34000–34999` is reserved for these workers (see `docs/port-ownership.md`), allocated as the first unused, non-listening port. Default `--max-requests` is 500.
 
-## A36 — Mail server component (future)
+## A36 — Mail server component
 
-**Status:** **Design accepted** (2026-09-14) — approved implementation spec in [`docs/mail-server-design.md`](./mail-server-design.md); **not implemented yet** (no registry entry / broker / UI until a dedicated implementation task)  
+**Status:** **Implemented on `feature/mail-server`** (2026-09-14) — not merged to `main` until fleet proof is complete. Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
 **Decision:** Ship an opt-in, registry-driven **Postfix + Dovecot + OpenDKIM** component (not Exim) for panel-managed domains, following the same install/managed pattern as MariaDB/PostgreSQL/Redis.
 
 **v1 product (locked):**

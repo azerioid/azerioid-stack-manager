@@ -130,11 +130,19 @@ azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/ww
 azerioid db add --engine=mariadb --name=appdb --user=appdb
 azerioid component install redis
 azerioid process create --vhost=app.example.com --command='node server.js' --name=app-node
+azerioid component install mail   # refuses foreign Exim/Sendmail unless --option=confirm=REPLACE-MTA
+azerioid mail hostname set --hostname=mail.example.com
+azerioid mail domain enable --domain=app.example.com
+azerioid mail mailbox add --address=inbox@app.example.com   # password printed once
+azerioid mail status   # “Direct mail delivery: available” or “…blocked… configure a relay”
+azerioid mail smarthost set --host=smtp.provider.example --port=587 --username=apikey
+# relay password: AZERIOID_RELAY_PASSWORD=… (never argv)
+azerioid mail dns records --domain=app.example.com
 azerioid panel update check
 azerioid panel update apply --confirm
 ```
 
-Secrets (DB passwords, DNS tokens, backup passphrase, TOTP re-auth) go through the environment or one-time stdout — not argv flags. See `azerioid help`.
+Secrets (DB passwords, DNS tokens, backup passphrase, TOTP re-auth, mail/smarthost passwords) go through the environment or one-time stdout — not argv flags. See `azerioid help`.
 
 ## Uninstall
 
