@@ -169,8 +169,9 @@ final class MailProvisioner
 
             'milter_default_action' => 'accept',
             'milter_protocol' => '6',
-            'smtpd_milters' => 'unix:' . $this->milterSocketSpec(),
-            'non_smtpd_milters' => 'unix:' . $this->milterSocketSpec(),
+            // Inet localhost avoids Postfix chroot + SELinux unix-socket denials on EL.
+            'smtpd_milters' => 'inet:127.0.0.1:8891',
+            'non_smtpd_milters' => 'inet:127.0.0.1:8891',
 
             'local_recipient_maps' => '',
             'alias_maps' => 'hash:/etc/aliases',
@@ -178,19 +179,10 @@ final class MailProvisioner
         ];
     }
 
-    /**
-     * Postfix chroots smtpd under /var/spool/postfix, so the milter socket must be
-     * addressed relative to that root rather than by its absolute path.
-     */
+    /** Reserved for diagnostics; milter transport is inet:8891@localhost. */
     private function milterSocketSpec(): string
     {
-        $socket = $this->paths->opendkimSocket();
-        $spool = '/var/spool/postfix/';
-        if (str_starts_with($socket, $spool)) {
-            return substr($socket, strlen($spool));
-        }
-
-        return ltrim($socket, '/');
+        return 'inet:127.0.0.1:8891';
     }
 
     private function writeSubmissionServices(OperationLogger $log): void
@@ -474,8 +466,6 @@ CONF;
     private function writeOpenDkimConfig(OperationLogger $log): void
     {
         $keysDir = rtrim($this->paths->opendkimKeys(), '/');
-        $socket = $this->paths->opendkimSocket();
-        $socketDir = dirname($socket);
         // Package install often leaves /etc/opendkim as root:root 0750, which blocks the
         // opendkim user from reading keys under keys/ — signing then milter-rejects with 451.
         $opendkimEtc = dirname($keysDir);
@@ -483,18 +473,16 @@ CONF;
             $this->runtime->exec(['/usr/bin/chown', 'opendkim:opendkim', $opendkimEtc], null, 15);
             $this->runtime->exec(['/usr/bin/chmod', '0755', $opendkimEtc], null, 15);
         }
-        foreach ([$keysDir, $socketDir] as $dir) {
-            if (!$this->runtime->isDir($dir)) {
-                $this->runtime->mkdir($dir, 0755);
-            }
+        if (!$this->runtime->isDir($keysDir)) {
+            $this->runtime->mkdir($keysDir, 0755);
         }
         $this->runtime->exec(['/usr/bin/chown', '-R', 'opendkim:opendkim', $keysDir], null, 30);
         $this->runtime->exec(['/usr/bin/chmod', '0755', $keysDir], null, 15);
-        // Postfix must be able to reach the socket from inside its chroot.
-        $this->runtime->exec(['/usr/bin/chown', 'opendkim:postfix', $socketDir], null, 15);
-        $this->runtime->exec(['/usr/bin/chmod', '0750', $socketDir], null, 15);
-        // Postfix smtpd (chrooted) must open the milter socket — share the group.
-        $this->runtime->exec(['/usr/sbin/usermod', '-a', '-G', 'opendkim', 'postfix'], null, 30);
+        // Runtime dir for PidFile (tmpfiles.d normally creates this).
+        if (!$this->runtime->isDir('/run/opendkim')) {
+            $this->runtime->mkdir('/run/opendkim', 0755);
+        }
+        $this->runtime->exec(['/usr/bin/chown', 'opendkim:opendkim', '/run/opendkim'], null, 15);
 
         $keyTable = $keysDir . '/key.table';
         $signingTable = $keysDir . '/signing.table';
@@ -511,7 +499,7 @@ CONF;
             $this->runtime->exec(['/usr/bin/chmod', '0640', $table], null, 15);
         }
         if ($this->runtime->fileExists('/usr/sbin/restorecon')) {
-            $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $opendkimEtc, $socketDir], null, 30);
+            $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $opendkimEtc], null, 30);
         }
 
         $body = <<<CONF
@@ -524,7 +512,8 @@ SubDomains              no
 OversignHeaders         From
 AutoRestart             yes
 AutoRestartRate         10/1h
-Socket                  local:{$socket}
+# Inet localhost — portable across Ubuntu/Debian and SELinux Enforcing EL hosts.
+Socket                  inet:8891@localhost
 PidFile                 /run/opendkim/opendkim.pid
 UserID                  opendkim:opendkim
 KeyTable                file:{$keyTable}
@@ -534,7 +523,7 @@ InternalHosts           refile:{$trusted}
 
 CONF;
         $this->runtime->writeFile($this->paths->opendkimConf(), $body, 0644);
-        $log->info('Wrote OpenDKIM configuration and wired the Postfix milter.');
+        $log->info('Wrote OpenDKIM configuration (inet milter on 127.0.0.1:8891).');
     }
 
     private function applyMaps(OperationLogger $log): void
