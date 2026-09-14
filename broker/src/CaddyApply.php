@@ -329,7 +329,8 @@ final class CaddyApply
 
     private static function portListening(Runtime $runtime, int $port): bool
     {
-        foreach (['/usr/bin/ss', '/bin/ss'] as $ss) {
+        // Prefer /usr/sbin/ss (EL/Fedora); fall back to /usr/bin and /bin (Debian/Ubuntu).
+        foreach (['/usr/sbin/ss', '/usr/bin/ss', '/bin/ss'] as $ss) {
             $result = $runtime->exec([$ss, '-tln']);
             if ($result->ok() && preg_match('/:' . $port . '(?:\s|$)/', $result->stdout) === 1) {
                 return true;

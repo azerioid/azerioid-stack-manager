@@ -17,6 +17,7 @@ use App\Livewire\ServicesPage;
 use App\Livewire\SettingsPage;
 use App\Livewire\UpdatesPage;
 use App\Livewire\VhostsPage;
+use App\Http\Controllers\PanelAuthCheckController;
 use App\Http\Controllers\TerminalAuthController;
 use App\Http\Controllers\TerminalSessionController;
 use App\Http\Controllers\VhostFilesController;
@@ -42,6 +43,9 @@ Route::post('/logout', function () {
 Route::get('/internal/terminal/auth/{sessionId}', TerminalAuthController::class)
     ->middleware('auth')
     ->name('terminal.auth');
+
+Route::get('/internal/auth-check', PanelAuthCheckController::class)
+    ->name('panel.auth-check');
 
 Route::middleware(['auth', '2fa'])->group(function () {
     Route::get('/two-factor/setup', TwoFactorSetup::class)->name('two-factor.setup');

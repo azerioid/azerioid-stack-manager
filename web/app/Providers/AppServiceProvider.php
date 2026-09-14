@@ -7,6 +7,7 @@ use App\Services\Broker\FakeBroker;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
 
@@ -32,5 +33,18 @@ class AppServiceProvider extends ServiceProvider
         });
 
         config(['livewire.temporary_file_upload.rules' => ['file', 'max:20480']]);
+
+        View::composer('layouts.app', function ($view): void {
+            $adminerInstalled = false;
+            try {
+                $res = $this->app->make(BrokerClient::class)->call('component.status', ['adminer'], [], null, false);
+                if ($res->ok && in_array($res->data['status'] ?? '', ['installed', 'active'], true)) {
+                    $adminerInstalled = true;
+                }
+            } catch (\Throwable) {
+                $adminerInstalled = false;
+            }
+            $view->with('adminerInstalled', $adminerInstalled);
+        });
     }
 }

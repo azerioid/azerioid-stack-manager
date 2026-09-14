@@ -20,7 +20,8 @@
         "managed_components": "/var/lib/azerioid-panel/managed-components.json",
         "ttyd_bin": "/usr/local/bin/ttyd",
         "terminal_sessions": "/var/lib/azerioid-panel/terminal-sessions.json",
-        "terminal_caddy_routes": "/var/lib/azerioid-panel/caddy-terminal-routes.conf"
+        "terminal_caddy_routes": "/var/lib/azerioid-panel/caddy-terminal-routes.conf",
+        "adminer_caddy_routes": "/var/lib/azerioid-panel/caddy-adminer-routes.conf"
     },
     "panel_port": 3169,
     "terminal_idle_seconds": 1200,

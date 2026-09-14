@@ -10,6 +10,7 @@ use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Systemd;
+use AzerioidPanel\Broker\Tool\AdminerTool;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Web\BackendEngineBind;
 use AzerioidPanel\Broker\Web\VhostFrontRouter;
@@ -90,6 +91,9 @@ final class ComponentInstaller
             if ($componentId === 'mongodb') {
                 (new MongoProvisioner($this->config, $this->runtime))->provision($log);
             }
+            if ($componentId === 'adminer') {
+                (new AdminerTool($this->config, $this->runtime))->install($definition, $log);
+            }
             ManagedManifest::record($this->runtime, $this->config->managedComponentsPath, $componentId, [
                 'unit' => $unit,
                 'packages' => $distro['packages'],
@@ -140,6 +144,9 @@ final class ComponentInstaller
         $mutex = new PackageMutex($this->config->stagingDir . '/package.lock');
         $mutex->acquire(120);
         try {
+            if ($componentId === 'adminer') {
+                (new AdminerTool($this->config, $this->runtime))->uninstall($log);
+            }
             if ($unit !== '') {
                 $log->info("Stopping unit {$unit}");
                 $this->runtime->exec(['/usr/bin/systemctl', 'stop', $unit], null, 60);

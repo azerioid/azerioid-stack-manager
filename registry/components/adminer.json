@@ -1,0 +1,58 @@
+{
+  "id": "adminer",
+  "display_name": "Adminer",
+  "category": "tool",
+  "description": "Browser-based SQL administration for MariaDB, PostgreSQL, and SQLite. Does not support MongoDB.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
+  "ports": [],
+  "conflicts": [],
+  "artifact": {
+    "version": "6.0.2",
+    "filename": "adminer.php",
+    "source_url": "https://github.com/vrana/adminer/releases/download/v6.0.2/adminer-6.0.2.php",
+    "sha256": "2d8d813523b84df7bcdfcba341845c740060c0c7974d1a1fdd676b98539847fc"
+  },
+  "distros": {
+    "ubuntu": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/var/lib/azerioid-panel/tools/adminer/adminer.php"
+        ],
+        "unit": "php8.4-fpm"
+      }
+    },
+    "debian": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/var/lib/azerioid-panel/tools/adminer/adminer.php"
+        ],
+        "unit": "php8.4-fpm"
+      }
+    },
+    "el": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/var/lib/azerioid-panel/tools/adminer/adminer.php"
+        ],
+        "unit": "php-fpm"
+      }
+    }
+  },
+  "preflight": {
+    "min_disk_gb": 0.05,
+    "min_ram_mb": 128
+  }
+}

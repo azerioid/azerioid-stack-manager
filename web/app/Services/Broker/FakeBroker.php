@@ -988,6 +988,15 @@ final class FakeBroker
                 'installable' => true,
                 'install_options' => ['node_major' => ['default' => '22', 'choices' => ['20', '22', '24']]],
             ],
+            [
+                'id' => 'adminer',
+                'display_name' => 'Adminer',
+                'category' => 'tool',
+                'system' => false,
+                'status' => 'not_installed',
+                'installable' => true,
+                'description' => 'Browser-based SQL administration for MariaDB, PostgreSQL, and SQLite. Does not support MongoDB.',
+            ],
         ];
 
         return array_map(function (array $row): array {
@@ -1027,7 +1036,7 @@ final class FakeBroker
     {
         return [
             'redis', 'mariadb', 'postgresql', 'nginx', 'apache', 'supervisor',
-            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3',
+            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer',
         ];
     }
 

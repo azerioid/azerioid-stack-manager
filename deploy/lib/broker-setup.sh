@@ -81,7 +81,8 @@ EOF
         "managed_components": "/var/lib/azerioid-panel/managed-components.json",
         "ttyd_bin": "/usr/local/bin/ttyd",
         "terminal_sessions": "/var/lib/azerioid-panel/terminal-sessions.json",
-        "terminal_caddy_routes": "/var/lib/azerioid-panel/caddy-terminal-routes.conf"
+        "terminal_caddy_routes": "/var/lib/azerioid-panel/caddy-terminal-routes.conf",
+        "adminer_caddy_routes": "/var/lib/azerioid-panel/caddy-adminer-routes.conf"
     },
     "panel_port": ${PANEL_PORT:-3169},
     "terminal_idle_seconds": 1200,
@@ -113,6 +114,8 @@ EOF
     install -d -m 0750 /var/lib/azerioid-panel/backups
     echo "# AZERIOID Stack Manager — no active terminal sessions" > /var/lib/azerioid-panel/caddy-terminal-routes.conf
     chmod 0644 /var/lib/azerioid-panel/caddy-terminal-routes.conf
+    echo "# AZERIOID Stack Manager — Adminer not installed" > /var/lib/azerioid-panel/caddy-adminer-routes.conf
+    chmod 0644 /var/lib/azerioid-panel/caddy-adminer-routes.conf
     touch /var/lib/azerioid-panel/terminal-sessions.json
     chmod 0640 /var/lib/azerioid-panel/terminal-sessions.json
     chown root:root /var/lib/azerioid-panel/terminal-sessions.json /var/lib/azerioid-panel/caddy-terminal-routes.conf

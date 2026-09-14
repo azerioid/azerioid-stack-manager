@@ -62,6 +62,7 @@ final class Config
     public string $ttydBin = '/usr/local/bin/ttyd';
     public string $terminalSessionsPath = '/var/lib/azerioid-panel/terminal-sessions.json';
     public string $terminalCaddyRoutesPath = '/var/lib/azerioid-panel/caddy-terminal-routes.conf';
+    public string $adminerCaddyRoutesPath = '/var/lib/azerioid-panel/caddy-adminer-routes.conf';
     public int $panelPort = 3169;
     public string $brokerConfigPath = '/etc/azerioid-panel/broker.json';
     public ?string $panelDomain = null;
@@ -159,6 +160,7 @@ final class Config
         $cfg->ttydBin = (string) ($data['paths']['ttyd_bin'] ?? $cfg->ttydBin);
         $cfg->terminalSessionsPath = (string) ($data['paths']['terminal_sessions'] ?? $cfg->terminalSessionsPath);
         $cfg->terminalCaddyRoutesPath = (string) ($data['paths']['terminal_caddy_routes'] ?? $cfg->terminalCaddyRoutesPath);
+        $cfg->adminerCaddyRoutesPath = (string) ($data['paths']['adminer_caddy_routes'] ?? $cfg->adminerCaddyRoutesPath);
         $cfg->panelPort = (int) ($data['panel_port'] ?? $cfg->panelPort);
         $cfg->brokerConfigPath = (string) ($data['paths']['broker_json'] ?? $cfg->brokerConfigPath);
         if (isset($data['panel']) && is_array($data['panel'])) {

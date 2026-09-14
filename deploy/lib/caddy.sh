@@ -188,6 +188,7 @@ ip = public_ip.strip() if access == "public" else ""
 name = public_domain.strip() if access == "public" else ""
 common = f"""    encode gzip zstd
     import /var/lib/azerioid-panel/caddy-terminal-routes.conf
+    import /var/lib/azerioid-panel/caddy-adminer-routes.conf
     root * {web}
     php_fastcgi {sock} {{
         dial_timeout 10s

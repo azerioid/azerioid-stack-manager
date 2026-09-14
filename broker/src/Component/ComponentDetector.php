@@ -54,15 +54,21 @@ final class ComponentDetector
         $command = trim((string) ($detect['command'] ?? ''));
         $packageRegex = trim((string) ($detect['package_regex'] ?? ''));
 
+        $markerPaths = is_array($detect['paths'] ?? null) ? array_values(array_filter(array_map('strval', $detect['paths']))) : [];
+        $markersPresent = $markerPaths !== [] && $this->allPathsExist($markerPaths);
+
         $packagesPresent = PackageQuery::anyInstalled($this->runtime, $packages, $this->os->pkgMgr);
         if (!$packagesPresent && $packageRegex !== '') {
             $packagesPresent = PackageQuery::anyNameMatching($this->runtime, $packageRegex, $this->os->pkgMgr);
+        }
+        if ($markersPresent) {
+            $packagesPresent = true;
         }
         $unitInfo = $unit !== '' ? Systemd::show($this->runtime, $unit) : null;
         $unitLoaded = $unit !== '' && $this->unitLoaded($unit);
 
         $status = 'not_installed';
-        $statusDetail = 'Package not detected on this host.';
+        $statusDetail = $markerPaths !== [] ? 'Tool files not detected on this host.' : 'Package not detected on this host.';
         if ($packagesPresent) {
             if ($unit !== '' && !$unitLoaded) {
                 $status = 'broken';
@@ -72,11 +78,13 @@ final class ComponentDetector
                 $statusDetail = 'Service unit is in a failed state.';
             } else {
                 $status = 'installed';
-                $statusDetail = $unitInfo !== null
-                    ? 'Unit '.$unit.' is '.($unitInfo['active_state'] ?? 'unknown').'.'
-                    : 'Runtime package detected.';
+                $statusDetail = $markersPresent
+                    ? 'Tool files present on this host.'
+                    : ($unitInfo !== null
+                        ? 'Unit '.$unit.' is '.($unitInfo['active_state'] ?? 'unknown').'.'
+                        : 'Runtime package detected.');
             }
-        } elseif ($command !== '' && $packages === [] && $packageRegex === '') {
+        } elseif ($command !== '' && $packages === [] && $packageRegex === '' && $markerPaths === []) {
             // Command probe only when no package criteria exist (avoids client-only false positives).
             $parts = preg_split('/\s+/', $command, 2);
             if (is_array($parts) && ($parts[0] ?? '') !== '') {
@@ -118,6 +126,18 @@ final class ComponentDetector
             return 'observed';
         }
         return 'managed';
+    }
+
+    /** @param list<string> $paths */
+    private function allPathsExist(array $paths): bool
+    {
+        foreach ($paths as $path) {
+            if (!$this->runtime->fileExists($path)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function unitLoaded(string $unit): bool

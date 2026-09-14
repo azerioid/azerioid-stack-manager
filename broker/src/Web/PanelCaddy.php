@@ -406,6 +406,7 @@ CADDY;
         return <<<CADDY
     encode gzip zstd
     import /var/lib/azerioid-panel/caddy-terminal-routes.conf
+    import /var/lib/azerioid-panel/caddy-adminer-routes.conf
     root * {$web}
     php_fastcgi {$sock} {
         dial_timeout 10s

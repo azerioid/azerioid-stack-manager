@@ -45,6 +45,7 @@ Captured from a live Ubuntu 24.04 panel (UI anonymized where needed).
 | **Cache / KV** | Redis, Memcached |
 | **Runtimes** | PHP 8.1–8.3 (site pools); Node.js 20 / 22 / 24 (runtime only — no PM2 in v1) |
 | **Process manager** | Supervisor (programs run as `azerioid-supervised`, never root) |
+| **Tools** | Adminer (panel session–gated SQL UI; MariaDB / PostgreSQL / SQLite — not MongoDB) |
 
 ## Feature highlights
 

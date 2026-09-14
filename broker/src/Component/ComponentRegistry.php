@@ -28,7 +28,7 @@ final class ComponentRegistry
             if (($a['system'] ?? false) !== ($b['system'] ?? false)) {
                 return ($b['system'] ?? false) <=> ($a['system'] ?? false);
             }
-            $cat = ['web' => 0, 'runtime' => 1, 'database' => 2, 'cache' => 3, 'other' => 4];
+            $cat = ['web' => 0, 'runtime' => 1, 'database' => 2, 'tool' => 3, 'cache' => 4, 'other' => 5];
             $ca = $cat[(string) ($a['category'] ?? 'other')] ?? 9;
             $cb = $cat[(string) ($b['category'] ?? 'other')] ?? 9;
             if ($ca !== $cb) {
