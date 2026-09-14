@@ -256,4 +256,19 @@ An install from an **untagged** `main` tip correctly writes `COMMIT`+`VERSION` a
 **Status:** Accepted (2026-09-14)  
 **Decision:** `tls internal` certificates work without installing Caddy's local root into `/usr/local/share/ca-certificates` (or NSS/Java stores). That install attempt runs as the `caddy` user via `sudo tee`, fails (caddy is not in sudoers — by design), and produces recurring auth-fail noise while TLS still issues successfully. Panel/broker do not need OS-wide trust of that CA (browsers already warn on self-signed; broker admin API is localhost HTTP). **Fix:** set global Caddy option `skip_install_trust` in the managed Caddyfile — do **not** grant Caddy broader sudo just to silence logs.
 
+## A34 — Laravel 13 / Livewire 5 upgrade path
+
+**Status:** Deferred (post-v1.0 stabilization)  
+**Decision:** This project is exhaustively verified on Laravel 12 + Livewire 3 across six OS families with real end-to-end regression evidence. A major-version upgrade is a substantial undertaking (breaking changes, full six-OS re-verification given how much UI is Livewire-driven) and is deferred as its own future milestone-scoped task, not a quick bump. Staying on Livewire 3 does **not** mean staying on a vulnerable version — security patches within the major version are handled on their own urgent track regardless of this deferral (Livewire CVE verification already completed — confirmed patched at 3.8.6).
+
+## A35 — Laravel Octane / FrankenPHP evaluation
+
+**Status:** Under consideration, not implemented  
+**Decision:** A legitimate future optimization (persistent-worker execution model vs traditional PHP-FPM) for the panel's own runtime and/or site vhosts. Open questions before adoption: interaction with the broker/queue model, any code assuming per-request state resets, whether this applies to the panel only or is offered as a per-vhost option. No action taken now.
+
+## A36 — Mail server component (future)
+
+**Status:** Under consideration, not implemented  
+**Decision:** A reasonable future registry-driven component (Postfix/Exim + admin interface) following the same pattern as MariaDB/PostgreSQL/Redis. Has its own significant security surface (SPF/DKIM/DMARC, relay-abuse prevention, spam filtering) requiring the same security-first treatment as every other component. No action taken now.
+
 
