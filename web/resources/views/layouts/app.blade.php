@@ -28,6 +28,7 @@
                         ['vhosts', 'Virtual hosts', '/vhosts'],
                         ['databases', 'Databases', '/databases'],
                         ...(($adminerInstalled ?? false) ? [['database-admin', 'Database Admin', '/tools/adminer/']] : []),
+                        ['mail', 'Mail', '/mail'],
                         ['backups', 'Backups', '/backups'],
                         ['services', 'Services', '/services'],
                         ['processes', 'Processes', '/processes'],
@@ -71,6 +72,7 @@
                 @if ($adminerInstalled ?? false)
                     <a href="/tools/adminer/" class="shrink-0 text-zinc-400">Adminer</a>
                 @endif
+                <a href="/mail" class="shrink-0 text-zinc-400">Mail</a>
                 <a href="/backups" class="shrink-0 text-zinc-400">Backups</a>
                 <a href="/components" class="shrink-0 text-zinc-400">Components</a>
                 <a href="/services" class="shrink-0 text-zinc-400">Services</a>

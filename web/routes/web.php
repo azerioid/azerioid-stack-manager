@@ -11,6 +11,7 @@ use App\Livewire\ComponentsPage;
 use App\Livewire\Dashboard;
 use App\Livewire\DatabasesPage;
 use App\Livewire\LogsPage;
+use App\Livewire\MailPage;
 use App\Livewire\ProcessesPage;
 use App\Livewire\SecurityPage;
 use App\Livewire\ServicesPage;
@@ -60,6 +61,7 @@ Route::middleware(['auth', '2fa'])->group(function () {
     Route::post('/terminal/heartbeat/{sessionId}', [TerminalSessionController::class, 'heartbeat'])->name('terminal.heartbeat');
     Route::post('/terminal/stop/{sessionId}', [TerminalSessionController::class, 'stop'])->name('terminal.stop');
     Route::get('/databases', DatabasesPage::class)->name('databases');
+    Route::get('/mail', MailPage::class)->name('mail');
     Route::get('/backups', BackupsPage::class)->name('backups');
     Route::get('/services', ServicesPage::class)->name('services');
     Route::get('/processes', ProcessesPage::class)->name('processes');
