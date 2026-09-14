@@ -231,8 +231,9 @@ class AuthTest extends TestCase
             'two_factor_confirmed_at' => now(),
         ]);
 
-        Livewire::withSession(['login.id' => $user->id])
-            ->test(\App\Livewire\Auth\TwoFactorChallenge::class)
+        $this->withSession(['login.id' => $user->id]);
+
+        Livewire::test(\App\Livewire\Auth\TwoFactorChallenge::class)
             ->assertOk()
             ->assertNoRedirect();
 
@@ -254,8 +255,9 @@ class AuthTest extends TestCase
             'password' => 'password',
         ]);
 
-        Livewire::withSession(['login.id' => $user->id])
-            ->test(\App\Livewire\Auth\TwoFactorChallenge::class)
+        $this->withSession(['login.id' => $user->id]);
+
+        Livewire::test(\App\Livewire\Auth\TwoFactorChallenge::class)
             ->assertRedirect(route('dashboard'));
 
         $this->assertAuthenticatedAs($user);
