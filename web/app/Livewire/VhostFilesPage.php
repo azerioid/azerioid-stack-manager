@@ -6,6 +6,7 @@ use App\Services\Broker\BrokerCallException;
 use App\Services\Broker\BrokerClient;
 use AzerioidPanel\Broker\Validator;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
@@ -17,6 +18,7 @@ class VhostFilesPage extends Component
 {
     use WithFileUploads;
 
+    #[Locked]
     public string $domain = '';
     public string $path = '';
     public ?string $username = null;

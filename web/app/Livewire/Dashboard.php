@@ -45,12 +45,7 @@ class Dashboard extends Component
 
     public function restartService(BrokerClient $broker, string $unit): void
     {
-        $allowed = [];
-        foreach ($this->status['controlled'] ?? [] as $row) {
-            if (! empty($row['controllable']) && isset($row['unit'])) {
-                $allowed[] = (string) $row['unit'];
-            }
-        }
+        $allowed = $this->controllableUnits($broker);
         if (! in_array($unit, $allowed, true)) {
             $this->error = 'Service is not in the panel control allowlist.';
             $this->confirmService = null;
@@ -64,11 +59,7 @@ class Dashboard extends Component
     public function restartAll(BrokerClient $broker): void
     {
         $errors = [];
-        foreach ($this->status['controlled'] ?? [] as $row) {
-            $unit = (string) ($row['unit'] ?? '');
-            if ($unit === '' || empty($row['controllable'])) {
-                continue;
-            }
+        foreach ($this->controllableUnits($broker) as $unit) {
             $isWeb = in_array($unit, ['caddy', 'apache2', 'httpd', 'nginx'], true);
             $isDb = $unit === 'mariadb';
             $isFpm = str_contains($unit, 'fpm');
@@ -84,6 +75,24 @@ class Dashboard extends Component
         $this->flash = $errors === [] ? 'Stack restart completed.' : null;
         $this->confirmAll = false;
         $this->refresh($broker);
+    }
+
+    /** Fresh allowlist from the broker — do not trust public $status for authorization. */
+    private function controllableUnits(BrokerClient $broker): array
+    {
+        try {
+            $status = $broker->call('status.all', [], [], null, false)->dataOrFail();
+        } catch (BrokerCallException) {
+            return [];
+        }
+        $allowed = [];
+        foreach ($status['controlled'] ?? [] as $row) {
+            if (! empty($row['controllable']) && isset($row['unit'])) {
+                $allowed[] = (string) $row['unit'];
+            }
+        }
+
+        return $allowed;
     }
 
     public function bindMariadbLocalhost(BrokerClient $broker): void

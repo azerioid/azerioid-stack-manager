@@ -112,6 +112,8 @@ class AuthTest extends TestCase
             ->set('password_confirmation', 'AdminPassw0rd!')
             ->call('createAccount')
             ->assertSet('step', 2)
+            ->assertSet('password', '')
+            ->assertSet('password_confirmation', '')
             ->assertSee('Enroll authenticator', false);
 
         $user = User::query()->first();

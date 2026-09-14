@@ -58,9 +58,16 @@ class ServicesPage extends Component
         if ($action === null) {
             return;
         }
-        $res = $broker->call($action, [Validator::service($this->pending, array_column($this->controlled, 'unit'))]);
-        $this->error = $res->ok ? null : $res->error;
-        $this->flash = $res->ok ? "{$this->pendingAction} {$this->pending} completed." : null;
+        try {
+            $fresh = $broker->call('status.all', [], [], null, false)->dataOrFail();
+            $allowed = array_column($fresh['controlled'] ?? [], 'unit');
+            $res = $broker->call($action, [Validator::service($this->pending, $allowed)]);
+            $this->error = $res->ok ? null : $res->error;
+            $this->flash = $res->ok ? "{$this->pendingAction} {$this->pending} completed." : null;
+        } catch (BrokerCallException|\Throwable $e) {
+            $this->error = $e->getMessage();
+            $this->flash = null;
+        }
         $this->pending = null;
         $this->pendingAction = '';
         $this->reload($broker);

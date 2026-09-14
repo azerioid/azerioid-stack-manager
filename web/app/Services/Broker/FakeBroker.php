@@ -334,7 +334,10 @@ final class FakeBroker
                 'php.opcache.stats' => ['php_version' => $args[0] ?? '8.4', 'available' => false, 'error' => 'cachetool is not installed; FPM OPcache cannot be inspected from CLI.'],
                 'php.opcache.reset' => ['php_version' => $args[0] ?? '8.4', 'reset' => true, 'available' => true],
                 'cron.list' => ['lines' => ['# comment', '0 3 * * * /usr/bin/true'], 'warning' => 'These entries run as root.'],
-                'cron.set' => ['updated' => true, 'count' => count($stdin['lines'] ?? [])],
+                'cron.set' => $this->requireConfirm($stdin, 'UPDATE-ROOT-CRON', [
+                    'updated' => true,
+                    'count' => count($stdin['lines'] ?? []),
+                ]),
                 'supervisor.program.list' => $this->supervisorProgramList(),
                 'supervisor.program.create' => $this->supervisorProgramCreate($stdin),
                 'supervisor.program.update' => $this->supervisorProgramUpdate($args, $stdin),

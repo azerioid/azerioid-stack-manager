@@ -64,8 +64,17 @@ class SecurityPage extends Component
 
     public function saveCron(BrokerClient $broker): void
     {
+        if (! hash_equals('UPDATE-ROOT-CRON', trim($this->confirm))) {
+            $this->error = 'Type UPDATE-ROOT-CRON to confirm replacing the root crontab.';
+
+            return;
+        }
         $lines = preg_split('/\R/', $this->crontab_text) ?: [];
-        $res = $broker->call('cron.set', [], ['lines' => $lines]);
+        $res = $broker->call('cron.set', [], [
+            'lines' => $lines,
+            'confirm' => 'UPDATE-ROOT-CRON',
+        ]);
+        $this->confirm = '';
         $this->flash = $res->ok ? 'Root crontab updated.' : null;
         $this->error = $res->ok ? null : $res->error;
         $this->reload($broker);

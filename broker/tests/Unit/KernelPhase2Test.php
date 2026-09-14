@@ -388,8 +388,20 @@ final class KernelPhase2Test extends TestCase
         $rt = new FakeRuntime();
         [$code] = $this->capture($this->kernel($rt), ['broker', 'cron.set'], [
             'lines' => ['0 3 * * * /usr/bin/id $(whoami)'],
+            'confirm' => 'UPDATE-ROOT-CRON',
         ]);
         $this->assertNotSame(0, $code);
+    }
+
+    public function test_cron_set_requires_confirm(): void
+    {
+        $rt = new FakeRuntime();
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'cron.set'], [
+            'lines' => ['0 3 * * * /usr/bin/true'],
+        ]);
+        $this->assertNotSame(0, $code);
+        $this->assertIsArray($json);
+        $this->assertStringContainsString('Confirmation phrase did not match', (string) ($json['error'] ?? ''));
     }
 }
 

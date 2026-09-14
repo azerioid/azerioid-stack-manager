@@ -64,6 +64,9 @@ class SetupWizard extends Component
             return;
         }
 
+        // Do not keep the plaintext password in the Livewire snapshot during TOTP enroll.
+        $this->reset('password', 'password_confirmation');
+
         $this->secret = $totp->generateSecret();
         $totp->storeUnconfirmed($user, $this->secret);
         $this->qr = $totp->qrSvg($user->email, $this->secret);

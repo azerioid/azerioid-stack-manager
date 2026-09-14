@@ -21,11 +21,30 @@ class VhostPolicyTest extends TestCase
         $fake = $this->app->make(FakeBroker::class);
 
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->call('delete', 'projob.az')
+            ->set('confirmDelete', 'projob.az')
+            ->call('delete')
             ->assertSet('error', 'This vhost is managed externally and cannot be deleted by the panel.');
 
         $domains = array_column($fake->vhosts, 'domain');
         $this->assertContains('projob.az', $domains);
+    }
+
+    public function test_delete_rejects_direct_domain_arg_without_confirm_state(): void
+    {
+        $this->actingAs($this->admin());
+        $fake = $this->app->make(FakeBroker::class);
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->set('domain', 'shop.example.com')
+            ->set('root', '/data/www/shop.example.com')
+            ->set('type', 'php')
+            ->set('php_version', '8.4')
+            ->call('create');
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->call('delete', 'shop.example.com')
+            ->assertSet('error', 'Confirm deletion from the panel UI before removing a vhost.');
+
+        $this->assertContains('shop.example.com', array_column($fake->vhosts, 'domain'));
     }
 
     public function test_invalid_domain_is_rejected(): void
@@ -271,7 +290,9 @@ class VhostPolicyTest extends TestCase
             ->set('user', 'shopuser')
             ->call('create')
             ->assertSet('error', null)
-            ->assertNotSet('revealedPassword', null);
+            ->assertNotSet('revealedPassword', null)
+            ->call('clearRevealedPassword')
+            ->assertSet('revealedPassword', null);
         $this->assertContains('shopdb', array_column($this->app->make(FakeBroker::class)->databases, 'name'));
     }
 

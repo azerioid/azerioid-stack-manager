@@ -34,8 +34,9 @@
             <div class="mt-2 flex items-center gap-3">
                 <code class="font-mono text-sm text-zinc-100" x-ref="pw">{{ $revealedPassword }}</code>
                 <button type="button" class="btn-ghost text-xs" @click="navigator.clipboard.writeText($refs.pw.innerText)">Copy</button>
+                <button type="button" class="btn-ghost text-xs" wire:click="clearRevealedPassword">Dismiss</button>
             </div>
-            <p class="mt-2 text-xs text-zinc-500">This value is not stored by the panel and is not written to logs.</p>
+            <p class="mt-2 text-xs text-zinc-500">This value is not stored by the panel and is not written to logs. Dismiss after copying so it leaves the Livewire session.</p>
         </div>
     @endif
 

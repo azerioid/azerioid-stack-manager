@@ -23,6 +23,7 @@ final class CronManage
         if (!is_array($raw)) {
             throw new BrokerException('Provide lines as a JSON array.', 2);
         }
+        Validator::typedConfirm((string) ($input['confirm'] ?? ''), 'UPDATE-ROOT-CRON');
         $validated = [];
         foreach ($raw as $line) {
             if (!is_string($line)) {

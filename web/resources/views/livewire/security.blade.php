@@ -67,6 +67,7 @@
         <h2 class="text-sm font-medium">Root crontab</h2>
         <p class="text-sm text-warn">These run as root. Syntax is validated; command substitution is rejected. Do not put secrets here.</p>
         <textarea class="field h-40" wire:model="crontab_text"></textarea>
+        <input class="field font-mono text-sm" wire:model="confirm" placeholder="Type UPDATE-ROOT-CRON to confirm" autocomplete="off">
         <button class="btn-danger" type="submit" wire:confirm="Replace the entire root crontab?">Save crontab</button>
     </form>
 </div>

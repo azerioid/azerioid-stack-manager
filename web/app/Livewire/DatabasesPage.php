@@ -60,7 +60,13 @@ class DatabasesPage extends Component
 
     public function updatedSelectedEngine(BrokerClient $broker): void
     {
+        $this->revealedPassword = null;
         $this->reload($broker);
+    }
+
+    public function clearRevealedPassword(): void
+    {
+        $this->revealedPassword = null;
     }
 
     public function create(BrokerClient $broker): void
@@ -142,6 +148,7 @@ class DatabasesPage extends Component
     {
         $this->error = null;
         $this->flash = null;
+        $this->revealedPassword = null;
         $this->accessName = $name;
         $this->hydrateAccessForm($this->currentAccess($broker, $name));
         $this->accessConfirmName = '';

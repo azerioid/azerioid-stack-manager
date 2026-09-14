@@ -223,7 +223,15 @@ class VhostsPage extends Component
 
     public function delete(BrokerClient $broker, ?string $domain = null): void
     {
-        $domain = Validator::domain($domain ?? $this->confirmDelete ?? '');
+        $requested = $domain ?? $this->confirmDelete ?? '';
+        if ($this->confirmDelete === null || $requested === '' || $requested !== $this->confirmDelete) {
+            $this->error = 'Confirm deletion from the panel UI before removing a vhost.';
+            $this->confirmDelete = null;
+            $this->removeSupervisorOnDelete = false;
+
+            return;
+        }
+        $domain = Validator::domain($this->confirmDelete);
         try {
             $this->assertMutableVhost($domain, 'deleted');
         } catch (\Throwable $e) {
