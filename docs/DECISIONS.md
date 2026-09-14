@@ -211,4 +211,49 @@ Opening remote access for **any** database on an engine may bind that engine pub
 
 Broker JSON `code` must be preserved when rethrowing (do not wrap as bare `RuntimeException`, which defaults to code `0` and used to collapse distinct failures).
 
+## A28 — CentOS Stream is first-class EL
+
+**Status:** Accepted (2026-09-14)  
+**Decision:** CentOS Stream 9+ is a supported EL-family member (`ID=centos` → `DISTRO_FAMILY=el`), same path as AlmaLinux/Rocky. Detection already listed `centos` in `deploy/lib/detect-os.sh`; fleet verification (SELinux Enforcing, full module chain) confirmed no allow-list gap. Document in README alongside Alma/Rocky — do not treat Stream like Fedora's deliberate refusal.
+
+## A29 — Uninstall retains `/data/www` and `/var/log/azerioid-panel`
+
+**Status:** Accepted (2026-09-14)  
+**Decision:** `uninstall.sh --full` must **never** delete:
+
+| Path | Why retain |
+|------|------------|
+| `/data/www` | Operator site trees / docroots (already established) |
+| `/var/log/azerioid-panel` | Panel/broker/auth-fail/audit logs — post-uninstall incident investigation |
+
+`--full` may truncate fail2ban's auth-fail jail feed and remove panel packages/config, but the log **directory** and historical files stay. Operators who want a wipe remove those paths manually.
+
+## A30 — Deploy markers: TAG only when tagged
+
+**Status:** Accepted (2026-09-14)  
+**Decision:** Install / self-update markers under `PREFIX` (`/usr/local/lib/azerioid-panel`):
+
+| File | When present |
+|------|----------------|
+| `COMMIT` | Always (40-char deploy hash) |
+| `VERSION` | From tree `VERSION` file when present |
+| `TAG` | **Only** when HEAD matches an exact semver tag `vX.Y.Z` (install) or after a successful tag-based panel update |
+
+An install from an **untagged** `main` tip correctly writes `COMMIT`+`VERSION` and **omits** `TAG`. Missing `TAG` is not a bug — panel update check treats that tip as ahead-of-latest-tag / up-to-date per the semver channel (see also A27-era updater behavior). `PanelUpdater::writeDeployedMarkers` deletes a stale `TAG` when deploying an untagged commit.
+
+## A31 — Component memory preflight counts RAM + free swap
+
+**Status:** Accepted (2026-09-14; behavior since `783e369`)  
+**Decision:** `ComponentPreflight` measures **MemAvailable + SwapFree** against registry `min_ram_mb` (e.g. 1024 for MariaDB/PostgreSQL/MongoDB). Hard-block only when that **combined** headroom is below the threshold. When physical `MemAvailable` alone is below the threshold but combined headroom is enough (typical 512 MB + 1 GB swap droplets), install **proceeds** with an explicit **warning** that the install may be slow under swap pressure — not a silent pass and not a hard fail. Message text must state what was measured (physical vs combined).
+
+## A32 — Localhost XFF for proxy/Node is expected
+
+**Status:** Accepted (2026-09-14)  
+**Decision:** Under A24, Caddy sets `X-Forwarded-For` from the real TCP peer. A request made **from the box itself** to a `type=proxy` (or any) vhost correctly shows `XFF=127.0.0.1` — the peer really is loopback. That is expected, not a Real-IP bug. External clients still show their public address. No code change. Documented here and in `docs/port-ownership.md` so fleet tests do not re-open it.
+
+## A33 — Do not install Caddy's local CA into the OS trust store
+
+**Status:** Accepted (2026-09-14)  
+**Decision:** `tls internal` certificates work without installing Caddy's local root into `/usr/local/share/ca-certificates` (or NSS/Java stores). That install attempt runs as the `caddy` user via `sudo tee`, fails (caddy is not in sudoers — by design), and produces recurring auth-fail noise while TLS still issues successfully. Panel/broker do not need OS-wide trust of that CA (browsers already warn on self-signed; broker admin API is localhost HTTP). **Fix:** set global Caddy option `skip_install_trust` in the managed Caddyfile — do **not** grant Caddy broader sudo just to silence logs.
+
 

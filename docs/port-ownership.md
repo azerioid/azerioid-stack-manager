@@ -50,4 +50,10 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 
 ## EL9 / SELinux
 
+Applies to the whole EL-family gate (`DISTRO_FAMILY=el`): **AlmaLinux**, **Rocky Linux**, **CentOS Stream**, **RHEL**, and **Oracle Linux** 9+ (same `detect-os.sh` / broker `distro_key=el` path; not hardcoded to AlmaLinux).
+
 Port `3169` is labeled `http_port_t` on enforcing hosts via `deploy/lib/selinux.sh`. Backend ports `8081`/`8082` are also labeled `http_port_t` (stock EL policy maps them to `transproxy_port_t` / `us_cli_port_t`, which `httpd_t` cannot bind). The broker reapplies those labels when Apache/Nginx are installed.
+
+## Real-IP note (proxy / Node)
+
+`X-Forwarded-For` is the connecting peer Caddy saw. A curl from the box itself to a `type=proxy` (or any) vhost correctly shows `127.0.0.1` — that is the true client address for a loopback request, not a passthrough bug. External clients still show their real IP (see ADR A24).

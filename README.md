@@ -68,7 +68,8 @@ Proven on supported distros in operator testing — not marketing vapor:
 | **Ubuntu 24.04** | Supported | Verified |
 | **Debian 12 / 13** | Supported | Verified |
 | **AlmaLinux 9+** | Supported | Verified with **SELinux Enforcing** |
-| **Rocky Linux 9+** | Supported | Verified with **SELinux Enforcing** |
+| **Rocky Linux 9+** | Supported | Verified with **SELinux Enforcing** (same EL path as AlmaLinux) |
+| **CentOS Stream 9+** | Supported | Verified with **SELinux Enforcing** (same EL path; `ID=centos`) |
 | **RHEL / Oracle Linux 9+** | Supported (same EL path) | Same installer/SELinux helpers |
 | **Fedora** | **Not supported** | Installer refuses correctly |
 
@@ -140,7 +141,7 @@ Panel only:
 sudo ./deploy/uninstall.sh --drop-db --remove-bootstrap
 ```
 
-Full teardown (panel + broker-managed components + added repos; does not delete `/data/www`):
+Full teardown (panel + broker-managed components + added repos). Intentionally **retains** site trees under `/data/www` and panel/broker logs under `/var/log/azerioid-panel` (audit trail after reinstall):
 
 ```bash
 sudo ./deploy/uninstall.sh --full

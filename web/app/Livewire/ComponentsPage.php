@@ -128,6 +128,10 @@ class ComponentsPage extends Component
 
             return;
         }
+        $warnings = $preflight->data['warnings'] ?? [];
+        if (is_array($warnings) && $warnings !== []) {
+            $this->flash = implode(' ', $warnings);
+        }
         $this->preflightRemediations = [];
         $this->pendingPreflightComponent = null;
 
@@ -140,7 +144,10 @@ class ComponentsPage extends Component
         ]);
 
         RunComponentOperationJob::dispatch($operation->id);
-        $this->flash = "Queued install for {$componentId}.";
+        $queued = "Queued install for {$componentId}.";
+        $this->flash = $this->flash !== null && $this->flash !== ''
+            ? $this->flash.' '.$queued
+            : $queued;
         $this->loadActiveOperation();
     }
 
@@ -168,6 +175,10 @@ class ComponentsPage extends Component
 
             return;
         }
+        $warnings = $preflight->data['warnings'] ?? [];
+        $warningFlash = (is_array($warnings) && $warnings !== [])
+            ? implode(' ', $warnings)
+            : null;
 
         $response = $broker->call('component.adopt', [$componentId]);
         if (!$response->ok) {
@@ -176,9 +187,10 @@ class ComponentsPage extends Component
             return;
         }
         $note = $response->data['migration_note'] ?? null;
-        $this->flash = is_string($note) && $note !== ''
+        $adopted = is_string($note) && $note !== ''
             ? "Adopted {$componentId}. {$note}"
             : "Adopted {$componentId} — now managed by the panel.";
+        $this->flash = $warningFlash !== null ? "{$warningFlash} {$adopted}" : $adopted;
         $this->reload($broker);
     }
 

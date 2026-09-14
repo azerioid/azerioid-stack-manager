@@ -52,6 +52,7 @@ ensure_caddy_imports_conf() {
     # Force h1/h2 only so Livewire stays same-connection as the page the operator trusted.
     local desired=$'{
     admin off
+    skip_install_trust
     servers {
         protocols h1 h2
     }
@@ -74,6 +75,7 @@ path, confd = pathlib.Path(sys.argv[1]), sys.argv[2]
 text = path.read_text()
 global_block = """{
     admin off
+    skip_install_trust
     servers {
         protocols h1 h2
     }
@@ -98,6 +100,23 @@ PY
         else
             printf '%s' "${desired}" > "${CADDYFILE}"
         fi
+        chown root:root "${CADDYFILE}"
+    elif ! grep -qE 'skip_install_trust' "${CADDYFILE}"; then
+        # Already has h1/h2 protocols but missing trust skip (older installs).
+        python3 - "${CADDYFILE}" <<'PY'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if re.search(r'(?m)^\s*skip_install_trust\b', text):
+    raise SystemExit(0)
+m = re.match(r'(?s)^(\s*\{)(.*?)(\n\}\s*)', text)
+if not m:
+    raise SystemExit(0)
+inner = m.group(2)
+if 'skip_install_trust' not in inner:
+    inner = inner.rstrip() + "\n    skip_install_trust\n"
+path.write_text(m.group(1) + inner + m.group(3) + text[m.end():])
+PY
         chown root:root "${CADDYFILE}"
     elif ! grep -qE 'import[[:space:]]+.*conf\.d' "${CADDYFILE}"; then
         cat >> "${CADDYFILE}" <<EOF

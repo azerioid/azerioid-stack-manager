@@ -36,6 +36,9 @@ final class ComponentInstaller
         $log = $this->logger($operationId);
 
         $preflight = (new ComponentPreflight($this->config, $this->runtime, $os))->check($definition);
+        foreach (is_array($preflight['warnings'] ?? null) ? $preflight['warnings'] : [] as $warning) {
+            $log->warn((string) $warning);
+        }
         if (!$preflight['ok']) {
             throw new BrokerException('Preflight failed: ' . implode(' ', $preflight['issues']), 2);
         }

@@ -343,3 +343,4 @@ if [[ "${PURGE_MANAGED}" -eq 0 ]]; then
     echo "  Re-run with --purge-managed or --full to remove them via the broker."
 fi
 echo "  /data/www and user databases were not modified."
+echo "  /var/log/azerioid-panel retained for audit trail (ADR A29)."

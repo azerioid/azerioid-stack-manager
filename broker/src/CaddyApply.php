@@ -33,6 +33,8 @@ final class CaddyApply
             throw new BrokerException("Caddy main-config not found: {$caddyfile}", 1);
         }
 
+        self::ensureSkipInstallTrust($runtime, $caddyfile);
+
         $validate = CaddyCli::validate($runtime, $config, $caddyfile);
         if (!$validate->ok()) {
             $detail = trim($validate->stderr . "\n" . $validate->stdout);
@@ -86,6 +88,25 @@ final class CaddyApply
             }
         }
         return 'default';
+    }
+
+    /**
+     * Skip installing the local CA into the OS trust store (ADR A33).
+     * Avoids recurring sudo/tee failures as the caddy user; TLS internal still works.
+     */
+    private static function ensureSkipInstallTrust(Runtime $runtime, string $caddyfile): void
+    {
+        $text = $runtime->readFile($caddyfile);
+        if (preg_match('/(?m)^\s*skip_install_trust\b/', $text) === 1) {
+            return;
+        }
+        if (!preg_match('/(?ms)^(\s*\{)(.*?)(\n\}\s*)/', $text, $m)) {
+            $patched = "{\n    skip_install_trust\n}\n" . $text;
+        } else {
+            $inner = rtrim($m[2]) . "\n    skip_install_trust\n";
+            $patched = $m[1] . $inner . $m[3] . substr($text, strlen($m[0]));
+        }
+        $runtime->writeFile($caddyfile, $patched, 0644);
     }
 
     public static function clientAddress(string $spec): string

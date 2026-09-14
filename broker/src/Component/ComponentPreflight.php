@@ -28,14 +28,24 @@ final class ComponentPreflight
         $minOs = is_array($definition['min_os'] ?? null) ? $definition['min_os'] : [];
 
         $issues = [];
+        $warnings = [];
         $disk = $this->diskAvailGb('/var');
         if ($minDiskGb > 0 && $disk < $minDiskGb) {
             $issues[] = "Need at least {$minDiskGb} GB free on /var (found {$disk} GB).";
         }
-        $ramMb = $this->memAvailableMb();
-        if ($minRamMb > 0 && $ramMb < $minRamMb) {
-            $issues[] = "Need at least {$minRamMb} MB memory available including free swap (found {$ramMb} MB).";
+
+        $mem = $this->memBreakdownMb();
+        $combinedMb = $mem['combined_mb'];
+        $physicalMb = $mem['mem_available_mb'];
+        $swapFreeMb = $mem['swap_free_mb'];
+        if ($minRamMb > 0 && $combinedMb < $minRamMb) {
+            $issues[] = "Need at least {$minRamMb} MB combined headroom (MemAvailable + SwapFree);"
+                . " found {$combinedMb} MB (MemAvailable {$physicalMb} MB + SwapFree {$swapFreeMb} MB).";
+        } elseif ($minRamMb > 0 && $physicalMb < $minRamMb && $combinedMb >= $minRamMb) {
+            $warnings[] = "Physical MemAvailable is {$physicalMb} MB (below {$minRamMb} MB),"
+                . " but combined with SwapFree ({$swapFreeMb} MB) is {$combinedMb} MB — install may proceed slowly under swap pressure.";
         }
+
         $required = (string) ($minOs[$this->os->distroKey] ?? '');
         if ($required !== '' && version_compare($this->os->versionId, $required, '<')) {
             $issues[] = "Requires {$this->os->distroKey} {$required}+ (this host: {$this->os->versionId}).";
@@ -54,9 +64,12 @@ final class ComponentPreflight
             'component_id' => $id,
             'ok' => $issues === [],
             'issues' => $issues,
+            'warnings' => $warnings,
             'remediations' => [],
             'disk_gb_var' => $disk,
-            'ram_mb_available' => $ramMb,
+            'ram_mb_available' => $combinedMb,
+            'mem_available_mb' => $physicalMb,
+            'swap_free_mb' => $swapFreeMb,
             'distro_key' => $this->os->distroKey,
         ];
     }
@@ -96,24 +109,28 @@ final class ComponentPreflight
     }
 
     /**
-     * Effective install headroom: MemAvailable + SwapFree (kB → MB).
-     * Small droplets (512 MB) are expected to install with swap; counting only
-     * physical MemAvailable falsely fails every component install.
+     * @return array{mem_available_mb:int,swap_free_mb:int,combined_mb:int}
      */
-    private function memAvailableMb(): int
+    private function memBreakdownMb(): array
     {
-        if (!$this->runtime->fileExists('/proc/meminfo')) {
-            return 0;
-        }
         $memAvailable = 0;
         $swapFree = 0;
-        foreach (explode("\n", $this->runtime->readFile('/proc/meminfo')) as $line) {
-            if (str_starts_with($line, 'MemAvailable:')) {
-                $memAvailable = (int) preg_replace('/\D/', '', $line);
-            } elseif (str_starts_with($line, 'SwapFree:')) {
-                $swapFree = (int) preg_replace('/\D/', '', $line);
+        if ($this->runtime->fileExists('/proc/meminfo')) {
+            foreach (explode("\n", $this->runtime->readFile('/proc/meminfo')) as $line) {
+                if (str_starts_with($line, 'MemAvailable:')) {
+                    $memAvailable = (int) preg_replace('/\D/', '', $line);
+                } elseif (str_starts_with($line, 'SwapFree:')) {
+                    $swapFree = (int) preg_replace('/\D/', '', $line);
+                }
             }
         }
-        return (int) round(($memAvailable + $swapFree) / 1024);
+        $physicalMb = (int) round($memAvailable / 1024);
+        $swapFreeMb = (int) round($swapFree / 1024);
+
+        return [
+            'mem_available_mb' => $physicalMb,
+            'swap_free_mb' => $swapFreeMb,
+            'combined_mb' => $physicalMb + $swapFreeMb,
+        ];
     }
 }

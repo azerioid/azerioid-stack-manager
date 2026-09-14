@@ -130,6 +130,23 @@ final class CaddyApplyTest extends TestCase
         $this->assertNotSame([], $chowns);
     }
 
+    public function test_apply_injects_skip_install_trust_into_global_block(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin 127.0.0.1:2019\n}\nimport /etc/caddy/conf.d/*.conf\n";
+        $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
+        $rt->script(['/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force'], 0);
+
+        $kernel = new Kernel(new Config(), $rt);
+        ob_start();
+        $code = $kernel->run(['broker', 'caddy.apply'], ['mode' => 'auto', 'expect_ports' => []]);
+        ob_end_clean();
+
+        $this->assertSame(0, $code);
+        $this->assertStringContainsString('skip_install_trust', $rt->files['/etc/caddy/Caddyfile']);
+        $this->assertStringContainsString('admin 127.0.0.1:2019', $rt->files['/etc/caddy/Caddyfile']);
+    }
+
     public function test_root_caddy_unit_still_pins_xdg_data_home(): void
     {
         $rt = new FakeRuntime();
