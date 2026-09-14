@@ -163,6 +163,24 @@ final class OctaneManager
         $program = self::programName($domain);
         $removed = $this->removeProgram(new SupervisorManager($this->config, $this->runtime), $program);
 
+        // Composer/Octane runs as azerioid-supervised and may leave storage owned in ways
+        // the site PHP-FPM pool cannot write — re-apply vhost ACLs on the docroot + app.
+        $root = (string) ($vhost['root'] ?? '');
+        if ($root !== '') {
+            VhostUser::ensure($this->runtime, $this->config, $domain, $root);
+            $appDir = self::detectLaravel($this->runtime, $root)['app_dir'] ?? null;
+            if (is_string($appDir) && $appDir !== '' && $appDir !== $root) {
+                foreach ([$appDir . '/storage', $appDir . '/bootstrap/cache'] as $writable) {
+                    if ($this->runtime->isDir($writable)) {
+                        $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
+                        $this->runtime->exec([
+                            '/bin/chgrp', '-R', VhostUser::GROUP, $writable,
+                        ], null, 30);
+                    }
+                }
+            }
+        }
+
         return [
             'domain' => $domain,
             'disabled' => true,
