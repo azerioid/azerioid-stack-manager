@@ -76,7 +76,23 @@ final class MailProvisioner
         }
         $this->runtime->exec(['/usr/bin/chown', '-R', self::VMAIL_USER . ':' . self::VMAIL_GROUP, $root], null, 60);
         $this->runtime->exec(['/usr/bin/chmod', '0750', $root], null, 15);
+        $this->labelVmailSelinux($root, $log);
         $log->info("Ensured mail store owner {$root} (" . self::VMAIL_USER . ').');
+    }
+
+    /** On EL, /var/vmail must be mail_spool_t so dovecot_t can open Maildirs (Enforcing). */
+    private function labelVmailSelinux(string $root, OperationLogger $log): void
+    {
+        if (!$this->runtime->fileExists('/usr/sbin/semanage') || !$this->runtime->fileExists('/usr/sbin/restorecon')) {
+            return;
+        }
+        $pattern = rtrim($root, '/') . '(/.*)?';
+        $add = $this->runtime->exec(['/usr/sbin/semanage', 'fcontext', '-a', '-t', 'mail_spool_t', $pattern], null, 30);
+        if (!$add->ok()) {
+            $this->runtime->exec(['/usr/sbin/semanage', 'fcontext', '-m', '-t', 'mail_spool_t', $pattern], null, 30);
+        }
+        $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $root], null, 60);
+        $log->info("Applied SELinux mail_spool_t to {$root}.");
     }
 
     private function hardenPostfixMain(OperationLogger $log): void
