@@ -350,13 +350,20 @@ CONF;
         $keysDir = rtrim($this->paths->opendkimKeys(), '/');
         $socket = $this->paths->opendkimSocket();
         $socketDir = dirname($socket);
+        // Package install often leaves /etc/opendkim as root:root 0750, which blocks the
+        // opendkim user from reading keys under keys/ — signing then milter-rejects with 451.
+        $opendkimEtc = dirname($keysDir);
+        if ($this->runtime->isDir($opendkimEtc)) {
+            $this->runtime->exec(['/usr/bin/chown', 'opendkim:opendkim', $opendkimEtc], null, 15);
+            $this->runtime->exec(['/usr/bin/chmod', '0755', $opendkimEtc], null, 15);
+        }
         foreach ([$keysDir, $socketDir] as $dir) {
             if (!$this->runtime->isDir($dir)) {
-                $this->runtime->mkdir($dir, 0750);
+                $this->runtime->mkdir($dir, 0755);
             }
         }
         $this->runtime->exec(['/usr/bin/chown', '-R', 'opendkim:opendkim', $keysDir], null, 30);
-        $this->runtime->exec(['/usr/bin/chmod', '0700', $keysDir], null, 15);
+        $this->runtime->exec(['/usr/bin/chmod', '0755', $keysDir], null, 15);
         // Postfix must be able to reach the socket from inside its chroot.
         $this->runtime->exec(['/usr/bin/chown', 'opendkim:postfix', $socketDir], null, 15);
         $this->runtime->exec(['/usr/bin/chmod', '0750', $socketDir], null, 15);
