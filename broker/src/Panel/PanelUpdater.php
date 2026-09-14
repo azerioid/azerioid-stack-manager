@@ -631,7 +631,9 @@ final class PanelUpdater
             ], null, 120),
             'rsync web/lib/azerioid-broker'
         );
-        // Composer autoloads this tree as the panel user — never leave it root:750.
+        // FPM/queue autoload this tree immediately — chown BEFORE chmod so g+rX
+        // applies to the panel user (root:750 is opaque to www-data/caddy).
+        $this->runtime->exec(['/usr/bin/chown', '-R', $webUser . ':' . $webUser, $prefix . '/web/lib'], null, 60);
         $this->runtime->exec(['/bin/chmod', '-R', 'u+rwX,g+rX,o-rwx', $prefix . '/web/lib'], null, 30);
 
         foreach ([
@@ -652,6 +654,9 @@ final class PanelUpdater
         }
 
         $this->runtime->exec(['/usr/bin/chown', '-R', $webUser . ':' . $webUser, $prefix . '/web'], null, 120);
+
+        $this->syncPanelFpmOpenBasedir($prefix, $log);
+        $this->assertPanelBrokerAutoloadReadable($prefix, $webUser, $log);
 
         // Panel SQLite + state dir must remain accessible to the FPM/queue user (web_user).
         $stateDir = '/var/lib/azerioid-panel';
@@ -798,6 +803,85 @@ final class PanelUpdater
         } else {
             Systemd::control($this->runtime, 'restart', $queueUnit);
         }
+    }
+
+    private function syncPanelFpmOpenBasedir(string $prefix, OperationLogger $log): void
+    {
+        $expected = $prefix . '/web:/var/lib/azerioid-panel:/tmp:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
+        $candidates = [
+            '/etc/azerioid-panel/php-fpm.d/azerioid-panel.conf',
+            '/etc/php/8.4/fpm/pool.d/azerioid-panel.conf',
+            '/etc/php/8.3/fpm/pool.d/azerioid-panel.conf',
+            '/etc/opt/remi/php84/php-fpm.d/azerioid-panel.conf',
+            '/etc/php-fpm.d/azerioid-panel.conf',
+        ];
+        $updated = false;
+        foreach ($candidates as $poolFile) {
+            if (!$this->runtime->fileExists($poolFile)) {
+                continue;
+            }
+            $contents = $this->runtime->readFile($poolFile);
+            if (! preg_match('/^php_admin_value\[open_basedir\]\s*=\s*.+$/m', $contents)) {
+                $log->warn('FPM pool ' . $poolFile . ' has no open_basedir line; skipping.');
+                continue;
+            }
+            $new = preg_replace(
+                '/^php_admin_value\[open_basedir\]\s*=\s*.+$/m',
+                'php_admin_value[open_basedir] = ' . $expected,
+                $contents,
+                1
+            );
+            if (! is_string($new)) {
+                continue;
+            }
+            if ($new === $contents) {
+                $log->info('FPM open_basedir already current in ' . $poolFile);
+            } else {
+                $this->runtime->writeFile($poolFile, $new, 0644);
+                $log->info('Refreshed FPM open_basedir in ' . $poolFile);
+                $updated = true;
+            }
+            // Prefer the first existing pool file (EL uses /etc/azerioid-panel/...).
+            break;
+        }
+        if ($updated) {
+            $unit = $this->config->panelFpmUnit;
+            $log->info('Reloading ' . $unit . ' after open_basedir sync.');
+            try {
+                Systemd::control($this->runtime, 'reload', $unit);
+            } catch (BrokerException $e) {
+                $log->warn('FPM reload after open_basedir sync failed, trying restart: ' . $e->getMessage());
+                Systemd::control($this->runtime, 'restart', $unit);
+            }
+        }
+    }
+
+    private function assertPanelBrokerAutoloadReadable(string $prefix, string $webUser, OperationLogger $log): void
+    {
+        $validator = $prefix . '/web/lib/azerioid-broker/Validator.php';
+        if (!$this->runtime->fileExists($validator)) {
+            throw new BrokerException('web/lib/azerioid-broker/Validator.php missing after deploy.', 1);
+        }
+        $openBasedir = $prefix . '/web:/var/lib/azerioid-panel:/tmp:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
+        $php = 'require ' . var_export($prefix . '/web/vendor/autoload.php', true) . ';'
+            . 'if (!is_readable(' . var_export($validator, true) . ')) { fwrite(STDERR, "unreadable\\n"); exit(2); }'
+            . 'if (!class_exists("AzerioidPanel\\\\Broker\\\\Validator")) { fwrite(STDERR, "missing_class\\n"); exit(3); }'
+            . 'echo "ok\\n";';
+        $probe = $this->runAsWeb([
+            'php',
+            '-d',
+            'open_basedir=' . $openBasedir,
+            '-r',
+            $php,
+        ], $prefix . '/web', 30);
+        if (!$probe->ok() || ! str_contains($probe->stdout, 'ok')) {
+            throw new BrokerException(
+                'Panel broker autoload is not readable under FPM open_basedir as '
+                . $webUser . ': ' . $this->execDetail($probe),
+                1
+            );
+        }
+        $log->info('Verified broker autoload under FPM open_basedir as ' . $webUser . '.');
     }
 
     private function cancelDeferredQueueRestarts(OperationLogger $log): void

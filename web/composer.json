@@ -28,14 +28,17 @@
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/",
             "AzerioidPanel\\Broker\\": [
-                "lib/azerioid-broker/",
-                "../broker/src/"
+                "lib/azerioid-broker/"
             ]
         }
     },
     "autoload-dev": {
         "psr-4": {
             "Tests\\": "tests/",
+            "AzerioidPanel\\Broker\\": [
+                "../broker/src/",
+                "lib/azerioid-broker/"
+            ],
             "AzerioidPanel\\Broker\\Tests\\": "../broker/tests/Unit/"
         }
     },
