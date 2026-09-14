@@ -94,6 +94,9 @@ final class OctaneManager
             $port = $this->allocatePort($reserved);
         }
 
+        // Composer / octane:install write vendor + the FrankenPHP binary — grant the
+        // supervised user recursive access on the full Laravel app (docroot may be …/public).
+        $this->ensureAppWritable($appDir);
         $this->installOctanePackage($appDir, $php);
         $this->installFrankenPhpServer($appDir, $php);
 
@@ -452,6 +455,28 @@ final class OctaneManager
             '--port=' . $port,
             '--max-requests=' . $maxRequests,
         ]));
+    }
+
+    private function ensureAppWritable(string $appDir): void
+    {
+        if ($this->runtime->getuid() !== 0) {
+            return;
+        }
+        SupervisedUser::ensure($this->runtime);
+        $user = SupervisedUser::USERNAME;
+        $acl = $this->runtime->exec([
+            '/usr/bin/setfacl',
+            '-R',
+            '-m',
+            'u:' . $user . ':rwx',
+            '-m',
+            'd:u:' . $user . ':rwx',
+            $appDir,
+        ], null, 120);
+        if (!$acl->ok()) {
+            // Fall back to group-writable bits when ACL tooling is unavailable.
+            $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
+        }
     }
 
     private function installOctanePackage(string $appDir, string $php): void
