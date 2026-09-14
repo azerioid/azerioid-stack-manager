@@ -103,7 +103,7 @@ final class MailManager
             throw new BrokerException('Set the mail hostname before running the relay self-test.', 3);
         }
 
-        return (new MailProbe())->relaySelftest($hostname);
+        return (new MailProbe())->relaySelftest($hostname, 8, $this->serverIp());
     }
 
     // -------------------------------------------------------------- hostname

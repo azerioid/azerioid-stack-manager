@@ -76,9 +76,13 @@ final class MailProbe
      * means this host will relay for anyone — the failure mode that turns a VPS
      * into a spam cannon within minutes (A36 §5.2).
      *
+     * Connect via a non-loopback address (typically the server's public IP). Testing
+     * against 127.0.0.1 is meaningless: `mynetworks` always includes localhost, so
+     * local submission is permitted by design and would false-positive as an open relay.
+     *
      * @return array{passed:bool,checked:bool,detail:string,transcript:list<string>}
      */
-    public function relaySelftest(string $helo, int $timeoutSeconds = 8): array
+    public function relaySelftest(string $helo, int $timeoutSeconds = 8, string $smtpHost = '127.0.0.1'): array
     {
         $commands = [
             'EHLO ' . $helo,
@@ -86,12 +90,12 @@ final class MailProbe
             'RCPT TO:<' . self::RELAY_TEST_RECIPIENT . '>',
             'QUIT',
         ];
-        $transcript = ($this->dialogue ?? self::defaultDialogue(...))('127.0.0.1', 25, $timeoutSeconds, $commands);
+        $transcript = ($this->dialogue ?? self::defaultDialogue(...))($smtpHost, 25, $timeoutSeconds, $commands);
         if ($transcript === []) {
             return [
                 'passed' => false,
                 'checked' => false,
-                'detail' => 'Could not connect to the local SMTP listener on port 25.',
+                'detail' => 'Could not connect to the SMTP listener on port 25 at ' . $smtpHost . '.',
                 'transcript' => [],
             ];
         }
@@ -121,7 +125,14 @@ final class MailProbe
                 'transcript' => $transcript,
             ];
         }
-        $accepted = preg_match('/^2\d\d/', $rcptReply) === 1;
+        $accepted = false;
+        // Prefer the final SMTP reply code in the RCPT response (handles multiline joins).
+        if (preg_match_all('/(?:^|\|\s)(\d{3})(?:\s|-)/', $rcptReply, $matches) && $matches[1] !== []) {
+            $code = (string) end($matches[1]);
+            $accepted = str_starts_with($code, '2');
+        } elseif (preg_match('/^2\d\d/', $rcptReply) === 1) {
+            $accepted = true;
+        }
 
         return [
             'passed' => !$accepted,
@@ -162,13 +173,28 @@ final class MailProbe
             return [];
         }
         stream_set_timeout($stream, max(1, $timeoutSeconds));
-        $transcript = ['BANNER=' . trim((string) @fgets($stream, 1024))];
+        $transcript = ['BANNER=' . self::readSmtpReply($stream)];
         foreach ($commands as $command) {
             @fwrite($stream, $command . "\r\n");
-            $transcript[] = $command . ' =' . trim((string) @fgets($stream, 1024));
+            $transcript[] = $command . ' =' . self::readSmtpReply($stream);
         }
         @fclose($stream);
 
         return $transcript;
+    }
+
+    /** Drain a full SMTP reply (including multiline `250-…` / final `250 …`). */
+    private static function readSmtpReply($stream): string
+    {
+        $lines = [];
+        while (($line = @fgets($stream, 1024)) !== false) {
+            $trim = rtrim($line, "\r\n");
+            $lines[] = $trim;
+            if (preg_match('/^\d{3} /', $trim) === 1) {
+                break;
+            }
+        }
+
+        return implode(' | ', $lines);
     }
 }

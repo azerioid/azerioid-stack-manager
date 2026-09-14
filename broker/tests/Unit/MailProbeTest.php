@@ -94,4 +94,24 @@ final class MailProbeTest extends TestCase
         $this->assertFalse($result['passed']);
         $this->assertStringContainsString('Could not connect', $result['detail']);
     }
+
+    public function test_relay_selftest_uses_injected_smtp_host_not_loopback_by_default_in_dialogue(): void
+    {
+        $seenHost = null;
+        $probe = new MailProbe(null, static function (string $host, int $port, int $timeout, array $commands) use (&$seenHost): array {
+            $seenHost = $host;
+
+            return [
+                'BANNER=220 mail.raww.az ESMTP',
+                'EHLO mail.raww.az =250 mail.raww.az',
+                'MAIL FROM:<relay-test@mail.raww.az> =250 2.1.0 Ok',
+                'RCPT TO:<relay-test@example.com> =554 5.7.1 Relay access denied',
+                'QUIT =221 Bye',
+            ];
+        });
+
+        $result = $probe->relaySelftest('mail.raww.az', 1, '203.0.113.10');
+        $this->assertSame('203.0.113.10', $seenHost);
+        $this->assertTrue($result['passed']);
+    }
 }
