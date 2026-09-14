@@ -221,6 +221,46 @@ class AuthTest extends TestCase
         $this->assertAuthenticatedAs($user);
     }
 
+    public function test_challenge_page_reloads_and_resumes_when_login_id_present(): void
+    {
+        $secret = 'JBSWY3DPEHPK3PXP';
+        $user = User::factory()->create([
+            'email' => 'enrolled@example.com',
+            'password' => 'password',
+            'two_factor_secret' => Crypt::encryptString($secret),
+            'two_factor_confirmed_at' => now(),
+        ]);
+
+        Livewire::withSession(['login.id' => $user->id])
+            ->test(\App\Livewire\Auth\TwoFactorChallenge::class)
+            ->assertOk()
+            ->assertNoRedirect();
+
+        $this->assertGuest();
+        $this->assertSame($user->id, session('login.id'));
+    }
+
+    public function test_challenge_page_without_login_id_redirects_to_login(): void
+    {
+        Livewire::test(\App\Livewire\Auth\TwoFactorChallenge::class)
+            ->assertRedirect(route('login'));
+    }
+
+    public function test_challenge_page_when_totp_disabled_mid_login_goes_to_dashboard(): void
+    {
+        config(['azerioid.require_totp' => false]);
+        $user = User::factory()->create([
+            'email' => 'disabled-mid@example.com',
+            'password' => 'password',
+        ]);
+
+        Livewire::withSession(['login.id' => $user->id])
+            ->test(\App\Livewire\Auth\TwoFactorChallenge::class)
+            ->assertRedirect(route('dashboard'));
+
+        $this->assertAuthenticatedAs($user);
+    }
+
     public function test_enrolled_user_login_goes_to_verify_then_dashboard(): void
     {
         config(['azerioid.require_totp' => true]);

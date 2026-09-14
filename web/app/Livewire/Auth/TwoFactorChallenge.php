@@ -2,9 +2,8 @@
 
 namespace App\Livewire\Auth;
 
-use App\Models\User;
-use App\Services\TotpService;
-use Illuminate\Support\Facades\Auth;
+use App\Services\Auth\ChallengeMountOutcome;
+use App\Services\Auth\PanelAuthenticator;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -15,63 +14,42 @@ class TwoFactorChallenge extends Component
 {
     public string $code = '';
 
-    public function mount(): void
+    public function mount(PanelAuthenticator $auth): void
     {
-        if (Auth::check()) {
-            $this->redirectRoute('dashboard', navigate: true);
+        $pendingId = session()->has('login.id') ? (int) session('login.id') : null;
+        $outcome = $auth->resolveChallengeMount($pendingId);
 
-            return;
-        }
+        match ($outcome) {
+            ChallengeMountOutcome::ShowForm => null,
+            ChallengeMountOutcome::Login => $this->redirectRoute('login', navigate: true),
+            ChallengeMountOutcome::Dashboard => $this->redirectRoute('dashboard', navigate: true),
+            ChallengeMountOutcome::TwoFactorSetup => $this->redirectRoute('two-factor.setup', navigate: true),
+        };
+    }
+
+    public function verify(PanelAuthenticator $auth): void
+    {
+        $this->validate(['code' => ['required', 'digits:6']]);
+
         if (! session()->has('login.id')) {
             $this->redirectRoute('login', navigate: true);
 
             return;
         }
 
-        $pending = User::query()->find(session('login.id'));
-        if (! $pending instanceof User) {
-            session()->forget('login.id');
+        $userStillPending = \App\Models\User::query()->find(session('login.id'));
+        if (! $userStillPending || ! $userStillPending->hasTwoFactorEnabled()) {
             $this->redirectRoute('login', navigate: true);
 
             return;
         }
-        if (! $pending->hasTwoFactorEnabled()) {
-            session()->forget('login.id');
-            Auth::login($pending);
-            session()->regenerate();
-            session()->put('last_activity_at', time());
-            if ($pending->mustEnrollTwoFactor()) {
-                $this->redirectRoute('two-factor.setup', navigate: true);
 
-                return;
-            }
-            $this->redirectRoute('dashboard', navigate: true);
-
-            return;
-        }
-    }
-
-    public function verify(TotpService $totp): void
-    {
-        $this->validate(['code' => ['required', 'digits:6']]);
-        $user = User::query()->find(session('login.id'));
-        if (! $user || ! $user->hasTwoFactorEnabled()) {
-            $this->redirectRoute('login', navigate: true);
-            return;
-        }
-        $secret = $user->plainTwoFactorSecret();
-        if ($secret === null || ! $totp->verify($secret, $this->code)) {
+        if (! $auth->verifyChallengeCode($this->code, (string) request()->ip())) {
             $this->addError('code', 'That code was not valid.');
+
             return;
         }
-        Auth::login($user);
-        session()->forget('login.id');
-        session()->regenerate();
-        session()->put('last_activity_at', time());
-        $user->forceFill([
-            'last_login_at' => now(),
-            'last_login_ip' => request()->ip(),
-        ])->save();
+
         $this->redirectRoute('dashboard', navigate: true);
     }
 

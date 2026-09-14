@@ -3,7 +3,7 @@
 namespace App\Livewire\Auth;
 
 use App\Models\User;
-use App\Services\TotpService;
+use App\Services\Auth\PanelAuthenticator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -17,20 +17,18 @@ class TwoFactorSetup extends Component
     public string $secret = '';
     public string $qr = '';
 
-    public function mount(TotpService $totp): void
+    public function mount(PanelAuthenticator $auth): void
     {
         $user = Auth::user();
         abort_unless($user instanceof User, 403);
         if ($user->hasTwoFactorEnabled()) {
             $this->redirectRoute('dashboard', navigate: true);
+
             return;
         }
-        $existing = $user->plainTwoFactorSecret();
-        $this->secret = $existing ?: $totp->generateSecret();
-        if ($existing === null) {
-            $totp->storeUnconfirmed($user, $this->secret);
-        }
-        $this->qr = $totp->qrSvg($user->email, $this->secret);
+        $payload = $auth->enrollmentPayload($user);
+        $this->secret = $payload['secret'];
+        $this->qr = $payload['qr'];
     }
 
     public function skip(): void
@@ -39,16 +37,16 @@ class TwoFactorSetup extends Component
         $this->redirectRoute('dashboard', navigate: true);
     }
 
-    public function confirm(TotpService $totp): void
+    public function confirm(PanelAuthenticator $auth): void
     {
         $user = Auth::user();
         abort_unless($user instanceof User, 403);
         $this->validate(['code' => ['required', 'digits:6']]);
-        if (! $totp->verify($this->secret, $this->code)) {
+        if (! $auth->confirmEnrollment($user, $this->secret, $this->code)) {
             $this->addError('code', 'That code was not valid.');
+
             return;
         }
-        $totp->confirm($user);
         $this->redirectRoute('dashboard', navigate: true);
     }
 
