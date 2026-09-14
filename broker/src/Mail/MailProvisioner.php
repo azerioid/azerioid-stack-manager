@@ -99,7 +99,7 @@ final class MailProvisioner
      */
     private function mainCfSettings(string $hostname, array $specs): array
     {
-        $vmailRoot = rtrim($this->paths->vmailRoot(), '/') . '/';
+        $vmailRoot = rtrim($this->paths->vmailRoot(), '/');
 
         return [
             'myhostname' => $hostname,
@@ -117,6 +117,7 @@ final class MailProvisioner
             'virtual_mailbox_domains' => $specs['domains'],
             'virtual_mailbox_maps' => $specs['mailboxes'],
             'virtual_alias_maps' => $specs['aliases'],
+            // No trailing slash — mailbox map values already include domain/user/.
             'virtual_mailbox_base' => $vmailRoot,
             'virtual_uid_maps' => 'static:' . MailMaps::VMAIL_UID,
             'virtual_gid_maps' => 'static:' . MailMaps::VMAIL_GID,
@@ -321,7 +322,27 @@ service lmtp {
 
 CONF;
         $this->runtime->writeFile($confd . '/99-azerioid.conf', $body, 0644);
+        // Distro 10-auth.conf includes PAM first; virtual users must not fall through to system accounts.
+        $this->disableDovecotSystemAuth($confd, $log);
         $log->info('Wrote Dovecot configuration (IMAPS 993 only, SASL socket for Postfix submission).');
+    }
+
+    private function disableDovecotSystemAuth(string $confd, OperationLogger $log): void
+    {
+        $auth = rtrim($confd, '/') . '/10-auth.conf';
+        if (!$this->runtime->fileExists($auth)) {
+            return;
+        }
+        $raw = $this->runtime->readFile($auth);
+        $updated = preg_replace(
+            '/^\s*!include\s+auth-system\.conf\.ext\s*$/m',
+            '#!include auth-system.conf.ext  # disabled by azerioid — virtual mailboxes use passwd-file only',
+            $raw
+        );
+        if (is_string($updated) && $updated !== $raw) {
+            $this->runtime->writeFile($auth, $updated, 0644);
+            $log->info('Disabled Dovecot system/PAM auth include (virtual mailboxes only).');
+        }
     }
 
     private function writeOpenDkimConfig(OperationLogger $log): void
@@ -339,6 +360,8 @@ CONF;
         // Postfix must be able to reach the socket from inside its chroot.
         $this->runtime->exec(['/usr/bin/chown', 'opendkim:postfix', $socketDir], null, 15);
         $this->runtime->exec(['/usr/bin/chmod', '0750', $socketDir], null, 15);
+        // Postfix smtpd (chrooted) must open the milter socket — share the group.
+        $this->runtime->exec(['/usr/sbin/usermod', '-a', '-G', 'opendkim', 'postfix'], null, 30);
 
         $keyTable = $keysDir . '/key.table';
         $signingTable = $keysDir . '/signing.table';
@@ -353,7 +376,7 @@ CONF;
         $body = <<<CONF
 # AZERIOID Stack Manager — broker-generated; edits are overwritten
 Syslog                  yes
-UMask                   007
+UMask                   002
 Mode                    sv
 Canonicalization        relaxed/simple
 SubDomains              no
@@ -362,7 +385,7 @@ AutoRestart             yes
 AutoRestartRate         10/1h
 Socket                  local:{$socket}
 PidFile                 /run/opendkim/opendkim.pid
-UserID                  opendkim
+UserID                  opendkim:opendkim
 KeyTable                file:{$keyTable}
 SigningTable            refile:{$signingTable}
 ExternalIgnoreList      refile:{$trusted}
@@ -403,6 +426,12 @@ CONF;
             if (!$result->ok()) {
                 $log->warn("systemctl restart {$unit} failed: " . trim($result->stderr));
             }
+        }
+        // Socket is created at opendkim start; ensure Postfix can open it from the chroot.
+        $socket = $this->paths->opendkimSocket();
+        if ($this->runtime->fileExists($socket)) {
+            $this->runtime->exec(['/usr/bin/chown', 'opendkim:postfix', $socket], null, 15);
+            $this->runtime->exec(['/usr/bin/chmod', '0660', $socket], null, 15);
         }
         $log->info('Mail services enabled and restarted.');
     }

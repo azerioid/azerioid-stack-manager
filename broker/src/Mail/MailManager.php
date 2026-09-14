@@ -720,15 +720,20 @@ final class MailManager
 
     private function createMaildir(string $domain, string $localPart): void
     {
-        $base = rtrim($this->paths->vmailRoot(), '/') . '/' . $domain . '/' . $localPart;
+        $root = rtrim($this->paths->vmailRoot(), '/');
+        $domainDir = $root . '/' . $domain;
+        $base = $domainDir . '/' . $localPart;
         foreach (['', '/cur', '/new', '/tmp'] as $sub) {
             $this->runtime->mkdir($base . $sub, 0700);
         }
+        // Domain dir is created by mkdir as root:0700 — vmail must traverse it for delivery/IMAP.
         $this->runtime->exec(
-            ['/usr/bin/chown', '-R', MailProvisioner::VMAIL_USER . ':' . MailProvisioner::VMAIL_GROUP, $base],
+            ['/usr/bin/chown', '-R', MailProvisioner::VMAIL_USER . ':' . MailProvisioner::VMAIL_GROUP, $domainDir],
             null,
             30
         );
+        $this->runtime->exec(['/usr/bin/chmod', '0750', $domainDir], null, 15);
+        $this->runtime->exec(['/usr/bin/chmod', '-R', '0700', $base], null, 15);
     }
 
     private function removeMaildirTree(string $domain): bool
