@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Mail;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Component\ManagedManifest;
+use AzerioidPanel\Broker\Component\OperationLogger;
 use AzerioidPanel\Broker\Component\OsRelease;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
@@ -114,7 +115,7 @@ final class MailManager
         return ['hostname' => $this->state->hostname()];
     }
 
-    /** @return array{hostname:string,postfix_reloaded:bool} */
+    /** @return array{hostname:string,postfix_reloaded:bool,tls_source?:string} */
     public function setHostname(string $hostname): array
     {
         $hostname = Validator::mailHostname($hostname);
@@ -125,16 +126,36 @@ final class MailManager
         });
 
         $reloaded = false;
+        $tlsSource = null;
         if (ManagedManifest::load($this->runtime, $this->config->managedComponentsPath)->has('mail')) {
             $this->runtime->exec(['/usr/sbin/postconf', '-e', 'myhostname=' . $hostname], null, 30);
-            $reloaded = $this->runtime->exec(
+            $logDir = MailState::DIR;
+            if (!$this->runtime->isDir($logDir)) {
+                $this->runtime->mkdir($logDir, 0750);
+            }
+            $log = new OperationLogger($this->runtime, $logDir . '/hostname.log');
+            $tls = (new MailProvisioner($this->config, $this->runtime, $this->paths))
+                ->applyTlsForHostname($hostname, $log);
+            $tlsSource = $tls['source'];
+            $this->runtime->exec(
                 ['/usr/bin/systemctl', 'reload', $this->paths->unit('postfix')],
                 null,
                 60
-            )->ok();
+            );
+            $this->runtime->exec(
+                ['/usr/bin/systemctl', 'reload', $this->paths->unit('dovecot')],
+                null,
+                60
+            );
+            $reloaded = true;
         }
 
-        return ['hostname' => $hostname, 'postfix_reloaded' => $reloaded];
+        $out = ['hostname' => $hostname, 'postfix_reloaded' => $reloaded];
+        if ($tlsSource !== null) {
+            $out['tls_source'] = $tlsSource;
+        }
+
+        return $out;
     }
 
     // ---------------------------------------------------------------- domains

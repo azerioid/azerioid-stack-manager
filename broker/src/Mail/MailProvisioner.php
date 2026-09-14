@@ -86,18 +86,37 @@ final class MailProvisioner
             $hostname = trim($this->runtime->exec(['/bin/hostname', '-f'], null, 15)->stdout);
         }
         $specs = (new MailMaps($this->config, $this->runtime, $this->paths))->lookupSpecs();
+        $tls = (new MailTls($this->runtime, $this->paths))->resolve($hostname);
+        $log->info('Mail TLS material: ' . $tls['source'] . ' (' . $tls['cert'] . ').');
 
-        foreach ($this->mainCfSettings($hostname, $specs) as $key => $value) {
+        foreach ($this->mainCfSettings($hostname, $specs, $tls) as $key => $value) {
             $this->postconf($key . '=' . $value);
         }
         $log->info('Applied hardened Postfix parameters (relay restrictions, TLS, 25 MiB message cap).');
     }
 
     /**
+     * Re-select TLS paths when the mail hostname changes (Caddy/LE preferred).
+     *
+     * @return array{cert:string,key:string,source:string}
+     */
+    public function applyTlsForHostname(string $hostname, OperationLogger $log): array
+    {
+        $tls = (new MailTls($this->runtime, $this->paths))->resolve($hostname);
+        $this->postconf('smtpd_tls_cert_file=' . $tls['cert']);
+        $this->postconf('smtpd_tls_key_file=' . $tls['key']);
+        $this->writeDovecotConfig($log);
+        $log->info('Mail TLS material: ' . $tls['source'] . ' (' . $tls['cert'] . ').');
+
+        return $tls;
+    }
+
+    /**
      * @param  array{domains:string,mailboxes:string,aliases:string}  $specs
+     * @param  array{cert:string,key:string,source:string}  $tls
      * @return array<string,string>
      */
-    private function mainCfSettings(string $hostname, array $specs): array
+    private function mainCfSettings(string $hostname, array $specs, array $tls): array
     {
         $vmailRoot = rtrim($this->paths->vmailRoot(), '/');
 
@@ -140,8 +159,8 @@ final class MailProvisioner
             'smtpd_sasl_local_domain' => '',
             'broken_sasl_auth_clients' => 'no',
 
-            'smtpd_tls_cert_file' => $this->paths->path('tls_cert'),
-            'smtpd_tls_key_file' => $this->paths->path('tls_key'),
+            'smtpd_tls_cert_file' => $tls['cert'],
+            'smtpd_tls_key_file' => $tls['key'],
             'smtpd_tls_security_level' => 'may',
             'smtpd_tls_mandatory_protocols' => '!SSLv2,!SSLv3,!TLSv1,!TLSv1.1',
             'smtpd_tls_protocols' => '!SSLv2,!SSLv3,!TLSv1,!TLSv1.1',
@@ -258,13 +277,49 @@ final class MailProvisioner
         }
         $usersFile = (new MailMaps($this->config, $this->runtime, $this->paths))->dovecotUsersPath();
         $vmailRoot = rtrim($this->paths->vmailRoot(), '/');
-        $cert = $this->paths->path('tls_cert');
-        $key = $this->paths->path('tls_key');
+        $hostname = (new MailState($this->runtime))->hostname();
+        $tls = (new MailTls($this->runtime, $this->paths))->resolve($hostname);
+        $cert = $tls['cert'];
+        $key = $tls['key'];
         $uid = MailMaps::VMAIL_UID;
         $gid = MailMaps::VMAIL_GID;
 
+        // Debian 13+ ships Dovecot 2.4 with incompatible settings vs Ubuntu 24.04's 2.3.
+        $body = $this->dovecotIs24()
+            ? $this->dovecot24Config($usersFile, $vmailRoot, $cert, $key, $uid, $gid)
+            : $this->dovecot23Config($usersFile, $vmailRoot, $cert, $key, $uid, $gid);
+
+        $this->runtime->writeFile($confd . '/99-azerioid.conf', $body, 0644);
+        // Distro 10-auth.conf includes PAM first; virtual users must not fall through to system accounts.
+        $this->disableDovecotSystemAuth($confd, $log);
+        $log->info('Wrote Dovecot configuration (IMAPS 993 only, SASL socket for Postfix submission).');
+    }
+
+    private function dovecotIs24(): bool
+    {
+        foreach (['/usr/sbin/dovecot', '/usr/bin/dovecot'] as $bin) {
+            if (!$this->runtime->fileExists($bin)) {
+                continue;
+            }
+            $out = trim($this->runtime->exec([$bin, '--version'], null, 15)->stdout);
+            if (preg_match('/^(\d+)\.(\d+)/', $out, $m) === 1) {
+                return ((int) $m[1] > 2) || ((int) $m[1] === 2 && (int) $m[2] >= 4);
+            }
+        }
+
+        return false;
+    }
+
+    private function dovecot23Config(
+        string $usersFile,
+        string $vmailRoot,
+        string $cert,
+        string $key,
+        int $uid,
+        int $gid,
+    ): string {
         // 143 is absent from inet_listener on purpose: IMAPS only (A36 §3.1).
-        $body = <<<CONF
+        return <<<CONF
 # AZERIOID Stack Manager — broker-generated; edits are overwritten
 protocols = imap lmtp
 listen = *, ::
@@ -321,10 +376,77 @@ service lmtp {
 }
 
 CONF;
-        $this->runtime->writeFile($confd . '/99-azerioid.conf', $body, 0644);
-        // Distro 10-auth.conf includes PAM first; virtual users must not fall through to system accounts.
-        $this->disableDovecotSystemAuth($confd, $log);
-        $log->info('Wrote Dovecot configuration (IMAPS 993 only, SASL socket for Postfix submission).');
+    }
+
+    private function dovecot24Config(
+        string $usersFile,
+        string $vmailRoot,
+        string $cert,
+        string $key,
+        int $uid,
+        int $gid,
+    ): string {
+        // Dovecot 2.4: renamed SSL/auth settings, named passdb sections, mail_driver/mail_path.
+        // Do not set dovecot_config_version here — the package dovecot.conf already owns it.
+        return <<<CONF
+# AZERIOID Stack Manager — broker-generated; edits are overwritten (Dovecot 2.4+)
+protocols = imap lmtp
+listen = *, ::
+auth_allow_cleartext = no
+auth_mechanisms = plain login
+
+mail_driver = maildir
+mail_path = {$vmailRoot}/%{user|domain}/%{user|username}
+mail_uid = {$uid}
+mail_gid = {$gid}
+first_valid_uid = {$uid}
+last_valid_uid = {$uid}
+
+passdb passwd-file {
+  passwd_file_path = {$usersFile}
+  default_password_scheme = BLF-CRYPT
+}
+userdb passwd-file {
+  passwd_file_path = {$usersFile}
+  fields {
+    uid = {$uid}
+    gid = {$gid}
+    home = {$vmailRoot}/%{user|domain}/%{user|username}
+  }
+}
+
+ssl = required
+ssl_server_cert_file = {$cert}
+ssl_server_key_file = {$key}
+ssl_min_protocol = TLSv1.2
+
+service imap-login {
+  inet_listener imap {
+    port = 0
+  }
+  inet_listener imaps {
+    port = 993
+    ssl = yes
+  }
+}
+
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+
+CONF;
     }
 
     private function disableDovecotSystemAuth(string $confd, OperationLogger $log): void
