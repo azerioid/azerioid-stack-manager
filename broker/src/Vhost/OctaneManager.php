@@ -519,12 +519,16 @@ final class OctaneManager
             $appDir . '/bootstrap/cache',
             $appDir . '/database',
         ];
+        $phpUser = $this->config->phpUser !== '' ? $this->config->phpUser : 'caddy';
+        $phpGroup = VhostUser::GROUP;
         foreach ($dirs as $writable) {
             if (!$this->runtime->isDir($writable)) {
                 continue;
             }
+            // Own as the FPM pool user so SQLite/session writes work after Octane
+            // (azerioid-supervised) owned the tree; keep azerioid-vhosts for group share.
+            $this->runtime->exec(['/bin/chown', '-R', $phpUser . ':' . $phpGroup, $writable], null, 30);
             $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
-            $this->runtime->exec(['/bin/chgrp', '-R', VhostUser::GROUP, $writable], null, 30);
             // Best-effort SELinux rw label (no-op when chcon is absent / SELinux off).
             foreach (['/usr/bin/chcon', '/bin/chcon'] as $chcon) {
                 if ($this->runtime->fileExists($chcon)) {
