@@ -79,6 +79,22 @@ final class DistroPathsTest extends TestCase
         $this->assertSame('/var/log/httpd', $layout['web_log_dir']);
     }
 
+    public function test_reloadable_service_units_include_front_router_web_service(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=ubuntu\nVERSION_ID=\"24.04\"\n";
+        $this->scriptLoad($rt, 'nginx', 'loaded');
+        $this->scriptLoad($rt, 'apache2', 'loaded');
+
+        $cfg = new Config();
+        $cfg->webService = 'caddy';
+        $cfg->panelFpmUnit = 'php8.4-fpm';
+        $units = DistroPaths::for($rt, $cfg)->reloadableServiceUnits();
+
+        $this->assertContains('caddy', $units);
+        $this->assertContains('php8.4-fpm', $units);
+    }
+
     /** @param array<string, mixed> $distros */
     private function loadRegistry(FakeRuntime $rt, string $id, array $distros): void
     {

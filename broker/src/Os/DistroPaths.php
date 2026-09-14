@@ -198,7 +198,11 @@ final class DistroPaths
     /** @return list<string> */
     public function reloadableServiceUnits(): array
     {
+        // Include the front-router web service (caddy by default). Without a
+        // try-restart after usermod -aG azerioid-vhosts, Caddy keeps stale
+        // supplementary groups and static docroots (2770/0660) return 403.
         $units = [
+            $this->config->webService,
             $this->config->panelFpmUnit,
             $this->nginxUnit(),
             $this->apacheUnit(),
