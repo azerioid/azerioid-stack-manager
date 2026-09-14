@@ -175,13 +175,13 @@ class VhostFilesTest extends TestCase
             'filesOp' => 'read',
             '--domain' => 'shop.example.com',
             '--path' => '../../../etc/passwd',
-        ])->expectsOutputToContain('outside')->assertExitCode(1);
+        ])->expectsOutputToContain('outside')->assertExitCode(2);
 
         $this->artisan('azerioid:vhost', [
             'action' => 'files',
             'filesOp' => 'list',
             '--domain' => 'projob.az',
-        ])->expectsOutputToContain('read-only')->assertExitCode(1);
+        ])->expectsOutputToContain('read-only')->assertExitCode(2);
     }
 
     public function test_help_mentions_vhost_files(): void
