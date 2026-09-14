@@ -32,7 +32,7 @@ class MailCommand extends Command
         {--flush : Flush deferred mail (queue)}
         {--drop-mail : Also delete stored mail (domain disable / mailbox del)}
         {--confirm-external : Allow an alias to forward off this server}
-        {--confirm : Typed confirmation for destructive operations}
+        {--confirm= : Typed confirmation for destructive operations}
         {--json : JSON output}';
 
     protected $description = 'Manage the mail component via broker mail.* actions';
