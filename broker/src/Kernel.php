@@ -30,6 +30,14 @@ use AzerioidPanel\Broker\Actions\FirewallStatus;
 use AzerioidPanel\Broker\Actions\FirewallUnban;
 use AzerioidPanel\Broker\Actions\LogsSearch;
 use AzerioidPanel\Broker\Actions\LogsTail;
+use AzerioidPanel\Broker\Actions\MailAlias;
+use AzerioidPanel\Broker\Actions\MailDnsAction;
+use AzerioidPanel\Broker\Actions\MailDomain;
+use AzerioidPanel\Broker\Actions\MailHostname;
+use AzerioidPanel\Broker\Actions\MailMailbox;
+use AzerioidPanel\Broker\Actions\MailQueue;
+use AzerioidPanel\Broker\Actions\MailSmarthostAction;
+use AzerioidPanel\Broker\Actions\MailStatus;
 use AzerioidPanel\Broker\Actions\MariadbBindFix;
 use AzerioidPanel\Broker\Actions\MariadbBindRollback;
 use AzerioidPanel\Broker\Actions\MariadbBindStatus;
@@ -120,6 +128,33 @@ final class Kernel
         'php.ini.set' => PhpIniSet::class,
         'php.opcache.stats' => PhpOpcache::class,
         'php.opcache.reset' => PhpOpcache::class,
+        'mail.status' => MailStatus::class,
+        'mail.probe.outbound25' => MailStatus::class,
+        'mail.relay.selftest' => MailStatus::class,
+        'mail.hostname.show' => MailHostname::class,
+        'mail.hostname.set' => MailHostname::class,
+        'mail.domain.list' => MailDomain::class,
+        'mail.domain.enable' => MailDomain::class,
+        'mail.domain.disable' => MailDomain::class,
+        'mail.mailbox.list' => MailMailbox::class,
+        'mail.mailbox.add' => MailMailbox::class,
+        'mail.mailbox.passwd' => MailMailbox::class,
+        'mail.mailbox.disable' => MailMailbox::class,
+        'mail.mailbox.enable' => MailMailbox::class,
+        'mail.mailbox.del' => MailMailbox::class,
+        'mail.alias.list' => MailAlias::class,
+        'mail.alias.add' => MailAlias::class,
+        'mail.alias.del' => MailAlias::class,
+        'mail.dns.records' => MailDnsAction::class,
+        'mail.dkim.rotate' => MailDnsAction::class,
+        'mail.smarthost.show' => MailSmarthostAction::class,
+        'mail.smarthost.set' => MailSmarthostAction::class,
+        'mail.smarthost.clear' => MailSmarthostAction::class,
+        'mail.smarthost.test' => MailSmarthostAction::class,
+        'mail.queue' => MailQueue::class,
+        'mail.logs' => MailQueue::class,
+        'mail.test.send' => MailQueue::class,
+        'mail.alerts.set' => MailQueue::class,
         'mariadb.bind.status' => MariadbBindStatus::class,
         'mariadb.bind.fix' => MariadbBindFix::class,
         'mariadb.bind.rollback' => MariadbBindRollback::class,

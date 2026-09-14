@@ -14,6 +14,8 @@ final class ComponentUninstall
     {
         $id = (string) ($args[0] ?? '');
         $operationId = Validator::operationId((string) ($input['operation_id'] ?? ''));
-        return (new ComponentInstaller($config, $runtime))->uninstall($id, $operationId);
+        $options = is_array($input['options'] ?? null) ? $input['options'] : [];
+
+        return (new ComponentInstaller($config, $runtime))->uninstall($id, $operationId, $options);
     }
 }

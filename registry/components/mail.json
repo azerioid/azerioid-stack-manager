@@ -1,0 +1,154 @@
+{
+  "id": "mail",
+  "display_name": "Mail (Postfix)",
+  "category": "mail",
+  "description": "Opt-in Postfix + Dovecot + OpenDKIM for panel-managed domains. Authenticated submission only; virtual mailboxes; DNS record guidance for SPF/DKIM/DMARC; direct or smarthost outbound.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
+  "ports": [
+    { "port": 25, "bind": "0.0.0.0", "owner": "postfix", "protocol": "tcp" },
+    { "port": 465, "bind": "0.0.0.0", "owner": "postfix", "protocol": "tcp" },
+    { "port": 587, "bind": "0.0.0.0", "owner": "postfix", "protocol": "tcp" },
+    { "port": 993, "bind": "0.0.0.0", "owner": "dovecot", "protocol": "tcp" }
+  ],
+  "conflicts": ["exim4", "exim4-daemon-light", "sendmail"],
+  "distros": {
+    "ubuntu": {
+      "packages": [
+        "postfix",
+        "dovecot-core",
+        "dovecot-imapd",
+        "dovecot-lmtpd",
+        "opendkim",
+        "opendkim-tools"
+      ],
+      "unit_name": "postfix",
+      "detect": {
+        "packages": ["postfix"],
+        "unit": "postfix"
+      },
+      "paths": {
+        "main_cf": ["/etc/postfix/main.cf"],
+        "master_cf": ["/etc/postfix/master.cf"],
+        "postfix_dir": ["/etc/postfix"],
+        "dovecot_conf": ["/etc/dovecot/dovecot.conf"],
+        "dovecot_confd": ["/etc/dovecot/conf.d"],
+        "opendkim_conf": ["/etc/opendkim.conf"],
+        "opendkim_keys": ["/etc/opendkim/keys"],
+        "opendkim_socket": ["/var/spool/postfix/opendkim/opendkim.sock"],
+        "mail_log": ["/var/log/mail.log", "/var/log/maillog"],
+        "vmail_root": ["/var/vmail"],
+        "tls_cert": ["/etc/ssl/certs/ssl-cert-snakeoil.pem"],
+        "tls_key": ["/etc/ssl/private/ssl-cert-snakeoil.key"]
+      },
+      "units": {
+        "postfix": "postfix",
+        "dovecot": "dovecot",
+        "opendkim": "opendkim"
+      },
+      "foreign_mta_packages": [
+        "exim4",
+        "exim4-base",
+        "exim4-config",
+        "exim4-daemon-light",
+        "exim4-daemon-heavy",
+        "sendmail",
+        "sendmail-bin",
+        "nullmailer",
+        "msmtp-mta",
+        "citadel-server"
+      ]
+    },
+    "debian": {
+      "packages": [
+        "postfix",
+        "dovecot-core",
+        "dovecot-imapd",
+        "dovecot-lmtpd",
+        "opendkim",
+        "opendkim-tools"
+      ],
+      "unit_name": "postfix",
+      "detect": {
+        "packages": ["postfix"],
+        "unit": "postfix"
+      },
+      "paths": {
+        "main_cf": ["/etc/postfix/main.cf"],
+        "master_cf": ["/etc/postfix/master.cf"],
+        "postfix_dir": ["/etc/postfix"],
+        "dovecot_conf": ["/etc/dovecot/dovecot.conf"],
+        "dovecot_confd": ["/etc/dovecot/conf.d"],
+        "opendkim_conf": ["/etc/opendkim.conf"],
+        "opendkim_keys": ["/etc/opendkim/keys"],
+        "opendkim_socket": ["/var/spool/postfix/opendkim/opendkim.sock"],
+        "mail_log": ["/var/log/mail.log", "/var/log/maillog"],
+        "vmail_root": ["/var/vmail"],
+        "tls_cert": ["/etc/ssl/certs/ssl-cert-snakeoil.pem"],
+        "tls_key": ["/etc/ssl/private/ssl-cert-snakeoil.key"]
+      },
+      "units": {
+        "postfix": "postfix",
+        "dovecot": "dovecot",
+        "opendkim": "opendkim"
+      },
+      "foreign_mta_packages": [
+        "exim4",
+        "exim4-base",
+        "exim4-config",
+        "exim4-daemon-light",
+        "exim4-daemon-heavy",
+        "sendmail",
+        "sendmail-bin",
+        "nullmailer",
+        "msmtp-mta",
+        "citadel-server"
+      ]
+    },
+    "el": {
+      "packages": ["postfix", "dovecot", "opendkim", "opendkim-tools"],
+      "repos_hint": ["epel"],
+      "unit_name": "postfix",
+      "detect": {
+        "packages": ["postfix"],
+        "unit": "postfix"
+      },
+      "paths": {
+        "main_cf": ["/etc/postfix/main.cf"],
+        "master_cf": ["/etc/postfix/master.cf"],
+        "postfix_dir": ["/etc/postfix"],
+        "dovecot_conf": ["/etc/dovecot/dovecot.conf"],
+        "dovecot_confd": ["/etc/dovecot/conf.d"],
+        "opendkim_conf": ["/etc/opendkim.conf"],
+        "opendkim_keys": ["/etc/opendkim/keys"],
+        "opendkim_socket": ["/var/spool/postfix/opendkim/opendkim.sock"],
+        "mail_log": ["/var/log/maillog", "/var/log/mail.log"],
+        "vmail_root": ["/var/vmail"],
+        "tls_cert": ["/etc/pki/tls/certs/postfix.pem"],
+        "tls_key": ["/etc/pki/tls/private/postfix.key"]
+      },
+      "units": {
+        "postfix": "postfix",
+        "dovecot": "dovecot",
+        "opendkim": "opendkim"
+      },
+      "foreign_mta_packages": ["exim", "sendmail", "sendmail-cf", "nullmailer", "msmtp-mta"]
+    }
+  },
+  "preflight": {
+    "min_disk_gb": 2,
+    "min_ram_mb": 512,
+    "notes": [
+      "Requires an explicit operator-set mail hostname (panel setting)",
+      "Outbound TCP/25 may be blocked — smarthost is a first-class v1 path",
+      "Installing removes a foreign MTA only after typed REPLACE-MTA confirm",
+      "EL installs OpenDKIM via EPEL (accepted dependency)"
+    ]
+  }
+}

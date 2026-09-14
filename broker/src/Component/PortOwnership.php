@@ -29,11 +29,15 @@ final class PortOwnership
             return true;
         }
 
-        if (!in_array($conflictId, self::SITE_WEB_COMPONENTS, true)) {
-            return $this->componentDetected($conflictId, $managed);
+        if ($this->componentDetected($conflictId, $managed)) {
+            return true;
         }
 
-        return $this->componentDetected($conflictId, $managed);
+        // Some conflicts name a distro package rather than a registry component
+        // (mail conflicts with exim4/sendmail). Without this the conflict silently
+        // never fires, because ComponentRegistry::get() throws for unknown ids.
+        return !in_array($conflictId, self::SITE_WEB_COMPONENTS, true)
+            && PackageQuery::isInstalled($this->runtime, $conflictId, $this->os->pkgMgr);
     }
 
     private function caddyOwnsSitePorts(): bool
