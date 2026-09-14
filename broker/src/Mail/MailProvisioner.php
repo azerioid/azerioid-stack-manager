@@ -397,6 +397,10 @@ auth_mechanisms = plain login
 
 mail_driver = maildir
 mail_path = {$vmailRoot}/%{user|domain}/%{user|username}
+mail_home = {$vmailRoot}/%{user|domain}/%{user|username}
+# Debian's 10-mail.conf defaults mail_inbox_path to /var/mail/%{user}; override so
+# Postfix virtual Maildir delivery (root new/cur/tmp) is the IMAP INBOX.
+mail_inbox_path = {$vmailRoot}/%{user|domain}/%{user|username}
 mail_uid = {$uid}
 mail_gid = {$gid}
 first_valid_uid = {$uid}
