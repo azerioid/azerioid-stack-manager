@@ -464,19 +464,34 @@ final class OctaneManager
         }
         SupervisedUser::ensure($this->runtime);
         $user = SupervisedUser::USERNAME;
-        $acl = $this->runtime->exec([
-            '/usr/bin/setfacl',
-            '-R',
-            '-m',
-            'u:' . $user . ':rwx',
-            '-m',
-            'd:u:' . $user . ':rwx',
-            $appDir,
-        ], null, 120);
-        if (!$acl->ok()) {
-            // Fall back to group-writable bits when ACL tooling is unavailable.
-            $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
+        $group = 'azerioid-vhosts';
+
+        // Prefer ACL when available (Ubuntu/Debian often ship without `acl` by default).
+        $setfacl = null;
+        foreach (['/usr/bin/setfacl', '/bin/setfacl'] as $bin) {
+            if ($this->runtime->fileExists($bin)) {
+                $setfacl = $bin;
+                break;
+            }
         }
+        if ($setfacl !== null) {
+            $acl = $this->runtime->exec([
+                $setfacl,
+                '-R',
+                '-m',
+                'u:' . $user . ':rwx',
+                '-m',
+                'd:u:' . $user . ':rwx',
+                $appDir,
+            ], null, 120);
+            if ($acl->ok()) {
+                return;
+            }
+        }
+
+        // Group-writable fallback: supervised is a member of azerioid-vhosts.
+        $this->runtime->exec(['/bin/chgrp', '-R', $group, $appDir], null, 60);
+        $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
     }
 
     private function installOctanePackage(string $appDir, string $php): void
