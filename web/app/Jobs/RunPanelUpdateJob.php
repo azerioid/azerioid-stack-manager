@@ -5,11 +5,11 @@ namespace App\Jobs;
 use App\Models\PanelUpdateOperation;
 use App\Services\Broker\BrokerCallException;
 use App\Services\Broker\BrokerClient;
-use AzerioidPanel\Broker\Panel\PanelUpdater;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class RunPanelUpdateJob implements ShouldQueue
 {
@@ -57,9 +57,11 @@ class RunPanelUpdateJob implements ShouldQueue
         $operationKey = 'panel-up-' . $operation->id;
 
         try {
+            // Literal confirm token (do not autoload PanelUpdater here — during a
+            // failed/partial deploy web/lib may be unreadable to the queue user).
             $stdin = [
                 'operation_id' => $operationKey,
-                'confirm' => PanelUpdater::CONFIRM,
+                'confirm' => 'PANEL-UPDATE',
             ];
             if (is_string($operation->target_tag) && $operation->target_tag !== '') {
                 $stdin['tag'] = $operation->target_tag;
@@ -99,7 +101,7 @@ class RunPanelUpdateJob implements ShouldQueue
                 'rolled_back' => (bool) ($response->data['rolled_back'] ?? false),
                 'finished_at' => now(),
             ]);
-        } catch (BrokerCallException $e) {
+        } catch (BrokerCallException|Throwable $e) {
             Log::error('Panel update failed', ['operation' => $operation->id, 'error' => $e->getMessage()]);
             $operation->update([
                 'status' => 'failed',

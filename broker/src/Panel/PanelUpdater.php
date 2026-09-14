@@ -118,6 +118,9 @@ final class PanelUpdater
 
         try {
             $log->info('Panel self-update starting (semver tags).');
+            // A prior apply schedules a deferred queue restart (~5s). Cancel it so
+            // back-to-back applies (pin then upgrade) are not killed mid-flight.
+            $this->cancelDeferredQueueRestarts($log);
             $this->ensureSourceRepo($source, $log);
 
             $dirty = $this->dirtyEntries($source);
@@ -628,6 +631,8 @@ final class PanelUpdater
             ], null, 120),
             'rsync web/lib/azerioid-broker'
         );
+        // Composer autoloads this tree as the panel user — never leave it root:750.
+        $this->runtime->exec(['/bin/chmod', '-R', 'u+rwX,g+rX,o-rwx', $prefix . '/web/lib'], null, 30);
 
         foreach ([
             $prefix . '/web/storage',
@@ -774,12 +779,13 @@ final class PanelUpdater
 
         $queueUnit = $this->config->panelRuntimeQueueUnit;
         if ($deferQueueRestart) {
+            $this->cancelDeferredQueueRestarts($log);
             $log->info('Scheduling deferred restart of ' . $queueUnit . ' (so the apply job can finish).');
-            $unitName = 'azerioid-panel-queue-restart-' . substr(hash('sha256', (string) microtime(true)), 0, 8);
+            // Fixed unit name so a later apply replaces any pending timer instead of stacking.
             $deferred = $this->runtime->exec([
                 '/usr/bin/systemd-run',
-                '--unit=' . $unitName,
-                '--on-active=5s',
+                '--unit=azerioid-panel-queue-restart',
+                '--on-active=15s',
                 '--description=AZERIOID panel queue restart after self-update',
                 '/bin/systemctl',
                 'restart',
@@ -792,6 +798,40 @@ final class PanelUpdater
         } else {
             Systemd::control($this->runtime, 'restart', $queueUnit);
         }
+    }
+
+    private function cancelDeferredQueueRestarts(OperationLogger $log): void
+    {
+        foreach ([
+            'azerioid-panel-queue-restart.service',
+            'azerioid-panel-queue-restart.timer',
+        ] as $unit) {
+            $this->runtime->exec(['/bin/systemctl', 'stop', $unit], null, 15);
+            $this->runtime->exec(['/bin/systemctl', 'reset-failed', $unit], null, 15);
+        }
+        $listed = $this->runtime->exec([
+            '/bin/systemctl',
+            'list-units',
+            'azerioid-panel-queue-restart*',
+            '--all',
+            '--no-legend',
+            '--no-pager',
+        ], null, 15);
+        if ($listed->ok()) {
+            foreach (preg_split("/\r\n|\n|\r/", trim($listed->stdout)) as $line) {
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+                $unit = preg_split('/\s+/', $line)[0] ?? '';
+                if ($unit === '' || ! str_contains($unit, 'azerioid-panel-queue-restart')) {
+                    continue;
+                }
+                $this->runtime->exec(['/bin/systemctl', 'stop', $unit], null, 15);
+                $this->runtime->exec(['/bin/systemctl', 'reset-failed', $unit], null, 15);
+            }
+        }
+        $log->info('Cleared any pending deferred queue-restart units.');
     }
 
     /** @param list<string> $args */
