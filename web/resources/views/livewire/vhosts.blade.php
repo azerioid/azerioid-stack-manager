@@ -294,6 +294,17 @@
                     Also remove linked supervisor processes
                 </label>
             @endif
+            @if (isset($mailDomains[$confirmDelete]))
+                <p class="mt-2 text-sm text-warn">
+                    Mail is enabled for this domain
+                    ({{ $mailDomains[$confirmDelete] }} {{ \Illuminate\Support\Str::plural('mailbox', $mailDomains[$confirmDelete]) }}).
+                    Deleting the vhost removes the mailboxes and every stored message.
+                </p>
+                <label class="mt-3 flex items-center gap-2 text-sm text-zinc-400">
+                    <input type="checkbox" class="rounded border-white/10 bg-ink-800" wire:model="dropMailOnDelete">
+                    Also delete mailboxes and stored mail for this domain
+                </label>
+            @endif
             <div class="mt-3 flex gap-2">
                 <button class="btn-primary" wire:click="delete">Confirm delete</button>
                 <button class="btn-ghost" wire:click="$set('confirmDelete', null)">Cancel</button>
