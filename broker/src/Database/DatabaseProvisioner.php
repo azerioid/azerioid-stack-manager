@@ -225,6 +225,20 @@ final class DatabaseProvisioner
             throw new BrokerException('Cannot run commands as postgres user.', 1);
         }
 
+        // Persist SCRAM as the server default so later CREATE/ALTER ROLE (PDO) match pg_hba.
+        $log->info('PostgreSQL password_encryption → scram-sha-256');
+        $enc = $this->runtime->exec([
+            ...$wrapper,
+            '/usr/bin/psql',
+            '-v',
+            'ON_ERROR_STOP=1',
+            '-c',
+            "ALTER SYSTEM SET password_encryption = 'scram-sha-256'; SELECT pg_reload_conf();",
+        ], null, 60);
+        if (!$enc->ok()) {
+            throw new BrokerException('Failed to set PostgreSQL password_encryption to scram-sha-256.', 1);
+        }
+
         $escaped = SqlIdent::escapeLiteral($password);
         $sql = "SET password_encryption = 'scram-sha-256'; DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '"
             . self::ADMIN_USER . "') THEN CREATE ROLE " . self::ADMIN_USER
