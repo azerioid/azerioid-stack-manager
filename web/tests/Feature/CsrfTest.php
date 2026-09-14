@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Services\TotpService;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
@@ -34,7 +35,12 @@ class CsrfTest extends TestCase
         $kernel = app(\Illuminate\Contracts\Http\Kernel::class);
         $web = $kernel->getMiddlewareGroups()['web'] ?? [];
         $this->assertTrue(
-            collect($web)->contains(fn ($m) => is_string($m) && str_contains($m, 'ValidateCsrfToken') || $m === ValidateCsrfToken::class)
+            collect($web)->contains(fn ($m) => is_string($m) && (
+                str_contains($m, 'PreventRequestForgery')
+                || str_contains($m, 'ValidateCsrfToken')
+                || str_contains($m, 'VerifyCsrfToken')
+            ))
+            || collect($web)->contains(PreventRequestForgery::class)
             || collect($web)->contains(ValidateCsrfToken::class)
         );
     }

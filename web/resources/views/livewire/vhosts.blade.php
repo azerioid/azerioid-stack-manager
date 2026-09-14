@@ -13,7 +13,7 @@
     @if ($showForm)
         <form wire:submit="create" class="panel grid gap-4 p-5 md:grid-cols-2">
             <label class="text-xs uppercase tracking-wide text-zinc-500">Domain
-                <input class="field mt-1" wire:model.blur="domain" placeholder="app.example.com" required>
+                <input class="field mt-1" wire:model.live.blur="domain" placeholder="app.example.com" required>
             </label>
             <label class="text-xs uppercase tracking-wide text-zinc-500">Web root
                 <input class="field mt-1" wire:model="root" placeholder="/data/www/app.example.com" required>

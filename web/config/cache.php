@@ -105,4 +105,17 @@ return [
 
     'prefix' => env('CACHE_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_').'_cache_'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Serializable Classes
+    |--------------------------------------------------------------------------
+    |
+    | Laravel 13 hardens cache unserialization. This panel caches arrays/scalars
+    | only — keep the allow-list empty (false) so arbitrary objects cannot be
+    | unserialized if APP_KEY is ever leaked.
+    |
+    */
+
+    'serializable_classes' => false,
+
 ];
