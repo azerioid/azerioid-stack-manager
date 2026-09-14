@@ -169,15 +169,8 @@ final class OctaneManager
         if ($root !== '') {
             VhostUser::ensure($this->runtime, $this->config, $domain, $root);
             $appDir = self::detectLaravel($this->runtime, $root)['app_dir'] ?? null;
-            if (is_string($appDir) && $appDir !== '' && $appDir !== $root) {
-                foreach ([$appDir . '/storage', $appDir . '/bootstrap/cache'] as $writable) {
-                    if ($this->runtime->isDir($writable)) {
-                        $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
-                        $this->runtime->exec([
-                            '/bin/chgrp', '-R', VhostUser::GROUP, $writable,
-                        ], null, 30);
-                    }
-                }
+            if (is_string($appDir) && $appDir !== '') {
+                $this->ensureFpmWritableLaravelDirs($appDir);
             }
         }
 
@@ -510,6 +503,38 @@ final class OctaneManager
         // Group-writable fallback: supervised is a member of azerioid-vhosts.
         $this->runtime->exec(['/bin/chgrp', '-R', $group, $appDir], null, 60);
         $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
+    }
+
+    /**
+     * After Octane disable, ensure Laravel writable dirs remain usable by the site FPM pool
+     * (group bits + SELinux httpd_sys_rw_content_t when enforcing).
+     */
+    private function ensureFpmWritableLaravelDirs(string $appDir): void
+    {
+        if ($this->runtime->getuid() !== 0) {
+            return;
+        }
+        $dirs = [
+            $appDir . '/storage',
+            $appDir . '/bootstrap/cache',
+            $appDir . '/database',
+        ];
+        foreach ($dirs as $writable) {
+            if (!$this->runtime->isDir($writable)) {
+                continue;
+            }
+            $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
+            $this->runtime->exec(['/bin/chgrp', '-R', VhostUser::GROUP, $writable], null, 30);
+            // Best-effort SELinux rw label (no-op when chcon is absent / SELinux off).
+            foreach (['/usr/bin/chcon', '/bin/chcon'] as $chcon) {
+                if ($this->runtime->fileExists($chcon)) {
+                    $this->runtime->exec([
+                        $chcon, '-R', '-t', 'httpd_sys_rw_content_t', $writable,
+                    ], null, 60);
+                    break;
+                }
+            }
+        }
     }
 
     private function installOctanePackage(string $appDir, string $php): void
