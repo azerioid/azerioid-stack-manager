@@ -239,8 +239,11 @@ POOL;
         }
         $root = self::TOOL_DIR;
         $prefix = self::CADDY_PATH_PREFIX;
+        // handle_path .../* does not match the bare prefix (no trailing slash).
+        // Browsers and the sidebar often hit /tools/adminer — redirect into the gated path.
         $body = <<<CADDY
 # AZERIOID Stack Manager — Adminer route (broker-managed; do not edit)
+redir {$prefix} {$prefix}/ 308
 handle_path {$prefix}/* {
     forward_auth {$auth} {
         uri /internal/auth-check

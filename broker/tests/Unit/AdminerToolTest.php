@@ -97,6 +97,7 @@ final class AdminerToolTest extends TestCase
         $this->assertStringContainsString('forward_auth 127.0.0.1:3169', $routes);
         $this->assertStringContainsString('uri /internal/auth-check', $routes);
         $this->assertStringContainsString('header_up Host 127.0.0.1', $routes);
+        $this->assertStringContainsString('redir /tools/adminer /tools/adminer/ 308', $routes);
         $this->assertStringContainsString('handle_path /tools/adminer/*', $routes);
         $this->assertStringContainsString('azerioid-adminer-tool.sock', $routes);
         $this->assertStringContainsString('open_basedir', $rt->files['/etc/php/8.4/fpm/pool.d/azerioid-adminer-tool.conf'] ?? '');

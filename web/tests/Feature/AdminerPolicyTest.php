@@ -52,7 +52,7 @@ class AdminerPolicyTest extends TestCase
             ->get('/')
             ->assertOk()
             ->assertSee('Database Admin')
-            ->assertSee('/tools/adminer');
+            ->assertSee('/tools/adminer/');
     }
 
     public function test_sidebar_hides_database_admin_when_not_installed(): void

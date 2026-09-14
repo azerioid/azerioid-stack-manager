@@ -27,7 +27,7 @@
                         ['updates', 'Updates', '/updates'],
                         ['vhosts', 'Virtual hosts', '/vhosts'],
                         ['databases', 'Databases', '/databases'],
-                        ...(($adminerInstalled ?? false) ? [['database-admin', 'Database Admin', '/tools/adminer']] : []),
+                        ...(($adminerInstalled ?? false) ? [['database-admin', 'Database Admin', '/tools/adminer/']] : []),
                         ['backups', 'Backups', '/backups'],
                         ['services', 'Services', '/services'],
                         ['processes', 'Processes', '/processes'],
@@ -69,7 +69,7 @@
                 <a href="/vhosts" class="shrink-0 text-zinc-400">Vhosts</a>
                 <a href="/databases" class="shrink-0 text-zinc-400">DB</a>
                 @if ($adminerInstalled ?? false)
-                    <a href="/tools/adminer" class="shrink-0 text-zinc-400">Adminer</a>
+                    <a href="/tools/adminer/" class="shrink-0 text-zinc-400">Adminer</a>
                 @endif
                 <a href="/backups" class="shrink-0 text-zinc-400">Backups</a>
                 <a href="/components" class="shrink-0 text-zinc-400">Components</a>
