@@ -27,13 +27,18 @@ final class RequireTwoFactor
             return $next($request);
         }
 
-        // Livewire updates hit /livewire/update, not the named page route.
+        // Livewire 4 update endpoints are /livewire-{hash}/… (not plain /livewire/*).
         // Allow only the enrollment component until TOTP is confirmed.
-        if ($request->is('livewire/*') && $this->isTwoFactorSetupRequest($request)) {
+        if ($this->isLivewireUpdateRequest($request) && $this->isTwoFactorSetupRequest($request)) {
             return $next($request);
         }
 
         return redirect()->route('two-factor.setup');
+    }
+
+    private function isLivewireUpdateRequest(Request $request): bool
+    {
+        return $request->is('livewire/*') || $request->is('livewire-*/*');
     }
 
     private function isTwoFactorSetupRequest(Request $request): bool

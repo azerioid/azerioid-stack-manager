@@ -85,6 +85,9 @@ final class PostgreSQLDriver implements DatabaseDriver
         $createdRole = false;
         $createdDb = false;
         try {
+            // EL defaults password_encryption=md5 while panel pg_hba uses scram-sha-256.
+            // Hash new role passwords as SCRAM so TCP auth from Adminer/apps succeeds.
+            $this->exec("SET password_encryption = 'scram-sha-256'");
             $this->exec(
                 'CREATE ROLE "' . SqlIdent::postgres($user) . '" WITH LOGIN PASSWORD \'' . $escaped . '\''
             );
@@ -136,6 +139,7 @@ final class PostgreSQLDriver implements DatabaseDriver
         $user = Validator::userName($user);
         Validator::password($password);
         $escaped = SqlIdent::escapeLiteral($password);
+        $this->exec("SET password_encryption = 'scram-sha-256'");
         $this->exec('ALTER ROLE "' . SqlIdent::postgres($user) . '" WITH PASSWORD \'' . $escaped . '\'');
 
         return ['user' => $user, 'reset' => true];

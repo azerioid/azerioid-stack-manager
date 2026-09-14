@@ -256,10 +256,10 @@ An install from an **untagged** `main` tip correctly writes `COMMIT`+`VERSION` a
 **Status:** Accepted (2026-09-14)  
 **Decision:** `tls internal` certificates work without installing Caddy's local root into `/usr/local/share/ca-certificates` (or NSS/Java stores). That install attempt runs as the `caddy` user via `sudo tee`, fails (caddy is not in sudoers — by design), and produces recurring auth-fail noise while TLS still issues successfully. Panel/broker do not need OS-wide trust of that CA (browsers already warn on self-signed; broker admin API is localhost HTTP). **Fix:** set global Caddy option `skip_install_trust` in the managed Caddyfile — do **not** grant Caddy broader sudo just to silence logs.
 
-## A34 — Laravel 13 / Livewire 5 upgrade path
+## A34 — Laravel 13 / Livewire 4 upgrade path
 
-**Status:** Deferred (post-v1.0 stabilization)  
-**Decision:** This project is exhaustively verified on Laravel 12 + Livewire 3 across six OS families with real end-to-end regression evidence. A major-version upgrade is a substantial undertaking (breaking changes, full six-OS re-verification given how much UI is Livewire-driven) and is deferred as its own future milestone-scoped task, not a quick bump. Staying on Livewire 3 does **not** mean staying on a vulnerable version — security patches within the major version are handled on their own urgent track regardless of this deferral (Livewire CVE verification already completed — confirmed patched at 3.8.6).
+**Status:** In progress (branch `upgrade/laravel-13-livewire-5`; 2026-09-14)  
+**Decision:** Major-version upgrade is its own milestone (not a drive-by bump). Research finding: **Livewire 5 does not exist** on Packagist as of this work — the current Livewire major that supports Laravel 13 is **Livewire 4** (`^4.0`, proven at `v4.4.4`). ADR wording that said “Livewire 5” is corrected to **Laravel 13 + Livewire 4**. `#[Locked]` remains the property-protection mechanism in Livewire 4 (official security docs). Do **not** merge to `main` until full PHPUnit + Phase 2/3 security re-proof + one-host regression, then cross-OS.
 
 ## A35 — Laravel Octane / FrankenPHP evaluation
 
