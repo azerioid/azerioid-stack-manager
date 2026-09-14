@@ -433,7 +433,7 @@ class VhostsPage extends Component
                 foreach ($broker->call('mail.domain.list', [], [], null, false)->dataOrFail()['domains'] ?? [] as $md) {
                     $name = (string) ($md['domain'] ?? '');
                     if ($name !== '') {
-                        $this->mailDomains[$name] = (int) ($md['mailboxes'] ?? 0);
+                        $this->mailDomains[$name] = (int) ($md['mailbox_count'] ?? 0);
                     }
                 }
             } catch (BrokerCallException) {
