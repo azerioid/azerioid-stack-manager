@@ -6,6 +6,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\Files\VhostPath;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\OctaneManager;
 
 /**
  * Local / test stand-in. Mirrors broker JSON shapes so the UI can be
@@ -114,6 +115,12 @@ final class FakeBroker
                 ],
                 'reverse_proxy' => null,
                 'engine' => 'caddy',
+                'runtime' => 'fpm',
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'octane_program' => 'octane-shop-example-com',
+                'laravel_app' => true,
+                'laravel_app_detail' => 'vendor/laravel/framework is installed.',
                 'readonly' => false,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/shop.example.com.conf',
@@ -138,6 +145,12 @@ final class FakeBroker
                 ],
                 'reverse_proxy' => '127.0.0.1:3000',
                 'engine' => 'caddy',
+                'runtime' => 'fpm',
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'octane_program' => null,
+                'laravel_app' => false,
+                'laravel_app_detail' => null,
                 'readonly' => true,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/projob.az.conf',
@@ -162,6 +175,12 @@ final class FakeBroker
                 ],
                 'reverse_proxy' => null,
                 'engine' => 'caddy',
+                'runtime' => 'fpm',
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'octane_program' => null,
+                'laravel_app' => false,
+                'laravel_app_detail' => null,
                 'readonly' => true,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/default.conf',
@@ -256,6 +275,10 @@ final class FakeBroker
                 'vhost.add' => $this->vhostAdd($args, $stdin),
                 'vhost.edit' => $this->vhostEdit($args, $stdin),
                 'vhost.del' => $this->vhostDel($args, $stdin),
+                'vhost.octane.status' => $this->octane('status', $args, $stdin),
+                'vhost.octane.enable' => $this->octane('enable', $args, $stdin),
+                'vhost.octane.disable' => $this->octane('disable', $args, $stdin),
+                'vhost.octane.reload' => $this->octane('reload', $args, $stdin),
                 'web.release-site-ports' => [
                     'released' => false,
                     'deprecated' => true,
@@ -698,6 +721,12 @@ final class FakeBroker
             'engine' => ($args[2] ?? '') === 'proxy'
                 ? 'caddy'
                 : (string) ($stdin['engine'] ?? 'caddy'),
+            'runtime' => 'fpm',
+            'octane_port' => null,
+            'octane_max_requests' => null,
+            'octane_program' => ($args[2] ?? 'php') === 'php' ? OctaneManager::programName((string) $domain) : null,
+            'laravel_app' => false,
+            'laravel_app_detail' => null,
             'readonly' => false,
             'enabled' => true,
             'source' => '/etc/caddy/conf.d/' . $domain . '.conf',
@@ -810,12 +839,159 @@ final class FakeBroker
         throw new BrokerCallException('Vhost config does not exist.', 3);
     }
 
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function octane(string $op, array $args, array $stdin): array
+    {
+        try {
+            return $this->octaneOp($op, $args, $stdin);
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function octaneOp(string $op, array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $index = $this->octaneVhostIndex($domain);
+        $vhost = $this->vhosts[$index];
+        $program = OctaneManager::programName($domain);
+        $enabled = ($vhost['runtime'] ?? 'fpm') === 'octane';
+
+        if ($op === 'status') {
+            return [
+                'domain' => $domain,
+                'runtime' => $vhost['runtime'] ?? 'fpm',
+                'octane_port' => $vhost['octane_port'] ?? null,
+                'octane_max_requests' => $vhost['octane_max_requests'] ?? null,
+                'octane_program' => $program,
+                'program' => $this->supervisorPrograms[$program] ?? null,
+                'laravel_app' => (bool) ($vhost['laravel_app'] ?? false),
+                'laravel_app_detail' => $vhost['laravel_app_detail'] ?? null,
+                'docs_url' => OctaneManager::DOCS_URL,
+            ];
+        }
+
+        if ($op === 'enable') {
+            $this->assertSupervisorInstalled();
+            if ($enabled) {
+                throw new BrokerCallException("Octane is already enabled for {$domain}.", 3);
+            }
+            if (! ($vhost['laravel_app'] ?? false)) {
+                throw new BrokerCallException(
+                    "{$domain} does not look like a Laravel application, so Octane cannot run it. "
+                    .'See '.OctaneManager::DOCS_URL.'.',
+                    3
+                );
+            }
+            $maxRequests = OctaneManager::validateMaxRequests($stdin['max_requests'] ?? OctaneManager::DEFAULT_MAX_REQUESTS);
+            $port = array_key_exists('port', $stdin) && $stdin['port'] !== null && $stdin['port'] !== ''
+                ? OctaneManager::validatePort($stdin['port'])
+                : OctaneManager::PORT_MIN + $index;
+            $this->vhosts[$index]['runtime'] = 'octane';
+            $this->vhosts[$index]['octane_port'] = $port;
+            $this->vhosts[$index]['octane_max_requests'] = $maxRequests;
+            $this->vhosts[$index]['reverse_proxy'] = '127.0.0.1:'.$port;
+            $this->supervisorPrograms[$program] = [
+                'command' => "/usr/bin/php8.4 artisan octane:start --server=frankenphp --host=127.0.0.1 --port={$port} --max-requests={$maxRequests}",
+                'directory' => (string) ($vhost['root'] ?? ''),
+                'user' => 'azerioid-supervised',
+                'autostart' => true,
+                'autorestart' => true,
+                'vhost_domain' => $domain,
+                'log_stdout' => '/var/log/azerioid-supervised/'.$program.'.stdout.log',
+                'log_stderr' => '/var/log/azerioid-supervised/'.$program.'.stderr.log',
+                'state' => 'running',
+                'status_raw' => 'RUNNING pid 4242',
+            ];
+
+            return [
+                'domain' => $domain,
+                'enabled' => true,
+                'runtime' => 'octane',
+                'octane_port' => $port,
+                'octane_max_requests' => $maxRequests,
+                'octane_program' => $program,
+                'app_dir' => (string) ($vhost['root'] ?? ''),
+                'docs_url' => OctaneManager::DOCS_URL,
+            ];
+        }
+
+        if (! $enabled) {
+            throw new BrokerCallException("Octane is not enabled for {$domain}.", 3);
+        }
+
+        if ($op === 'reload') {
+            return [
+                'domain' => $domain,
+                'reloaded' => true,
+                'method' => 'octane:reload',
+                'octane_program' => $program,
+                'output' => 'fake octane:reload ok',
+            ];
+        }
+
+        $this->vhosts[$index]['runtime'] = 'fpm';
+        $this->vhosts[$index]['octane_port'] = null;
+        $this->vhosts[$index]['octane_max_requests'] = null;
+        $this->vhosts[$index]['reverse_proxy'] = null;
+        $removed = isset($this->supervisorPrograms[$program]);
+        unset($this->supervisorPrograms[$program]);
+
+        return [
+            'domain' => $domain,
+            'disabled' => true,
+            'runtime' => 'fpm',
+            'octane_program' => $program,
+            'program_removed' => $removed,
+        ];
+    }
+
+    private function octaneVhostIndex(string $domain): int
+    {
+        $domain = Validator::domain($domain);
+        foreach ($this->vhosts as $i => $vhost) {
+            if (($vhost['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($vhost['readonly'])) {
+                throw new BrokerCallException('This vhost is managed externally and cannot be switched to Octane.', 3);
+            }
+            if (($vhost['type'] ?? '') !== 'php') {
+                throw new BrokerCallException('Octane is only available for PHP vhosts.', 3);
+            }
+            if (in_array($vhost['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new BrokerCallException(
+                    'Octane requires the Caddy engine. Switch '.$domain.' to engine=caddy first.',
+                    3
+                );
+            }
+
+            return (int) $i;
+        }
+
+        throw new BrokerCallException('Vhost config does not exist.', 3);
+    }
+
     private function vhostDel(array $args, array $stdin = []): array
     {
         $domain = $args[0] ?? '';
         $linked = [];
+        $octaneProgram = null;
+        try {
+            $octaneProgram = OctaneManager::programName((string) $domain);
+        } catch (\Throwable) {
+        }
         foreach ($this->supervisorPrograms as $name => $program) {
-            if (($program['vhost_domain'] ?? null) === $domain) {
+            if (($program['vhost_domain'] ?? null) === $domain && $name !== $octaneProgram) {
                 $linked[] = $name;
             }
         }
@@ -825,6 +1001,9 @@ final class FakeBroker
                 .'. Remove them first, or pass remove_supervisor_programs=true to delete with the vhost.',
                 3
             );
+        }
+        if ($octaneProgram !== null) {
+            unset($this->supervisorPrograms[$octaneProgram]);
         }
         foreach ($linked as $name) {
             unset($this->supervisorPrograms[$name]);

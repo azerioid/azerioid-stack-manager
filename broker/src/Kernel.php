@@ -64,6 +64,7 @@ use AzerioidPanel\Broker\Actions\VhostDel;
 use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
+use AzerioidPanel\Broker\Actions\VhostOctane;
 use AzerioidPanel\Broker\Actions\WebFrontRouterMigrate;
 use AzerioidPanel\Broker\Actions\WebReleaseSitePorts;
 
@@ -95,6 +96,10 @@ final class Kernel
         'vhost.add' => VhostAdd::class,
         'vhost.edit' => VhostEdit::class,
         'vhost.del' => VhostDel::class,
+        'vhost.octane.status' => VhostOctane::class,
+        'vhost.octane.enable' => VhostOctane::class,
+        'vhost.octane.disable' => VhostOctane::class,
+        'vhost.octane.reload' => VhostOctane::class,
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,

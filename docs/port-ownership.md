@@ -12,6 +12,7 @@ The panel always uses a dedicated Caddy vhost snippet — never a second Caddy p
 | **Caddy engine** | (same process) | `php_fastcgi` / `file_server` directly — no extra hop. |
 | **Apache engine** | `127.0.0.1:8081` only | Name-based vhosts on that one port. Caddy `reverse_proxy` with `Host` preserved. Never bound to `:80`/`:443`. |
 | **Nginx engine** | `127.0.0.1:8082` only | Same pattern as Apache. |
+| **Laravel Octane worker** | `127.0.0.1:34000–34999` | Opt-in per vhost (ADR A35). FrankenPHP under Supervisor; Caddy `reverse_proxy` with the same headers as a `type=proxy` site. One port per Octane vhost. |
 | **Panel Caddy vhost** | `127.0.0.1:3169` (optional public HTTPS on the host IP) plus optional white-label hostname on `:443` | Unaffected by site-engine choice. A catch-all on `:3169` returns **421** so site vhosts never accidentally match the panel port. |
 
 Installing Apache or Nginx as a component does **not** require releasing `:80`/`:443`. The deprecated `web.release-site-ports` action is a no-op.
@@ -33,6 +34,7 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 5. **Database ports:** managed DBs (MariaDB, PostgreSQL, MongoDB, Redis) bind `127.0.0.1` by default when installed (P3+). Panel SQLite has no network port. Per-database **remote access** (localhost / specific IPs / global) may re-bind the engine publicly and add tagged firewall allow rules; MongoDB remote access is **instance-wide** (see ADR A23). The table below is the **localhost default**, not a guarantee after access-control changes.
 6. **Backend engine ports** (8081/8082) are loopback-only and are **not** opened on the host firewall (explicit deny when ufw/firewalld is active). Defense in depth beyond bind address.
 7. **Conflict detection:** registry `conflicts` is for real package clashes (e.g. two database engines), not Caddy vs Nginx on `:80`.
+8. **Octane worker ports** (34000–34999) are loopback-only and allocated per vhost as the first unused, non-listening port in the range. They are never opened on the host firewall, and the panel's own runtime never uses them — Octane is opt-in for site vhosts only (ADR A35).
 
 ## Component port registry
 
@@ -47,6 +49,8 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 | MongoDB | 27017 | 127.0.0.1 (default); `0.0.0.0` when any DB is remote | tcp | managed (`mongod`) |
 | Redis | 6379 | 127.0.0.1 | tcp | managed (`redis`) |
 | Memcached | 11211 | 127.0.0.1 | tcp | managed (`memcached`) |
+| Laravel Octane workers | 34000–34999 | 127.0.0.1 | tcp | managed (`azerioid-supervised`, program `octane-<domain>`) |
+| Vhost terminals (ttyd) | 35000–35999 | 127.0.0.1 | tcp | managed (per-vhost user) |
 
 ## EL9 / SELinux
 

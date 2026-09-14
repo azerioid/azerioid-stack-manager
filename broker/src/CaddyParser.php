@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker;
 
+use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Web\ManagedVhost;
 use AzerioidPanel\Broker\Web\VhostEngine;
 
@@ -23,6 +24,9 @@ final class CaddyParser
      *   tls_key: ?string,
      *   reverse_proxy: ?string,
      *   engine: string,
+     *   runtime: string,
+     *   octane_port: ?int,
+     *   octane_max_requests: ?int,
      *   readonly: bool,
      *   source: string
      * }
@@ -54,12 +58,20 @@ final class CaddyParser
         }
         $hasTlsBlock = $hasTlsInternal || ($tlsCert !== null);
 
+        $octane = ($managed['runtime'] ?? null) === OctaneManager::RUNTIME_OCTANE;
+
         $type = 'static';
         if (VhostEngine::isBackend($engine)) {
             $type = $managed['type'] ?? 'static';
             if ($phpSocket !== null && $type === 'static') {
                 $type = 'php';
             }
+            if (isset($managed['root']) && $managed['root'] !== '') {
+                $root = $managed['root'];
+            }
+        } elseif ($octane) {
+            // Octane sites render reverse_proxy to the loopback worker but stay type=php.
+            $type = $managed['type'] ?? 'php';
             if (isset($managed['root']) && $managed['root'] !== '') {
                 $root = $managed['root'];
             }
@@ -107,6 +119,9 @@ final class CaddyParser
             'tls_key' => $tlsKey,
             'reverse_proxy' => $proxy,
             'engine' => $engine,
+            'runtime' => $octane ? OctaneManager::RUNTIME_OCTANE : OctaneManager::RUNTIME_FPM,
+            'octane_port' => $octane ? $managed['octane_port'] : null,
+            'octane_max_requests' => $octane ? $managed['octane_max_requests'] : null,
             'readonly' => $active && ManagedVhost::isReadonly(
                 $path,
                 $domains,
@@ -161,11 +176,19 @@ final class CaddyParser
     }
 
     /**
-     * @return array{engine:?string,type:?string,php:?string,root:?string}
+     * @return array{engine:?string,type:?string,php:?string,root:?string,runtime:?string,octane_port:?int,octane_max_requests:?int}
      */
     private static function parseManagedComment(string $contents): array
     {
-        $out = ['engine' => null, 'type' => null, 'php' => null, 'root' => null];
+        $out = [
+            'engine' => null,
+            'type' => null,
+            'php' => null,
+            'root' => null,
+            'runtime' => null,
+            'octane_port' => null,
+            'octane_max_requests' => null,
+        ];
         if (!preg_match('/^#\s*azerioid-managed\s+(.+)$/m', $contents, $m)) {
             return $out;
         }
@@ -181,6 +204,15 @@ final class CaddyParser
         }
         if (preg_match('/\broot=(\S+)/', $rest, $r)) {
             $out['root'] = $r[1];
+        }
+        if (preg_match('/\bruntime=(fpm|octane)\b/', $rest, $rn)) {
+            $out['runtime'] = $rn[1];
+        }
+        if (preg_match('/\boctane_port=([0-9]{2,5})\b/', $rest, $op)) {
+            $out['octane_port'] = (int) $op[1];
+        }
+        if (preg_match('/\boctane_max_requests=([0-9]{1,7})\b/', $rest, $om)) {
+            $out['octane_max_requests'] = (int) $om[1];
         }
 
         return $out;
