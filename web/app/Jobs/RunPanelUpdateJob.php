@@ -8,6 +8,7 @@ use App\Services\Broker\BrokerClient;
 use AzerioidPanel\Broker\Panel\PanelUpdater;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Log;
 
 class RunPanelUpdateJob implements ShouldQueue
@@ -22,19 +23,29 @@ class RunPanelUpdateJob implements ShouldQueue
     {
     }
 
+    /**
+     * Prevent concurrent panel self-updates (replaces a hand-rolled
+     * "another operation is running → release(15)" check).
+     *
+     * Operator-facing refusal of a second apply remains at dispatch time
+     * (CLI / Updates page: "already queued or running"). This middleware is
+     * the queue-level safety net if two jobs are already on the queue.
+     *
+     * @return list<object>
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping('panel-update'))
+                ->releaseAfter(15)
+                ->expireAfter(960),
+        ];
+    }
+
     public function handle(BrokerClient $broker): void
     {
         $operation = PanelUpdateOperation::query()->find($this->operationId);
         if ($operation === null) {
-            return;
-        }
-
-        if (PanelUpdateOperation::query()
-            ->where('status', 'running')
-            ->where('id', '!=', $operation->id)
-            ->exists()) {
-            $this->release(15);
-
             return;
         }
 
