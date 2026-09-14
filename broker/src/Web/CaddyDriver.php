@@ -12,6 +12,7 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
+use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
@@ -213,6 +214,9 @@ final class CaddyDriver implements WebServerDriver
             $spec['tls_cert'],
             $spec['tls_key'],
             $spec['engine'],
+            $spec['runtime'],
+            $spec['octane_port'],
+            $spec['octane_max_requests'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -258,6 +262,9 @@ final class CaddyDriver implements WebServerDriver
             'tls_key' => $spec['tls_key'],
             'type' => $spec['type'],
             'engine' => $spec['engine'],
+            'runtime' => $spec['runtime'],
+            'octane_port' => $spec['octane_port'],
+            'octane_max_requests' => $spec['octane_max_requests'],
         ]));
 
         return [
@@ -270,6 +277,9 @@ final class CaddyDriver implements WebServerDriver
             'tls' => TlsMode::enabled($spec['tls_mode']),
             'tls_mode' => $spec['tls_mode'],
             'engine' => $spec['engine'],
+            'runtime' => $spec['runtime'],
+            'octane_port' => $spec['octane_port'],
+            'octane_max_requests' => $spec['octane_max_requests'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -356,11 +366,18 @@ final class CaddyDriver implements WebServerDriver
         ?string $tlsCert = null,
         ?string $tlsKey = null,
         string $engine = VhostEngine::CADDY,
+        string $appRuntime = OctaneManager::RUNTIME_FPM,
+        ?int $octanePort = null,
+        ?int $octaneMaxRequests = null,
     ): string {
         $engine = VhostEngine::normalize($engine);
         if ($type === 'proxy') {
             $engine = VhostEngine::CADDY;
         }
+        $octane = $type === 'php'
+            && $octanePort !== null
+            && !VhostEngine::isBackend($engine)
+            && OctaneManager::normalizeRuntime($appRuntime) === OctaneManager::RUNTIME_OCTANE;
         $mode = TlsMode::effective($tlsMode, $domain);
         if ($mode === TlsMode::OFF) {
             $siteLabel = "http://{$domain}";
@@ -378,7 +395,13 @@ final class CaddyDriver implements WebServerDriver
         }
         $phpPart = $phpVersion !== null && $phpVersion !== '' ? " php={$phpVersion}" : '';
         $rootPart = $root !== '' ? " root={$root}" : '';
-        $managed = "# azerioid-managed engine={$engine} type={$type}{$phpPart}{$rootPart}\n";
+        $runtimePart = '';
+        if ($octane) {
+            $maxRequests = $octaneMaxRequests ?? OctaneManager::DEFAULT_MAX_REQUESTS;
+            $runtimePart = ' runtime=' . OctaneManager::RUNTIME_OCTANE
+                . " octane_port={$octanePort} octane_max_requests={$maxRequests}";
+        }
+        $managed = "# azerioid-managed engine={$engine} type={$type}{$phpPart}{$rootPart}{$runtimePart}\n";
 
         $phpBlock = '';
         $proxyBlock = '';
@@ -388,6 +411,18 @@ final class CaddyDriver implements WebServerDriver
             $upstreamAddr = VhostEngine::backendAddress($config, $engine);
             $proxyBlock = <<<PROXY
     reverse_proxy {$upstreamAddr} {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+PROXY;
+        } elseif ($octane) {
+            // FrankenPHP worker on loopback — same forwarding headers as a type=proxy site.
+            $proxyBlock = <<<PROXY
+    reverse_proxy 127.0.0.1:{$octanePort} {
         header_up Host {http.request.host}
         header_up X-Forwarded-For {http.request.remote.host}
         header_up X-Forwarded-Proto {http.request.scheme}
@@ -437,7 +472,7 @@ PROXY;
 EOF;
     }
 
-    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string,engine:string} */
+    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string,engine:string,runtime:string,octane_port:?int,octane_max_requests:?int} */
     private function mergeEditSpec(Runtime $runtime, Config $config, string $domain, array $parsed, array $changes): array
     {
         $type = (string) ($parsed['type'] ?? 'static');
@@ -483,6 +518,8 @@ EOF;
             $engine = VhostEngine::CADDY;
         }
 
+        [$appRuntime, $octanePort, $octaneMaxRequests] = $this->mergeRuntimeSpec($domain, $type, $engine, $parsed, $changes);
+
         return [
             'root' => $root,
             'type' => $type,
@@ -492,13 +529,49 @@ EOF;
             'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
             'tls_key' => is_string($tlsKey) ? $tlsKey : null,
             'engine' => $engine,
+            'runtime' => $appRuntime,
+            'octane_port' => $octanePort,
+            'octane_max_requests' => $octaneMaxRequests,
         ];
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string} */
+    /**
+     * @param  array<string,mixed>  $parsed
+     * @param  array<string,mixed>  $changes
+     * @return array{0:string,1:?int,2:?int}
+     */
+    private function mergeRuntimeSpec(string $domain, string $type, string $engine, array $parsed, array $changes): array
+    {
+        $appRuntime = OctaneManager::normalizeRuntime(
+            $changes['runtime'] ?? ($parsed['runtime'] ?? OctaneManager::RUNTIME_FPM)
+        );
+        if ($appRuntime !== OctaneManager::RUNTIME_OCTANE) {
+            return [OctaneManager::RUNTIME_FPM, null, null];
+        }
+        if ($type !== 'php') {
+            throw new BrokerException('Octane is only available for PHP vhosts.', 3);
+        }
+        if (VhostEngine::isBackend($engine)) {
+            throw new BrokerException(
+                "Octane requires the Caddy engine; {$domain} uses the {$engine} backend engine.",
+                3
+            );
+        }
+
+        return [
+            OctaneManager::RUNTIME_OCTANE,
+            OctaneManager::validatePort($changes['octane_port'] ?? ($parsed['octane_port'] ?? null)),
+            OctaneManager::validateMaxRequests(
+                $changes['octane_max_requests'] ?? ($parsed['octane_max_requests'] ?? OctaneManager::DEFAULT_MAX_REQUESTS)
+            ),
+        ];
+    }
+
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string,runtime:string,octane_port:?int} */
     private function editSnapshot(array $parsed): array
     {
         $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
+        $appRuntime = OctaneManager::normalizeRuntime($parsed['runtime'] ?? OctaneManager::RUNTIME_FPM);
 
         return [
             'root' => $parsed['root'] ?? null,
@@ -507,6 +580,10 @@ EOF;
             'tls_mode' => $mode,
             'type' => (string) ($parsed['type'] ?? 'static'),
             'engine' => VhostEngine::normalize($parsed['engine'] ?? VhostEngine::CADDY),
+            'runtime' => $appRuntime,
+            'octane_port' => $appRuntime === OctaneManager::RUNTIME_OCTANE
+                ? ($parsed['octane_port'] ?? null)
+                : null,
         ];
     }
 

@@ -148,6 +148,33 @@
         </form>
     @endif
 
+    @if ($octaneTarget)
+        <div class="panel border border-warn/40 p-5">
+            <p class="text-sm">
+                Enable <span class="font-mono text-zinc-200">Laravel Octane (FrankenPHP)</span> for
+                <span class="font-mono">{{ $octaneTarget }}</span>?
+            </p>
+            <p class="mt-2 text-sm text-warn">
+                Octane keeps your application booted between requests. Constructors, static properties, and
+                singletons are <strong>not</strong> reset per request, so code that relies on a fresh boot can leak
+                state between visitors. Review
+                <a href="https://laravel.com/docs/octane" target="_blank" rel="noopener noreferrer" class="underline">laravel.com/docs/octane</a>
+                before serving production traffic — and reload the workers after every deploy.
+            </p>
+            <p class="mt-2 text-xs text-zinc-400">
+                Caddy stays the front door and reverse-proxies to a Supervisor-managed worker on loopback
+                (127.0.0.1:34000–34999). Switching back to PHP-FPM is one click.
+            </p>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Max requests per worker
+                <input class="field mt-1 max-w-[12rem]" wire:model="octaneMaxRequests" inputmode="numeric" placeholder="500">
+            </label>
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="enableOctane">Enable Octane</button>
+                <button class="btn-ghost" wire:click="cancelOctane">Cancel</button>
+            </div>
+        </div>
+    @endif
+
     <div class="panel overflow-x-auto">
         <table class="w-full text-left text-sm">
             <thead class="font-mono text-[11px] uppercase tracking-wide text-zinc-500">
@@ -157,6 +184,7 @@
                     <th class="px-4 py-3">Engine</th>
                     <th class="px-4 py-3">Root / upstream</th>
                     <th class="px-4 py-3">PHP</th>
+                    <th class="px-4 py-3">Runtime</th>
                     <th class="px-4 py-3">TLS</th>
                     <th class="px-4 py-3"></th>
                 </tr>
@@ -177,6 +205,27 @@
                         <td class="px-4 py-3 font-mono text-xs uppercase text-zinc-300">{{ $v['engine'] ?? 'caddy' }}</td>
                         <td class="px-4 py-3 font-mono text-xs text-zinc-400">{{ in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true) ? ($v['root'] ?? $v['reverse_proxy']) : ($v['reverse_proxy'] ?? $v['root']) }}</td>
                         <td class="px-4 py-3 font-mono">{{ $v['php_version'] ?? '—' }}</td>
+                        <td class="px-4 py-3 text-xs">
+                            @if (($v['runtime'] ?? 'fpm') === 'octane')
+                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">Octane</span>
+                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
+                                    FrankenPHP · 127.0.0.1:{{ $v['octane_port'] ?? '?' }} · max-req {{ $v['octane_max_requests'] ?? '?' }}
+                                </div>
+                            @elseif (($v['type'] ?? '') === 'php')
+                                <span class="font-mono text-[11px] uppercase text-zinc-400">PHP-FPM</span>
+                                @if (empty($v['readonly']) && empty($v['laravel_app']))
+                                    <div class="mt-0.5 text-[10px] text-zinc-500" title="{{ $v['laravel_app_detail'] ?? '' }}">
+                                        Octane unavailable — not a Laravel app
+                                    </div>
+                                @elseif (empty($v['readonly']) && in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true))
+                                    <div class="mt-0.5 text-[10px] text-zinc-500">
+                                        Octane unavailable — needs the Caddy engine
+                                    </div>
+                                @endif
+                            @else
+                                <span class="text-zinc-600">—</span>
+                            @endif
+                        </td>
                         <td class="px-4 py-3 text-xs">
                             @php
                                 $ts = $v['tls_status'] ?? null;
@@ -212,6 +261,12 @@
                                 <a href="/processes" class="text-xs text-accent" title="Supervisor processes">{{ count($supervisorByVhost[$v['domain']]) }} proc</a>
                             @endif
                             @if (empty($v['readonly']))
+                                @if (($v['runtime'] ?? 'fpm') === 'octane')
+                                    <button type="button" class="text-xs text-accent" wire:click="reloadOctane('{{ $v['domain'] }}')">Reload application</button>
+                                    <button type="button" class="text-xs text-warn" wire:click="disableOctane('{{ $v['domain'] }}')">Switch to PHP-FPM</button>
+                                @elseif (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy')
+                                    <button type="button" class="text-xs text-accent" wire:click="askOctane('{{ $v['domain'] }}')">Enable Octane</button>
+                                @endif
                                 <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
                                 <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>
                                 <button type="button" class="text-xs text-accent" wire:click="startEdit('{{ $v['domain'] }}')">Edit</button>
@@ -220,7 +275,7 @@
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="7" class="px-4 py-8 text-center text-zinc-500">No virtual hosts found.</td></tr>
+                    <tr><td colspan="8" class="px-4 py-8 text-center text-zinc-500">No virtual hosts found.</td></tr>
                 @endforelse
             </tbody>
         </table>

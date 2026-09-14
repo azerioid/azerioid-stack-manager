@@ -261,10 +261,24 @@ An install from an **untagged** `main` tip correctly writes `COMMIT`+`VERSION` a
 **Status:** In progress (branch `upgrade/laravel-13-livewire-5`; 2026-09-14)  
 **Decision:** Major-version upgrade is its own milestone (not a drive-by bump). Research finding: **Livewire 5 does not exist** on Packagist as of this work — the current Livewire major that supports Laravel 13 is **Livewire 4** (`^4.0`, proven at `v4.4.4`). ADR wording that said “Livewire 5” is corrected to **Laravel 13 + Livewire 4**. `#[Locked]` remains the property-protection mechanism in Livewire 4 (official security docs). Do **not** merge to `main` until full PHPUnit + Phase 2/3 security re-proof + one-host regression, then cross-OS.
 
-## A35 — Laravel Octane / FrankenPHP evaluation
+## A35 — Laravel Octane (FrankenPHP) is a per-vhost opt-in, never the panel runtime
 
-**Status:** Under consideration, not implemented  
-**Decision:** A legitimate future optimization (persistent-worker execution model vs traditional PHP-FPM) for the panel's own runtime and/or site vhosts. Open questions before adoption: interaction with the broker/queue model, any code assuming per-request state resets, whether this applies to the panel only or is offered as a per-vhost option. No action taken now.
+**Status:** Accepted (2026-09-14)  
+**Decision:** Octane is offered as an **opt-in high-performance mode for a single site vhost**, never as a default and never for the panel's own runtime (the panel stays on its dedicated PHP-FPM pool + queue unit, per A17/A27). It reuses the two mechanisms the panel already owns rather than adding a parallel process manager:
+
+- **Supervisor (A25)** runs `php artisan octane:start --server=frankenphp --host=127.0.0.1 --port=N --max-requests=M` as `azerioid-supervised`, in a panel-managed program named `octane-<domain-slug>`.
+- **Caddy (A9)** stays the front door and `reverse_proxy`s to `127.0.0.1:N` with the same forwarding headers as a `type=proxy` vhost, so TLS, logs, and real-IP handling are unchanged.
+
+The vhost **stays `type=php`** in the managed comment (`# azerioid-managed engine=caddy type=php php=8.4 root=… runtime=octane octane_port=N octane_max_requests=M`) so PHP version, docroot, file manager, and terminal keep working. `CaddyParser` must therefore not infer `type=proxy` from the `reverse_proxy` directive when `runtime=octane` is present.
+
+Constraints:
+- **Laravel only.** Enable requires an `artisan` entrypoint (in the docroot or its parent when the docroot is `…/public`) **and** `laravel/framework` either required in `composer.json` or installed in `vendor/`. Anything else is refused with an explicit message.
+- **Caddy engine only.** Apache/Nginx backend-engine vhosts are refused; Octane needs the Caddy front door talking to loopback directly.
+- **Supervisor component required**, and the worker must actually listen before Caddy is rewritten. Enable is transactional: if the worker never listens or Caddy validation fails, the program is removed and the vhost keeps serving through PHP-FPM.
+- **Disable** rewrites Caddy back to `php_fastcgi` **first**, then stops and removes the program. **Deleting** the vhost removes the `octane-*` program automatically (operator-created processes still require `remove_supervisor_programs`).
+- Deploys need an explicit **reload** (`artisan octane:reload`, falling back to a Supervisor restart) because workers keep constructors, static properties, and singletons between requests. The UI states this before enabling and links the Octane docs.
+
+Port range `34000–34999` is reserved for these workers (see `docs/port-ownership.md`), allocated as the first unused, non-listening port. Default `--max-requests` is 500.
 
 ## A36 — Mail server component (future)
 

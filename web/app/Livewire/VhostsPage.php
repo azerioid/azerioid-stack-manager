@@ -32,6 +32,8 @@ class VhostsPage extends Component
     public bool $removeSupervisorOnDelete = false;
     public array $supervisorByVhost = [];
     public bool $showForm = false;
+    public ?string $octaneTarget = null;
+    public string $octaneMaxRequests = '500';
 
     public ?string $editingDomain = null;
     public string $editRoot = '';
@@ -254,6 +256,108 @@ class VhostsPage extends Component
         $this->confirmDelete = null;
         $this->removeSupervisorOnDelete = false;
         $this->reload($broker);
+    }
+
+    public function askOctane(string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->showForm = false;
+        $this->octaneTarget = $domain;
+        $this->octaneMaxRequests = '500';
+    }
+
+    public function cancelOctane(): void
+    {
+        $this->reset('octaneTarget', 'octaneMaxRequests');
+    }
+
+    public function enableOctane(BrokerClient $broker): void
+    {
+        $domain = (string) $this->octaneTarget;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $this->assertLaravelVhost($domain);
+            $res = $broker->call('vhost.octane.enable', [$domain], [
+                'max_requests' => trim($this->octaneMaxRequests),
+            ], 900);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $port = is_array($res->data) ? ($res->data['octane_port'] ?? '?') : '?';
+                $this->flash = "Octane is now serving {$domain} from 127.0.0.1:{$port}. Deploys need a worker reload.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->cancelOctane();
+        $this->reload($broker);
+    }
+
+    public function disableOctane(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.octane.disable', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $this->flash = "{$domain} is back on traditional PHP-FPM.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function reloadOctane(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.octane.reload', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $method = is_array($res->data) ? (string) ($res->data['method'] ?? 'octane:reload') : 'octane:reload';
+                $this->flash = "Reloaded Octane workers for {$domain} ({$method}).";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    /** Octane only runs Laravel — never trust the UI-hidden button. */
+    private function assertLaravelVhost(string $domain): void
+    {
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (($v['type'] ?? '') !== 'php') {
+                throw new \RuntimeException('Octane is only available for PHP vhosts.');
+            }
+            if (in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new \RuntimeException(
+                    "Octane requires the Caddy engine. Switch {$domain} to engine=caddy first."
+                );
+            }
+            if (empty($v['laravel_app'])) {
+                throw new \RuntimeException(
+                    "{$domain} does not look like a Laravel application, so Octane cannot run it. "
+                    .(string) ($v['laravel_app_detail'] ?? '')
+                );
+            }
+
+            return;
+        }
+        throw new \RuntimeException("{$domain} is not a mutable panel vhost.");
     }
 
     /** Server-side check — do not trust UI-hidden buttons or a tampered editingDomain. */

@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Terminal\TerminalManager;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -28,8 +29,16 @@ final class VhostDel
             }
         }
 
-        if ($linked !== [] && !self::boolInput($input['remove_supervisor_programs'] ?? false)) {
-            $names = implode(', ', array_column($linked, 'name'));
+        // The panel owns the octane-<domain> worker outright, so it goes with the vhost.
+        // Operator-created processes still need the explicit remove flag.
+        $octaneProgram = OctaneManager::programName($domain);
+        $operatorOwned = array_values(array_filter(
+            $linked,
+            static fn (array $program): bool => ($program['name'] ?? '') !== $octaneProgram
+        ));
+
+        if ($operatorOwned !== [] && !self::boolInput($input['remove_supervisor_programs'] ?? false)) {
+            $names = implode(', ', array_column($operatorOwned, 'name'));
             throw new BrokerException(
                 "Vhost {$domain} has supervisor process(es): {$names}. "
                 . 'Remove them first, or pass remove_supervisor_programs=true to delete with the vhost.',

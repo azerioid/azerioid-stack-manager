@@ -11,8 +11,8 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files)}
+        {action : list|add|edit|del|files|octane}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status (with octane)}
         {--domain= : Vhost domain}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -28,7 +28,9 @@ class VhostCommand extends Command
         {--path= : Relative path inside the vhost (files)}
         {--dest= : Destination relative path (files rename)}
         {--recursive : Recursive delete of a directory (files delete)}
-        {--json : JSON output (list / files list)}';
+        {--max-requests= : Requests per Octane worker before it is recycled (octane enable)}
+        {--port= : Loopback port for the Octane worker, 34000-34999 (octane enable)}
+        {--json : JSON output (list / files list / octane)}';
 
     protected $description = 'Manage virtual hosts via broker vhost.* actions';
 
@@ -40,6 +42,7 @@ class VhostCommand extends Command
             'edit' => $this->editVhost(),
             'del', 'delete', 'rm' => $this->delVhost(),
             'files' => $this->files(),
+            'octane' => $this->octane(),
             default => $this->invalidAction(),
         };
     }
@@ -110,10 +113,13 @@ class VhostCommand extends Command
                     : (! empty($v['tls']) ? (string) ($v['tls_mode'] ?? 'yes') : 'http'),
                 ! empty($v['readonly']) ? 'yes' : 'no',
                 (string) ($v['engine'] ?? $v['stack'] ?? 'caddy'),
+                ($v['runtime'] ?? 'fpm') === 'octane'
+                    ? 'octane:'.(string) ($v['octane_port'] ?? '?')
+                    : (string) ($v['runtime'] ?? 'fpm'),
             ];
         }
 
-        return $this->emitTable(['domain', 'type', 'php', 'root', 'tls', 'readonly', 'engine'], $rows);
+        return $this->emitTable(['domain', 'type', 'php', 'root', 'tls', 'readonly', 'engine', 'runtime'], $rows);
     }
 
     private function addVhost(): int
@@ -404,6 +410,70 @@ class VhostCommand extends Command
         }
     }
 
+    private function octane(): int
+    {
+        $op = strtolower(trim((string) $this->argument('filesOp')));
+        if (! in_array($op, ['enable', 'disable', 'reload', 'status'], true)) {
+            $this->error('Unknown octane operation. Use: enable|disable|reload|status');
+
+            return self::INVALID;
+        }
+        try {
+            $domain = Validator::domain((string) $this->option('domain'));
+            $input = [];
+            if ($op === 'enable') {
+                if ($this->option('max-requests')) {
+                    $input['max_requests'] = (string) $this->option('max-requests');
+                }
+                if ($this->option('port')) {
+                    $input['port'] = (string) $this->option('port');
+                }
+            }
+            $res = $this->brokerCall('vhost.octane.'.$op, [$domain], $input, $op === 'enable' ? 900 : 180);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+            $data = is_array($res->data) ? $res->data : [];
+            if ($this->wantsJson()) {
+                return $this->emitData($data);
+            }
+            $this->line(match ($op) {
+                'enable' => "Octane enabled for {$domain} on 127.0.0.1:".(string) ($data['octane_port'] ?? '?')
+                    .' (max-requests '.(string) ($data['octane_max_requests'] ?? '?').', supervisor program '
+                    .(string) ($data['octane_program'] ?? '?').').',
+                'disable' => "Octane disabled for {$domain}; the vhost serves through PHP-FPM again.",
+                'reload' => "Reloaded Octane workers for {$domain} via ".(string) ($data['method'] ?? 'octane:reload').'.',
+                default => $this->octaneStatusLine($domain, $data),
+            });
+            if ($op === 'enable') {
+                $this->warn('Long-lived workers keep constructors and static state between requests. Review '
+                    .(string) ($data['docs_url'] ?? 'https://laravel.com/docs/octane').' before serving production traffic.');
+            }
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    /** @param  array<string,mixed>  $data */
+    private function octaneStatusLine(string $domain, array $data): string
+    {
+        if ((string) ($data['runtime'] ?? 'fpm') !== 'octane') {
+            $laravel = ! empty($data['laravel_app']) ? 'Laravel app detected' : 'not a Laravel app';
+
+            return "{$domain}: runtime=fpm ({$laravel}).";
+        }
+
+        $state = is_array($data['program'] ?? null) && is_array($data['program']['status'] ?? null)
+            ? (string) ($data['program']['status']['state'] ?? 'unknown')
+            : 'unknown';
+
+        return "{$domain}: runtime=octane port=".(string) ($data['octane_port'] ?? '?')
+            .' max-requests='.(string) ($data['octane_max_requests'] ?? '?')
+            .' program='.(string) ($data['octane_program'] ?? '?')." ({$state}).";
+    }
+
     private function stdinBytes(): string
     {
         if (! defined('STDIN') || ! is_resource(STDIN)) {
@@ -416,7 +486,7 @@ class VhostCommand extends Command
 
     private function invalidAction(): int
     {
-        $this->error('Unknown vhost action. Use: list|add|edit|del|files');
+        $this->error('Unknown vhost action. Use: list|add|edit|del|files|octane');
 
         return self::INVALID;
     }

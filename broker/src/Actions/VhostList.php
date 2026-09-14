@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\AcmeStatusHint;
 use AzerioidPanel\Broker\Tls\CertProbe;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Web\WebServers;
 
 final class VhostList
@@ -15,6 +16,11 @@ final class VhostList
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $vhosts = WebServers::for($config)->listVhosts($runtime, $config);
+        foreach ($vhosts as &$vhost) {
+            $vhost = self::withRuntimeFields($runtime, $vhost);
+        }
+        unset($vhost);
+
         $probe = !isset($input['probe_certs']) || filter_var($input['probe_certs'], FILTER_VALIDATE_BOOLEAN);
         if (!$probe) {
             return ['vhosts' => $vhosts];
@@ -118,6 +124,44 @@ final class VhostList
         unset($v);
 
         return ['vhosts' => $vhosts];
+    }
+
+    /**
+     * Normalize the runtime fields for every driver and flag Laravel apps so the
+     * UI/CLI can offer Octane only where it can actually work (ADR A35).
+     *
+     * @param  array<string,mixed>  $vhost
+     * @return array<string,mixed>
+     */
+    private static function withRuntimeFields(Runtime $runtime, array $vhost): array
+    {
+        $appRuntime = OctaneManager::normalizeRuntime($vhost['runtime'] ?? OctaneManager::RUNTIME_FPM);
+        $vhost['runtime'] = $appRuntime;
+        $vhost['octane_port'] = $appRuntime === OctaneManager::RUNTIME_OCTANE
+            ? ($vhost['octane_port'] ?? null)
+            : null;
+        $vhost['octane_max_requests'] = $appRuntime === OctaneManager::RUNTIME_OCTANE
+            ? ($vhost['octane_max_requests'] ?? OctaneManager::DEFAULT_MAX_REQUESTS)
+            : null;
+
+        $domain = (string) ($vhost['domain'] ?? '');
+        $vhost['octane_program'] = null;
+        $vhost['laravel_app'] = false;
+        $vhost['laravel_app_detail'] = null;
+        if ($domain === '' || (string) ($vhost['type'] ?? '') !== 'php' || !empty($vhost['readonly'])) {
+            return $vhost;
+        }
+
+        try {
+            $vhost['octane_program'] = OctaneManager::programName($domain);
+        } catch (\Throwable) {
+            $vhost['octane_program'] = null;
+        }
+        $detected = OctaneManager::detectLaravel($runtime, $vhost['root'] ?? null);
+        $vhost['laravel_app'] = $detected['laravel'];
+        $vhost['laravel_app_detail'] = $detected['detail'];
+
+        return $vhost;
     }
 
     /**
