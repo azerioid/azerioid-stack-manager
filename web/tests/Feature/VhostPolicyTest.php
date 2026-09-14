@@ -200,6 +200,24 @@ class VhostPolicyTest extends TestCase
             ->assertSet('error', "projob.az is managed externally and can't be edited.");
     }
 
+    public function test_save_edit_rejects_tampered_readonly_editing_domain(): void
+    {
+        $this->actingAs($this->admin());
+        $fake = $this->app->make(FakeBroker::class);
+        $before = collect($fake->vhosts)->firstWhere('domain', 'projob.az');
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->set('editingDomain', 'projob.az')
+            ->set('editRoot', '/data/www/evil.example.com')
+            ->set('editType', 'php')
+            ->set('editPhpVersion', '8.4')
+            ->call('saveEdit')
+            ->assertSet('error', "projob.az is managed externally and can't be edited.");
+
+        $after = collect($fake->vhosts)->firstWhere('domain', 'projob.az');
+        $this->assertSame($before['root'] ?? null, $after['root'] ?? null);
+    }
+
     public function test_failed_edit_validate_does_not_mutate_vhost(): void
     {
         $this->actingAs($this->admin());

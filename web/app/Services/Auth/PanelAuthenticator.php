@@ -150,10 +150,11 @@ final class PanelAuthenticator
         ];
     }
 
-    /** Confirm enrollment for the authenticated user. */
-    public function confirmEnrollment(User $user, string $secret, string $code): bool
+    /** Confirm enrollment for the authenticated user against the stored secret only. */
+    public function confirmEnrollment(User $user, string $code): bool
     {
-        if (! $this->totp->verify($secret, $code)) {
+        $secret = $user->plainTwoFactorSecret();
+        if ($secret === null || ! $this->totp->verify($secret, $code)) {
             return false;
         }
         $this->totp->confirm($user);

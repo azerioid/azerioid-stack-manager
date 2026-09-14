@@ -118,6 +118,7 @@ class ProcessesPage extends Component
             ];
             if ($this->formMode === 'vhost' && $this->vhostDomain !== '') {
                 $payload['vhost_domain'] = Validator::domain($this->vhostDomain);
+                $this->assertMutableVhostDomain($payload['vhost_domain']);
             }
             $res = $broker->call('supervisor.program.create', [], $payload);
             if (!$res->ok) {
@@ -176,6 +177,9 @@ class ProcessesPage extends Component
                 $payload['vhost_domain'] = $this->vhostDomain !== ''
                     ? Validator::domain($this->vhostDomain)
                     : null;
+                if ($payload['vhost_domain'] !== null) {
+                    $this->assertMutableVhostDomain($payload['vhost_domain']);
+                }
             }
             $res = $broker->call('supervisor.program.update', [$this->editingName], $payload);
             if (!$res->ok) {
@@ -246,6 +250,17 @@ class ProcessesPage extends Component
         $this->autostart = true;
         $this->autorestart = true;
         $this->upstreamPort = '3000';
+    }
+
+    /** $this->vhosts is already filtered to non-readonly; still reject injected domains. */
+    private function assertMutableVhostDomain(string $domain): void
+    {
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $domain) {
+                return;
+            }
+        }
+        throw new \RuntimeException("{$domain} is not an editable panel vhost.");
     }
 
     private function createProxyVhost(BrokerClient $broker, string $domain, int $port): void

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules\Password;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -21,7 +22,11 @@ class SetupWizard extends Component
     public string $password_confirmation = '';
     public int $step = 1;
     public string $code = '';
+
+    #[Locked]
     public string $secret = '';
+
+    #[Locked]
     public string $qr = '';
 
     public function mount(TotpService $totp): void
@@ -70,8 +75,8 @@ class SetupWizard extends Component
         $user = Auth::user();
         abort_unless($user instanceof User, 403);
         $this->validate(['code' => ['required', 'digits:6']]);
-        $secret = $user->plainTwoFactorSecret() ?: $this->secret;
-        if (! $totp->verify($secret, $this->code)) {
+        $secret = $user->plainTwoFactorSecret();
+        if ($secret === null || ! $totp->verify($secret, $this->code)) {
             $this->addError('code', 'That code was not valid.');
             return;
         }

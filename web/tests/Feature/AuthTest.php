@@ -395,4 +395,27 @@ class AuthTest extends TestCase
         $user->refresh();
         $this->assertTrue($user->hasTwoFactorEnabled());
     }
+
+    public function test_enrollment_confirm_ignores_client_tampered_secret(): void
+    {
+        config(['azerioid.require_totp' => true]);
+        $auth = new \App\Services\Auth\PanelAuthenticator(new TotpService());
+        $real = (new TotpService())->generateSecret();
+        $fake = 'JBSWY3DPEHPK3PXP';
+        $user = User::factory()->create([
+            'email' => 'enroll@example.com',
+            'password' => 'password',
+            'two_factor_secret' => Crypt::encryptString($real),
+            'two_factor_confirmed_at' => null,
+        ]);
+
+        // OTP for a different secret must not confirm enrollment of the stored secret.
+        $ok = $auth->confirmEnrollment($user, $this->totpCode($fake));
+        $this->assertFalse($ok);
+        $this->assertFalse($user->fresh()->hasTwoFactorEnabled());
+
+        $ok = $auth->confirmEnrollment($user, $this->totpCode($real));
+        $this->assertTrue($ok);
+        $this->assertTrue($user->fresh()->hasTwoFactorEnabled());
+    }
 }

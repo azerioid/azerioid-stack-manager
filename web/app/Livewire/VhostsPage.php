@@ -164,6 +164,7 @@ class VhostsPage extends Component
         $this->error = null;
         try {
             $domain = Validator::domain($this->editingDomain);
+            $this->assertMutableVhost($domain, 'edited');
             $mode = $this->editTlsMode;
             if ($mode === '' || $mode === 'off') {
                 $mode = $this->editTls ? 'auto' : 'off';
@@ -223,6 +224,15 @@ class VhostsPage extends Component
     public function delete(BrokerClient $broker, ?string $domain = null): void
     {
         $domain = Validator::domain($domain ?? $this->confirmDelete ?? '');
+        try {
+            $this->assertMutableVhost($domain, 'deleted');
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+            $this->confirmDelete = null;
+            $this->removeSupervisorOnDelete = false;
+
+            return;
+        }
         $stdin = [];
         if ($this->removeSupervisorOnDelete) {
             $stdin['remove_supervisor_programs'] = true;
@@ -236,6 +246,30 @@ class VhostsPage extends Component
         $this->confirmDelete = null;
         $this->removeSupervisorOnDelete = false;
         $this->reload($broker);
+    }
+
+    /** Server-side check — do not trust UI-hidden buttons or a tampered editingDomain. */
+    private function assertMutableVhost(string $domain, string $intent = 'edited'): void
+    {
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($v['readonly'])) {
+                throw new \RuntimeException(
+                    $intent === 'deleted'
+                        ? 'This vhost is managed externally and cannot be deleted by the panel.'
+                        : "{$domain} is managed externally and can't be edited."
+                );
+            }
+
+            return;
+        }
+        throw new \RuntimeException(
+            $intent === 'deleted'
+                ? 'This vhost is managed externally and cannot be deleted by the panel.'
+                : "{$domain} is not a mutable panel vhost."
+        );
     }
 
     private function operatorMessage(string $raw): string

@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Services\Auth\PanelAuthenticator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -14,7 +15,12 @@ use Livewire\Component;
 class TwoFactorSetup extends Component
 {
     public string $code = '';
+
+    /** Display-only enrollment material — not trusted for confirm (server uses stored secret). */
+    #[Locked]
     public string $secret = '';
+
+    #[Locked]
     public string $qr = '';
 
     public function mount(PanelAuthenticator $auth): void
@@ -42,7 +48,7 @@ class TwoFactorSetup extends Component
         $user = Auth::user();
         abort_unless($user instanceof User, 403);
         $this->validate(['code' => ['required', 'digits:6']]);
-        if (! $auth->confirmEnrollment($user, $this->secret, $this->code)) {
+        if (! $auth->confirmEnrollment($user, $this->code)) {
             $this->addError('code', 'That code was not valid.');
 
             return;

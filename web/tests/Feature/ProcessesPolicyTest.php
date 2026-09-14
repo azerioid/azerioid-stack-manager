@@ -54,4 +54,23 @@ class ProcessesPolicyTest extends TestCase
         $this->assertFalse($res->ok);
         $this->assertStringContainsString('Refusing privileged', (string) $res->error);
     }
+
+    public function test_create_rejects_readonly_vhost_domain_injection(): void
+    {
+        $this->actingAs($this->admin());
+        $fake = $this->app->make(FakeBroker::class);
+        $fake->fakeInstalledComponents['supervisor'] = true;
+
+        Livewire::test(ProcessesPage::class)
+            ->call('openVhostTied')
+            ->set('name', 'evil-ro')
+            ->set('command', 'node app.js')
+            ->set('directory', '/data/www/projob.az')
+            ->set('vhostDomain', 'projob.az')
+            ->set('upstreamPort', '3000')
+            ->call('create')
+            ->assertSet('error', 'projob.az is not an editable panel vhost.');
+
+        $this->assertArrayNotHasKey('evil-ro', $fake->supervisorPrograms);
+    }
 }
