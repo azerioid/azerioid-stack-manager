@@ -28,8 +28,8 @@
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/",
             "AzerioidPanel\\Broker\\": [
-                "../broker/src/",
-                "lib/azerioid-broker/"
+                "lib/azerioid-broker/",
+                "../broker/src/"
             ]
         }
     },
