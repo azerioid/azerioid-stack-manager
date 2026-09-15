@@ -60,6 +60,11 @@ final class DockerRootlessSetup
                 $log->info("Masked rootful {$unit}.");
             }
         }
+        // Package postinst may leave a stale rootful socket even after mask.
+        if ($this->runtime->fileExists('/var/run/docker.sock') || $this->runtime->fileExists('/run/docker.sock')) {
+            $this->runtime->exec(['/bin/rm', '-f', '/var/run/docker.sock', '/run/docker.sock'], null, 10);
+            $log->info('Removed leftover rootful /run/docker.sock.');
+        }
     }
 
     private function ensureSubIds(OperationLogger $log): void
@@ -129,11 +134,17 @@ final class DockerRootlessSetup
 
     private function installRootlessDaemon(OperationLogger $log): void
     {
+        $this->ensureUserRuntime($log);
         $setup = $this->setuptoolBin();
         $runuser = $this->runuserBin();
-        $shell = 'export XDG_RUNTIME_DIR=/run/user/$(id -u); '
+        $home = SupervisedUser::HOME;
+        $shell = 'export HOME=' . escapeshellarg($home) . '; '
+            . 'export XDG_CONFIG_HOME=' . escapeshellarg($home . '/.config') . '; '
+            . 'export XDG_DATA_HOME=' . escapeshellarg($home . '/.local/share') . '; '
+            . 'export XDG_RUNTIME_DIR=/run/user/$(id -u); '
             . 'export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus; '
-            . escapeshellarg($setup) . ' install';
+            . 'mkdir -p "$HOME/.config" "$HOME/.local/share"; '
+            . escapeshellarg($setup) . ' install --force';
         $result = $this->runtime->exec(
             [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
             null,
@@ -149,10 +160,58 @@ final class DockerRootlessSetup
                 );
             }
             $log->info('Rootless dockerd already configured for ' . SupervisedUser::USERNAME . '.');
-
-            return;
+        } else {
+            $log->info('Installed rootless dockerd for ' . SupervisedUser::USERNAME . '.');
         }
-        $log->info('Installed rootless dockerd for ' . SupervisedUser::USERNAME . '.');
+        $this->enableUserDocker($log);
+    }
+
+    private function ensureUserRuntime(OperationLogger $log): void
+    {
+        $uid = $this->supervisedUid();
+        $start = $this->runtime->exec(['/usr/bin/systemctl', 'start', 'user@' . $uid . '.service'], null, 60);
+        if (!$start->ok()) {
+            $log->warn('systemctl start user@' . $uid . '.service: ' . trim($start->stderr));
+        }
+        $deadline = time() + 15;
+        $runtimeDir = '/run/user/' . $uid;
+        while (time() < $deadline) {
+            if ($this->runtime->isDir($runtimeDir)) {
+                $log->info("User runtime directory ready at {$runtimeDir}.");
+
+                return;
+            }
+            usleep(250000);
+        }
+        throw new BrokerException(
+            "User runtime directory {$runtimeDir} did not appear after enabling linger for "
+            . SupervisedUser::USERNAME . '.',
+            1
+        );
+    }
+
+    private function enableUserDocker(OperationLogger $log): void
+    {
+        $runuser = $this->runuserBin();
+        $home = SupervisedUser::HOME;
+        $shell = 'export HOME=' . escapeshellarg($home) . '; '
+            . 'export XDG_RUNTIME_DIR=/run/user/$(id -u); '
+            . 'export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus; '
+            . 'systemctl --user daemon-reload; '
+            . 'systemctl --user enable --now docker.service';
+        $result = $this->runtime->exec(
+            [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
+            null,
+            120
+        );
+        if (!$result->ok()) {
+            throw new BrokerException(
+                'systemctl --user enable --now docker.service failed: '
+                . substr(trim($result->stderr . "\n" . $result->stdout), -400),
+                1
+            );
+        }
+        $log->info('Enabled and started systemd --user docker.service for ' . SupervisedUser::USERNAME . '.');
     }
 
     private function assertRootless(OperationLogger $log): void
@@ -160,15 +219,26 @@ final class DockerRootlessSetup
         $host = $this->dockerHost();
         $docker = $this->dockerBin();
         $runuser = $this->runuserBin();
-        $shell = 'export DOCKER_HOST=' . escapeshellarg($host) . '; '
+        $home = SupervisedUser::HOME;
+        $shell = 'export HOME=' . escapeshellarg($home) . '; '
+            . 'export DOCKER_HOST=' . escapeshellarg($host) . '; '
             . escapeshellarg($docker) . ' info --format "{{.SecurityOptions}}"';
-        $result = $this->runtime->exec(
-            [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
-            null,
-            60
-        );
-        $out = strtolower(trim($result->stdout . "\n" . $result->stderr));
-        if (!$result->ok() || !str_contains($out, 'rootless')) {
+        $out = '';
+        $ok = false;
+        for ($i = 0; $i < 10; $i++) {
+            $result = $this->runtime->exec(
+                [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
+                null,
+                60
+            );
+            $out = strtolower(trim($result->stdout . "\n" . $result->stderr));
+            if ($result->ok() && str_contains($out, 'rootless')) {
+                $ok = true;
+                break;
+            }
+            usleep(500000);
+        }
+        if (!$ok) {
             throw new BrokerException(
                 'docker info did not report rootless after setup (DOCKER_HOST=' . $host . '). '
                 . 'See ' . self::DOCS_URL . '. Detail: ' . substr($out, -300),
