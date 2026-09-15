@@ -180,7 +180,19 @@ final class MailManager
         // Probe first (A36 §7.4) so the operator learns about a provider block
         // before investing effort in DNS and DKIM steps.
         $outbound = (new MailProbe())->outbound25();
-        $selector = $this->generateDkimKey($domain);
+        // Reuse an existing DKIM key. Same-day selectors are date-stamped
+        // (`azYYYYMMDD`); regenerating on every enable would overwrite the
+        // private key while DNS still publishes the old public key → false
+        // "DKIM mismatch" and broken signatures until the operator re-publishes.
+        $loaded = $this->state->load();
+        $existingMeta = is_array($loaded['domains'][$domain] ?? null) ? $loaded['domains'][$domain] : [];
+        $selector = (string) ($existingMeta['dkim_selector'] ?? '');
+        $privatePath = rtrim($this->paths->opendkimKeys(), '/') . '/' . $domain . '/' . $selector . '.private';
+        if ($selector === '' || !$this->runtime->fileExists($privatePath)) {
+            $selector = $this->generateDkimKey($domain);
+        } else {
+            $this->writeDkimTables();
+        }
 
         $this->state->mutate(function (array $state) use ($domain, $selector): array {
             $existing = is_array($state['domains'][$domain] ?? null) ? $state['domains'][$domain] : [];
@@ -801,13 +813,21 @@ final class MailManager
     /** Date-stamped selectors let a rotation publish alongside the old key. */
     private function generateDkimKey(string $domain): string
     {
-        $selector = 'az' . substr(preg_replace('/\D/', '', $this->runtime->now()) ?? '', 0, 8);
-        if (strlen($selector) < 4) {
-            $selector = 'azerioid';
+        $base = 'az' . substr(preg_replace('/\D/', '', $this->runtime->now()) ?? '', 0, 8);
+        if (strlen($base) < 4) {
+            $base = 'azerioid';
         }
         $dir = rtrim($this->paths->opendkimKeys(), '/') . '/' . $domain;
         if (!$this->runtime->isDir($dir)) {
             $this->runtime->mkdir($dir, 0700);
+        }
+        // Never overwrite an existing private key for the same selector — that
+        // desyncs DNS (still publishing the old public key) from what we sign with.
+        $selector = $base;
+        $suffix = 0;
+        while ($this->runtime->fileExists($dir . '/' . $selector . '.private')) {
+            $suffix++;
+            $selector = $base . 'r' . $suffix;
         }
         $result = $this->runtime->exec(
             [

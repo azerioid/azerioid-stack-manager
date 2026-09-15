@@ -196,12 +196,43 @@ final class MailDns
     /** @return list<string> */
     private function lookup(string $name, string $type): array
     {
-        $result = $this->runtime->exec(['/usr/bin/dig', '+short', $type, $name], null, 15);
-        if (!$result->ok()) {
+        // Query a public resolver explicitly. Hosts using systemd-resolved (127.0.0.53)
+        // intermittently return empty answers for apex MX/TXT even when the records
+        // are live at 1.1.1.1 / the authoritative NS — which the checklist then
+        // falsely paints as "missing" while A/DMARC on the same zone look fine.
+        $stdout = '';
+        foreach (['1.1.1.1', '8.8.8.8'] as $resolver) {
+            $result = $this->runtime->exec(
+                ['/usr/bin/dig', '+short', '@' . $resolver, $type, $name],
+                null,
+                15
+            );
+            if ($result->ok() && trim($result->stdout) !== '') {
+                $stdout = trim($result->stdout);
+                break;
+            }
+        }
+        if ($stdout === '') {
             return [];
         }
+
+        // dig +short may emit multi-string TXT answers either as one line
+        // (`"aaa" "bbb"`) or as one quoted chunk per line. Concatenate lines so
+        // comparable() can join the segments before matching the suggestion.
+        if (strtoupper($type) === 'TXT') {
+            $joined = [];
+            foreach (explode("\n", $stdout) as $line) {
+                $line = trim($line);
+                if ($line !== '') {
+                    $joined[] = $line;
+                }
+            }
+
+            return $joined === [] ? [] : [implode(' ', $joined)];
+        }
+
         $values = [];
-        foreach (explode("\n", trim($result->stdout)) as $line) {
+        foreach (explode("\n", $stdout) as $line) {
             $line = trim($line);
             if ($line !== '') {
                 $values[] = $line;
@@ -211,12 +242,26 @@ final class MailDns
         return $values;
     }
 
-    /** TXT answers arrive quoted and may be split into 255-char chunks. */
+    /**
+     * Normalize dig answers for comparison.
+     *
+     * TXT: strip quotes and join 255-byte chunks. MX: drop trailing dots on the
+     * exchange hostname (`10 mail.let.az.` → `10 mail.let.az`).
+     */
     private function comparable(string $type, string $value): string
     {
         $value = trim($value);
+        $type = strtoupper($type);
         if ($type === 'TXT') {
-            $value = str_replace(['" "', '"'], '', $value);
+            // Handles `"aaa" "bbb"`, `"aaa"\n"bbb"`, and already-joined forms.
+            $value = preg_replace('/"\s*"/', '', $value) ?? $value;
+            $value = str_replace('"', '', $value);
+        }
+        if ($type === 'MX') {
+            // "10 mail.example.com." — priority stays; host loses trailing dot.
+            if (preg_match('/^(\d+)\s+(\S+)\.?$/', $value, $m) === 1) {
+                $value = $m[1] . ' ' . rtrim($m[2], '.');
+            }
         }
         $value = rtrim($value, '.');
 
