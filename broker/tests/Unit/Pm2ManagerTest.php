@@ -94,5 +94,6 @@ final class Pm2ManagerTest extends TestCase
         $this->assertSame(AppRuntime::PM2, AppRuntime::normalize('pm2-runtime'));
         $this->assertSame(AppRuntime::FPM, AppRuntime::normalize(''));
         $this->assertSame(AppRuntime::OCTANE, AppRuntime::normalize('octane'));
+        $this->assertSame(AppRuntime::DOCKER, AppRuntime::normalize('docker'));
     }
 }

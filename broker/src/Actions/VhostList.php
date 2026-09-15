@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\Tls\AcmeStatusHint;
 use AzerioidPanel\Broker\Tls\CertProbe;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\AppRuntime;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Web\WebServers;
@@ -154,6 +155,24 @@ final class VhostList
         $vhost['pm2_entry'] = $appRuntime === AppRuntime::PM2
             ? ($vhost['pm2_entry'] ?? null)
             : null;
+        $vhost['docker_port'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_port'] ?? null)
+            : null;
+        $vhost['docker_internal_port'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_internal_port'] ?? null)
+            : null;
+        $vhost['docker_mode'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_mode'] ?? null)
+            : null;
+        $vhost['docker_image'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_image'] ?? null)
+            : null;
+        $vhost['docker_compose'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_compose'] ?? null)
+            : null;
+        $vhost['docker_dockerfile'] = $appRuntime === AppRuntime::DOCKER
+            ? ($vhost['docker_dockerfile'] ?? null)
+            : null;
 
         $domain = (string) ($vhost['domain'] ?? '');
         $vhost['octane_program'] = null;
@@ -162,6 +181,9 @@ final class VhostList
         $vhost['pm2_program'] = null;
         $vhost['node_app'] = false;
         $vhost['node_app_detail'] = null;
+        $vhost['docker_program'] = null;
+        $vhost['docker_app'] = false;
+        $vhost['docker_app_detail'] = null;
 
         if ($domain === '' || !empty($vhost['readonly'])) {
             return $vhost;
@@ -191,9 +213,18 @@ final class VhostList
         } catch (\Throwable) {
             $vhost['pm2_program'] = null;
         }
-        $detected = Pm2Manager::detectNodeApp($runtime, $root);
-        $vhost['node_app'] = $detected['node'];
-        $vhost['node_app_detail'] = $detected['detail'];
+        $node = Pm2Manager::detectNodeApp($runtime, $root);
+        $vhost['node_app'] = $node['node'];
+        $vhost['node_app_detail'] = $node['detail'];
+
+        try {
+            $vhost['docker_program'] = DockerManager::programName($domain);
+        } catch (\Throwable) {
+            $vhost['docker_program'] = null;
+        }
+        $docker = DockerManager::detectDockerApp($runtime, $root);
+        $vhost['docker_app'] = $docker['docker'];
+        $vhost['docker_app_detail'] = $docker['detail'];
 
         return $vhost;
     }

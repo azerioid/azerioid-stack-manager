@@ -40,6 +40,12 @@ class VhostsPage extends Component
     public ?string $pm2ScaleTarget = null;
     public string $pm2Instances = '1';
     public string $pm2Entry = '';
+    public ?string $dockerTarget = null;
+    public string $dockerMode = 'image';
+    public string $dockerImage = '';
+    public string $dockerInternalPort = '8080';
+    public string $dockerCompose = '';
+    public string $dockerDockerfile = '';
 
     public ?string $editingDomain = null;
     public string $editRoot = '';
@@ -493,7 +499,7 @@ class VhostsPage extends Component
                 );
             }
             $runtime = (string) ($v['runtime'] ?? 'fpm');
-            if (in_array($runtime, ['pm2', 'octane'], true)) {
+            if (in_array($runtime, ['pm2', 'octane', 'docker'], true)) {
                 throw new \RuntimeException("PM2 cannot be enabled while {$domain} uses runtime={$runtime}.");
             }
             if (empty($v['node_app'])) {
@@ -501,6 +507,170 @@ class VhostsPage extends Component
                     "{$domain} does not look like a Node application, so PM2 cannot run it. "
                     .(string) ($v['node_app_detail'] ?? '')
                 );
+            }
+
+            return;
+        }
+        throw new \RuntimeException("{$domain} is not a mutable panel vhost.");
+    }
+
+    public function askDocker(string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->showForm = false;
+        $this->dockerTarget = $domain;
+        $this->dockerMode = 'image';
+        $this->dockerImage = '';
+        $this->dockerInternalPort = '8080';
+        $this->dockerCompose = '';
+        $this->dockerDockerfile = '';
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($v['docker_app'])) {
+                $detail = (string) ($v['docker_app_detail'] ?? '');
+                if (str_contains($detail, 'compose') || str_contains($detail, 'docker-compose')) {
+                    $this->dockerMode = 'compose';
+                } elseif (str_contains($detail, 'Dockerfile')) {
+                    $this->dockerMode = 'dockerfile';
+                }
+            }
+            break;
+        }
+    }
+
+    public function cancelDocker(): void
+    {
+        $this->reset(
+            'dockerTarget',
+            'dockerMode',
+            'dockerImage',
+            'dockerInternalPort',
+            'dockerCompose',
+            'dockerDockerfile'
+        );
+        $this->dockerMode = 'image';
+        $this->dockerInternalPort = '8080';
+    }
+
+    public function enableDocker(BrokerClient $broker): void
+    {
+        $domain = (string) $this->dockerTarget;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $this->assertDockerCandidate($domain);
+            $input = [
+                'mode' => trim($this->dockerMode),
+                'internal_port' => trim($this->dockerInternalPort),
+            ];
+            $image = trim($this->dockerImage);
+            if ($image !== '') {
+                $input['image'] = $image;
+            }
+            $compose = trim($this->dockerCompose);
+            if ($compose !== '') {
+                $input['compose'] = $compose;
+            }
+            $dockerfile = trim($this->dockerDockerfile);
+            if ($dockerfile !== '') {
+                $input['dockerfile'] = $dockerfile;
+            }
+            $res = $broker->call('vhost.docker.enable', [$domain], $input, 900);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $port = is_array($res->data) ? ($res->data['docker_port'] ?? '?') : '?';
+                $this->flash = "Docker is now serving {$domain} from 127.0.0.1:{$port} (rootless).";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->cancelDocker();
+        $this->reload($broker);
+    }
+
+    public function disableDocker(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.docker.disable', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $this->flash = "{$domain} no longer runs under Docker.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function rebuildDocker(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.docker.build', [$domain], [], 900);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $this->flash = "Rebuilt Docker workload for {$domain}.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function restartDocker(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.docker.restart', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $this->flash = "Restarted Docker for {$domain}.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    /** Docker only runs on proxy/static Caddy vhosts — never trust the UI-hidden button. */
+    private function assertDockerCandidate(string $domain): void
+    {
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            $type = (string) ($v['type'] ?? '');
+            if ($type === 'php') {
+                throw new \RuntimeException(
+                    'Docker is for containerized apps on proxy/static sites. This is a PHP vhost — use Octane for Laravel.'
+                );
+            }
+            if (! in_array($type, ['proxy', 'static'], true)) {
+                throw new \RuntimeException('Docker is only available for proxy or static vhosts.');
+            }
+            if (in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new \RuntimeException(
+                    "Docker requires the Caddy engine. Switch {$domain} to engine=caddy first."
+                );
+            }
+            $runtime = (string) ($v['runtime'] ?? 'fpm');
+            if (in_array($runtime, ['pm2', 'octane', 'docker'], true)) {
+                throw new \RuntimeException("Docker cannot be enabled while {$domain} uses runtime={$runtime}.");
             }
 
             return;

@@ -24,6 +24,7 @@ final class ComponentRepoInstaller
         match ($componentId) {
             'mongodb' => $this->installMongoDbRepo($os, $log),
             'mail' => $this->ensureEpel($os, $log),
+            'docker' => $this->installDockerRepo($os, $log),
             'nodejs' => $this->installNodeSourceRepo(
                 $os,
                 (string) ($options['node_major'] ?? '22'),
@@ -31,6 +32,81 @@ final class ComponentRepoInstaller
             ),
             default => null,
         };
+    }
+
+    /**
+     * Official Docker CE apt/dnf repos (download.docker.com) — not distro docker.io.
+     */
+    private function installDockerRepo(OsRelease $os, OperationLogger $log): void
+    {
+        if ($os->pkgMgr === 'apt') {
+            $list = '/etc/apt/sources.list.d/docker.list';
+            if ($this->runtime->fileExists($list)) {
+                return;
+            }
+            $log->info('Adding Docker CE apt repository (download.docker.com).');
+            $keyring = '/usr/share/keyrings/docker-archive-keyring.gpg';
+            $suite = $os->distroKey === 'debian' ? 'debian' : 'ubuntu';
+            $this->runtime->exec(
+                [
+                    '/bin/sh',
+                    '-c',
+                    "curl -fsSL https://download.docker.com/linux/{$suite}/gpg | gpg --batch --yes --dearmor -o {$keyring}",
+                ],
+                null,
+                120
+            );
+            $codename = $os->codename;
+            if ($os->distroKey === 'ubuntu') {
+                // Prefer VERSION_CODENAME; fall back already handled by OsRelease.
+                $codename = $os->codename !== '' ? $os->codename : 'noble';
+            }
+            $arch = trim($this->runtime->exec(['/usr/bin/dpkg', '--print-architecture'], null, 10)->stdout);
+            if ($arch === '') {
+                $arch = 'amd64';
+            }
+            $this->runtime->writeFile(
+                $list,
+                "deb [arch={$arch} signed-by={$keyring}] https://download.docker.com/linux/{$suite} {$codename} stable\n",
+                0644
+            );
+            $this->aptUpdate($log);
+
+            return;
+        }
+
+        $repo = '/etc/yum.repos.d/docker-ce.repo';
+        if ($this->runtime->fileExists($repo)) {
+            return;
+        }
+        $log->info('Adding Docker CE yum repository (download.docker.com).');
+        // Alma/Rocky/RHEL: Docker publishes both centos and rhel channels for EL9.
+        $channel = in_array($os->id, ['rhel', 'ol'], true) ? 'rhel' : 'centos';
+        $result = $this->runtime->exec(
+            [
+                '/usr/bin/dnf',
+                '-y',
+                'config-manager',
+                '--add-repo',
+                "https://download.docker.com/linux/{$channel}/docker-ce.repo",
+            ],
+            null,
+            120
+        );
+        if (!$result->ok()) {
+            // Fallback: write the repo file when config-manager is unavailable.
+            $this->runtime->writeFile(
+                $repo,
+                "[docker-ce-stable]\n"
+                . "name=Docker CE Stable - \$basearch\n"
+                . "baseurl=https://download.docker.com/linux/{$channel}/\$releasever/\$basearch/stable\n"
+                . "enabled=1\n"
+                . "gpgcheck=1\n"
+                . "gpgkey=https://download.docker.com/linux/{$channel}/gpg\n",
+                0644
+            );
+        }
+        $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);
     }
 
     /**

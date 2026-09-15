@@ -1,0 +1,71 @@
+{
+  "id": "docker",
+  "display_name": "Docker (rootless)",
+  "category": "runtime",
+  "description": "Official Docker CE as a rootless daemon for azerioid-supervised only. Opt-in per-vhost container runtime (image / Dockerfile / compose). Rootful docker.service is masked after install.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": { "ubuntu": "24.04", "debian": "12", "el": "9" },
+  "ports": [],
+  "conflicts": [],
+  "distros": {
+    "ubuntu": {
+      "packages": [
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+        "docker-ce-rootless-extras",
+        "uidmap",
+        "fuse-overlayfs",
+        "slirp4netns"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": ["docker-ce", "docker-ce-rootless-extras"],
+        "unit": "",
+        "command": "docker info"
+      }
+    },
+    "debian": {
+      "packages": [
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+        "docker-ce-rootless-extras",
+        "uidmap",
+        "fuse-overlayfs",
+        "slirp4netns"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": ["docker-ce", "docker-ce-rootless-extras"],
+        "unit": "",
+        "command": "docker info"
+      }
+    },
+    "el": {
+      "packages": [
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+        "docker-ce-rootless-extras",
+        "fuse-overlayfs",
+        "slirp4netns"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": ["docker-ce", "docker-ce-rootless-extras"],
+        "unit": "",
+        "command": "docker info"
+      }
+    }
+  },
+  "preflight": { "min_disk_gb": 1.0, "min_ram_mb": 512 }
+}

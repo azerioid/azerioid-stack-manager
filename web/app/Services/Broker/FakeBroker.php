@@ -6,6 +6,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\Files\VhostPath;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 
@@ -207,6 +208,15 @@ final class FakeBroker
                 'pm2_program' => null,
                 'node_app' => true,
                 'node_app_detail' => 'Found server.js.',
+                'docker_port' => null,
+                'docker_internal_port' => null,
+                'docker_mode' => null,
+                'docker_image' => null,
+                'docker_compose' => null,
+                'docker_dockerfile' => null,
+                'docker_program' => null,
+                'docker_app' => false,
+                'docker_app_detail' => null,
                 'readonly' => false,
                 'enabled' => true,
                 'source' => '/etc/caddy/conf.d/node.example.com.conf',
@@ -340,6 +350,12 @@ final class FakeBroker
                 'vhost.pm2.disable' => $this->pm2('disable', $args, $stdin),
                 'vhost.pm2.reload' => $this->pm2('reload', $args, $stdin),
                 'vhost.pm2.scale' => $this->pm2('scale', $args, $stdin),
+                'vhost.docker.status' => $this->docker('status', $args, $stdin),
+                'vhost.docker.enable' => $this->docker('enable', $args, $stdin),
+                'vhost.docker.disable' => $this->docker('disable', $args, $stdin),
+                'vhost.docker.build' => $this->docker('build', $args, $stdin),
+                'vhost.docker.restart' => $this->docker('restart', $args, $stdin),
+                'vhost.docker.logs' => $this->docker('logs', $args, $stdin),
                 'web.release-site-ports' => [
                     'released' => false,
                     'deprecated' => true,
@@ -1220,6 +1236,17 @@ final class FakeBroker
                 : null,
             'node_app' => false,
             'node_app_detail' => null,
+            'docker_port' => null,
+            'docker_internal_port' => null,
+            'docker_mode' => null,
+            'docker_image' => null,
+            'docker_compose' => null,
+            'docker_dockerfile' => null,
+            'docker_program' => in_array($args[2] ?? '', ['proxy', 'static'], true)
+                ? DockerManager::programName((string) $domain)
+                : null,
+            'docker_app' => false,
+            'docker_app_detail' => null,
             'readonly' => false,
             'enabled' => true,
             'source' => '/etc/caddy/conf.d/' . $domain . '.conf',
@@ -1661,6 +1688,7 @@ final class FakeBroker
         $linked = [];
         $octaneProgram = null;
         $pm2Program = null;
+        $dockerProgram = null;
         try {
             $octaneProgram = OctaneManager::programName((string) $domain);
         } catch (\Throwable) {
@@ -1669,7 +1697,11 @@ final class FakeBroker
             $pm2Program = Pm2Manager::programName((string) $domain);
         } catch (\Throwable) {
         }
-        $ownedPrograms = array_filter([$octaneProgram, $pm2Program]);
+        try {
+            $dockerProgram = DockerManager::programName((string) $domain);
+        } catch (\Throwable) {
+        }
+        $ownedPrograms = array_filter([$octaneProgram, $pm2Program, $dockerProgram]);
         foreach ($this->supervisorPrograms as $name => $program) {
             if (($program['vhost_domain'] ?? null) === $domain && ! in_array($name, $ownedPrograms, true)) {
                 $linked[] = $name;
@@ -1687,6 +1719,9 @@ final class FakeBroker
         }
         if ($pm2Program !== null) {
             unset($this->supervisorPrograms[$pm2Program]);
+        }
+        if ($dockerProgram !== null) {
+            unset($this->supervisorPrograms[$dockerProgram]);
         }
         foreach ($linked as $name) {
             unset($this->supervisorPrograms[$name]);
@@ -1908,7 +1943,7 @@ final class FakeBroker
     {
         return [
             'redis', 'mariadb', 'postgresql', 'nginx', 'apache', 'supervisor',
-            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail',
+            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail', 'docker',
         ];
     }
 
@@ -1994,6 +2029,23 @@ final class FakeBroker
     {
         if (!isset($this->fakeInstalledComponents[$id])) {
             throw new BrokerCallException('Component was not installed by the panel.', 3);
+        }
+        if ($id === 'docker') {
+            $dockerDomains = [];
+            foreach ($this->vhosts as $vhost) {
+                if (($vhost['runtime'] ?? 'fpm') === 'docker') {
+                    $dockerDomains[] = (string) ($vhost['domain'] ?? '');
+                }
+            }
+            $dockerDomains = array_values(array_filter($dockerDomains));
+            if ($dockerDomains !== []) {
+                throw new BrokerCallException(
+                    'Cannot uninstall Docker while vhost(s) still use runtime=docker: '
+                    .implode(', ', $dockerDomains)
+                    .'. Disable Docker on those vhosts first.',
+                    3
+                );
+            }
         }
         unset($this->fakeInstalledComponents[$id]);
         if ($id === 'mariadb' && $this->databaseEngine === 'mariadb') {
@@ -2174,6 +2226,218 @@ final class FakeBroker
                 3
             );
         }
+    }
+
+    private function assertDockerComponentInstalled(): void
+    {
+        if (! isset($this->fakeInstalledComponents['docker'])) {
+            throw new BrokerCallException(
+                'Docker is not installed. Install the Docker (rootless) component from Components first.',
+                3
+            );
+        }
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function docker(string $op, array $args, array $stdin): array
+    {
+        try {
+            return $this->dockerOp($op, $args, $stdin);
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function dockerOp(string $op, array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $index = $this->dockerVhostIndex($domain);
+        $vhost = $this->vhosts[$index];
+        $program = DockerManager::programName($domain);
+        $enabled = ($vhost['runtime'] ?? 'fpm') === 'docker';
+
+        if ($op === 'status') {
+            return [
+                'domain' => $domain,
+                'runtime' => $vhost['runtime'] ?? 'fpm',
+                'docker_port' => $vhost['docker_port'] ?? null,
+                'docker_internal_port' => $vhost['docker_internal_port'] ?? null,
+                'docker_mode' => $vhost['docker_mode'] ?? null,
+                'docker_image' => $vhost['docker_image'] ?? null,
+                'docker_compose' => $vhost['docker_compose'] ?? null,
+                'docker_dockerfile' => $vhost['docker_dockerfile'] ?? null,
+                'docker_program' => $program,
+                'program' => $this->supervisorPrograms[$program] ?? null,
+                'container' => $enabled
+                    ? ['name' => $program, 'id' => 'fakeid', 'state' => 'running']
+                    : null,
+                'docker_app' => (bool) ($vhost['docker_app'] ?? false),
+                'docker_app_detail' => $vhost['docker_app_detail'] ?? null,
+                'docs_url' => DockerManager::DOCS_URL,
+            ];
+        }
+
+        if ($op === 'enable') {
+            $this->assertSupervisorInstalled();
+            $this->assertDockerComponentInstalled();
+            if ($enabled) {
+                throw new BrokerCallException("Docker is already enabled for {$domain}.", 3);
+            }
+            $mode = DockerManager::validateMode($stdin['mode'] ?? DockerManager::MODE_IMAGE);
+            $internal = DockerManager::validateInternalPort($stdin['internal_port'] ?? null);
+            $port = array_key_exists('port', $stdin) && $stdin['port'] !== null && $stdin['port'] !== ''
+                ? DockerManager::validatePort($stdin['port'])
+                : DockerManager::PORT_MIN + $index;
+            $image = null;
+            $compose = null;
+            $dockerfile = null;
+            if ($mode === DockerManager::MODE_IMAGE) {
+                $image = DockerManager::validateImage($stdin['image'] ?? null);
+            } elseif ($mode === DockerManager::MODE_COMPOSE) {
+                $compose = (string) ($stdin['compose'] ?? DockerManager::DEFAULT_COMPOSE);
+            } else {
+                $dockerfile = (string) ($stdin['dockerfile'] ?? DockerManager::DEFAULT_DOCKERFILE);
+                $image = DockerManager::builtImageTag($domain);
+            }
+            $this->vhosts[$index]['docker_prev_type'] = (string) ($vhost['type'] ?? 'static');
+            $this->vhosts[$index]['runtime'] = 'docker';
+            $this->vhosts[$index]['type'] = 'proxy';
+            $this->vhosts[$index]['docker_port'] = $port;
+            $this->vhosts[$index]['docker_internal_port'] = $internal;
+            $this->vhosts[$index]['docker_mode'] = $mode;
+            $this->vhosts[$index]['docker_image'] = $image;
+            $this->vhosts[$index]['docker_compose'] = $compose;
+            $this->vhosts[$index]['docker_dockerfile'] = $dockerfile;
+            $this->vhosts[$index]['reverse_proxy'] = '127.0.0.1:'.$port;
+            $this->supervisorPrograms[$program] = [
+                'command' => "DOCKER_HOST=unix:///run/user/1001/docker.sock docker run --rm --name {$program} -p 127.0.0.1:{$port}:{$internal} ".($image ?? 'app'),
+                'directory' => (string) ($vhost['root'] ?? ''),
+                'user' => 'azerioid-supervised',
+                'autostart' => true,
+                'autorestart' => true,
+                'vhost_domain' => $domain,
+                'log_stdout' => '/var/log/azerioid-supervised/'.$program.'.stdout.log',
+                'log_stderr' => '/var/log/azerioid-supervised/'.$program.'.stderr.log',
+                'state' => 'running',
+                'status_raw' => 'RUNNING pid 4444',
+            ];
+
+            return [
+                'domain' => $domain,
+                'enabled' => true,
+                'runtime' => 'docker',
+                'docker_port' => $port,
+                'docker_internal_port' => $internal,
+                'docker_mode' => $mode,
+                'docker_image' => $image,
+                'docker_compose' => $compose,
+                'docker_dockerfile' => $dockerfile,
+                'docker_program' => $program,
+                'app_dir' => (string) ($vhost['root'] ?? ''),
+                'docs_url' => DockerManager::DOCS_URL,
+            ];
+        }
+
+        if (! $enabled) {
+            throw new BrokerCallException("Docker is not enabled for {$domain}.", 3);
+        }
+
+        if ($op === 'build') {
+            return [
+                'domain' => $domain,
+                'built' => true,
+                'docker_mode' => $vhost['docker_mode'] ?? 'image',
+                'docker_program' => $program,
+                'output' => 'fake docker build ok',
+            ];
+        }
+
+        if ($op === 'restart') {
+            return [
+                'domain' => $domain,
+                'restarted' => true,
+                'docker_program' => $program,
+                'output' => 'fake docker restart ok',
+            ];
+        }
+
+        if ($op === 'logs') {
+            $lines = DockerManager::validateLogLines($stdin['lines'] ?? 100);
+
+            return [
+                'domain' => $domain,
+                'lines' => $lines,
+                'output' => "fake docker logs (last {$lines} lines)",
+                'ok' => true,
+            ];
+        }
+
+        $prevType = (string) ($vhost['docker_prev_type'] ?? 'static');
+        $this->vhosts[$index]['runtime'] = 'fpm';
+        $this->vhosts[$index]['docker_port'] = null;
+        $this->vhosts[$index]['docker_internal_port'] = null;
+        $this->vhosts[$index]['docker_mode'] = null;
+        $this->vhosts[$index]['docker_image'] = null;
+        $this->vhosts[$index]['docker_compose'] = null;
+        $this->vhosts[$index]['docker_dockerfile'] = null;
+        unset($this->vhosts[$index]['docker_prev_type']);
+        $this->vhosts[$index]['type'] = $prevType === 'proxy' ? 'proxy' : 'static';
+        if ($this->vhosts[$index]['type'] === 'static') {
+            $this->vhosts[$index]['reverse_proxy'] = null;
+        }
+        $removed = isset($this->supervisorPrograms[$program]);
+        unset($this->supervisorPrograms[$program]);
+
+        return [
+            'domain' => $domain,
+            'disabled' => true,
+            'runtime' => 'fpm',
+            'restored_type' => $this->vhosts[$index]['type'],
+            'docker_program' => $program,
+            'program_removed' => $removed,
+        ];
+    }
+
+    private function dockerVhostIndex(string $domain): int
+    {
+        $domain = Validator::domain($domain);
+        foreach ($this->vhosts as $i => $vhost) {
+            if (($vhost['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($vhost['readonly'])) {
+                throw new BrokerCallException('This vhost is managed externally and cannot be switched to Docker.', 3);
+            }
+            $type = (string) ($vhost['type'] ?? '');
+            if ($type === 'php') {
+                throw new BrokerCallException(
+                    'Docker is for containerized apps on proxy/static sites. This is a PHP vhost — use Octane for Laravel.',
+                    3
+                );
+            }
+            if (! in_array($type, ['proxy', 'static'], true)) {
+                throw new BrokerCallException('Docker is only available for proxy or static vhosts.', 3);
+            }
+            if (in_array($vhost['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new BrokerCallException(
+                    'Docker requires the Caddy engine. Switch '.$domain.' to engine=caddy first.',
+                    3
+                );
+            }
+
+            return (int) $i;
+        }
+
+        throw new BrokerCallException('Vhost config does not exist.', 3);
     }
 
     /** @return array<string, mixed> */

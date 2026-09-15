@@ -31,6 +31,12 @@ final class CaddyParser
      *   pm2_port: ?int,
      *   pm2_instances: ?int,
      *   pm2_entry: ?string,
+     *   docker_port: ?int,
+     *   docker_internal_port: ?int,
+     *   docker_mode: ?string,
+     *   docker_image: ?string,
+     *   docker_compose: ?string,
+     *   docker_dockerfile: ?string,
      *   readonly: bool,
      *   source: string
      * }
@@ -64,6 +70,7 @@ final class CaddyParser
 
         $octane = ($managed['runtime'] ?? null) === OctaneManager::RUNTIME_OCTANE;
         $pm2 = ($managed['runtime'] ?? null) === AppRuntime::PM2;
+        $docker = ($managed['runtime'] ?? null) === AppRuntime::DOCKER;
 
         $type = 'static';
         if (VhostEngine::isBackend($engine)) {
@@ -80,8 +87,8 @@ final class CaddyParser
             if (isset($managed['root']) && $managed['root'] !== '') {
                 $root = $managed['root'];
             }
-        } elseif ($pm2) {
-            // PM2 sites render reverse_proxy to the loopback worker but stay type=proxy with root in managed comment.
+        } elseif ($pm2 || $docker) {
+            // PM2/Docker sites render reverse_proxy to loopback but keep root in managed comment.
             $type = $managed['type'] ?? 'proxy';
             if (isset($managed['root']) && $managed['root'] !== '') {
                 $root = $managed['root'];
@@ -133,6 +140,7 @@ final class CaddyParser
             'runtime' => match (true) {
                 $octane => OctaneManager::RUNTIME_OCTANE,
                 $pm2 => AppRuntime::PM2,
+                $docker => AppRuntime::DOCKER,
                 default => OctaneManager::RUNTIME_FPM,
             },
             'octane_port' => $octane ? $managed['octane_port'] : null,
@@ -140,6 +148,12 @@ final class CaddyParser
             'pm2_port' => $pm2 ? $managed['pm2_port'] : null,
             'pm2_instances' => $pm2 ? $managed['pm2_instances'] : null,
             'pm2_entry' => $pm2 ? $managed['pm2_entry'] : null,
+            'docker_port' => $docker ? $managed['docker_port'] : null,
+            'docker_internal_port' => $docker ? $managed['docker_internal_port'] : null,
+            'docker_mode' => $docker ? $managed['docker_mode'] : null,
+            'docker_image' => $docker ? $managed['docker_image'] : null,
+            'docker_compose' => $docker ? $managed['docker_compose'] : null,
+            'docker_dockerfile' => $docker ? $managed['docker_dockerfile'] : null,
             'readonly' => $active && ManagedVhost::isReadonly(
                 $path,
                 $domains,
@@ -194,7 +208,13 @@ final class CaddyParser
     }
 
     /**
-     * @return array{engine:?string,type:?string,php:?string,root:?string,runtime:?string,octane_port:?int,octane_max_requests:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string}
+     * @return array{
+     *   engine:?string,type:?string,php:?string,root:?string,runtime:?string,
+     *   octane_port:?int,octane_max_requests:?int,
+     *   pm2_port:?int,pm2_instances:?int,pm2_entry:?string,
+     *   docker_port:?int,docker_internal_port:?int,docker_mode:?string,
+     *   docker_image:?string,docker_compose:?string,docker_dockerfile:?string
+     * }
      */
     private static function parseManagedComment(string $contents): array
     {
@@ -209,6 +229,12 @@ final class CaddyParser
             'pm2_port' => null,
             'pm2_instances' => null,
             'pm2_entry' => null,
+            'docker_port' => null,
+            'docker_internal_port' => null,
+            'docker_mode' => null,
+            'docker_image' => null,
+            'docker_compose' => null,
+            'docker_dockerfile' => null,
         ];
         if (!preg_match('/^#\s*azerioid-managed\s+(.+)$/m', $contents, $m)) {
             return $out;
@@ -226,7 +252,7 @@ final class CaddyParser
         if (preg_match('/\broot=(\S+)/', $rest, $r)) {
             $out['root'] = $r[1];
         }
-        if (preg_match('/\bruntime=(fpm|octane|pm2)\b/', $rest, $rn)) {
+        if (preg_match('/\bruntime=(fpm|octane|pm2|docker)\b/', $rest, $rn)) {
             $out['runtime'] = $rn[1];
         }
         if (preg_match('/\boctane_port=([0-9]{2,5})\b/', $rest, $op)) {
@@ -243,6 +269,24 @@ final class CaddyParser
         }
         if (preg_match('/\bpm2_entry=(\S+)/', $rest, $pe)) {
             $out['pm2_entry'] = $pe[1];
+        }
+        if (preg_match('/\bdocker_port=([0-9]{2,5})\b/', $rest, $dp)) {
+            $out['docker_port'] = (int) $dp[1];
+        }
+        if (preg_match('/\bdocker_internal_port=([0-9]{1,5})\b/', $rest, $di)) {
+            $out['docker_internal_port'] = (int) $di[1];
+        }
+        if (preg_match('/\bdocker_mode=(image|compose|dockerfile)\b/', $rest, $dm)) {
+            $out['docker_mode'] = $dm[1];
+        }
+        if (preg_match('/\bdocker_image=(\S+)/', $rest, $dimg)) {
+            $out['docker_image'] = $dimg[1];
+        }
+        if (preg_match('/\bdocker_compose=(\S+)/', $rest, $dc)) {
+            $out['docker_compose'] = $dc[1];
+        }
+        if (preg_match('/\bdocker_dockerfile=(\S+)/', $rest, $dd)) {
+            $out['docker_dockerfile'] = $dd[1];
         }
 
         return $out;

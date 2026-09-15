@@ -40,4 +40,20 @@ final class ComponentRepoInstallerTest extends TestCase
         $this->assertStringContainsString('repo.mongodb.org/yum/redhat/9/mongodb-org/8.0/x86_64/', $repo);
         $this->assertStringNotContainsString('redhat/9.8/', $repo);
     }
+
+    public function test_ubuntu_docker_repo_uses_download_docker_com(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n";
+        $rt->script(['/usr/bin/dpkg', '--print-architecture'], 0, "amd64\n", '');
+        $os = OsRelease::detect($rt);
+        $log = new OperationLogger($rt, '/tmp/op.log');
+
+        $installer = new ComponentRepoInstaller($rt);
+        $installer->ensureForInstall($os, 'docker', [], $log);
+
+        $list = $rt->files['/etc/apt/sources.list.d/docker.list'] ?? '';
+        $this->assertStringContainsString('download.docker.com/linux/ubuntu', $list);
+        $this->assertStringContainsString('noble stable', $list);
+    }
 }

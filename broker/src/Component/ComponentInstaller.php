@@ -17,6 +17,7 @@ use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Tool\AdminerTool;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Web\BackendEngineBind;
 use AzerioidPanel\Broker\Web\VhostFrontRouter;
 
@@ -117,6 +118,10 @@ final class ComponentInstaller
                 $firewall = (new MailFirewall($this->runtime))->open();
                 $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
             }
+            if ($componentId === 'docker') {
+                // Never enable rootful docker.service — unit_name is empty; configure rootless only.
+                (new DockerRootlessSetup($this->config, $this->runtime))->configure($log);
+            }
             $meta = [
                 'unit' => $unit,
                 'packages' => $distro['packages'],
@@ -163,6 +168,18 @@ final class ComponentInstaller
         }
         if ($componentId === 'php-8.4' || $componentId === 'php-' . $this->config->panelPhpVersion) {
             throw new BrokerException('Refusing to remove the panel PHP runtime.', 3);
+        }
+        if ($componentId === 'docker') {
+            $docker = new DockerManager($this->config, $this->runtime);
+            $domains = $docker->dockerVhostDomains();
+            if ($domains !== []) {
+                throw new BrokerException(
+                    'Cannot uninstall Docker while vhost(s) still use runtime=docker: '
+                    . implode(', ', $domains)
+                    . '. Disable Docker on those vhosts first.',
+                    3
+                );
+            }
         }
 
         $os = OsRelease::detect($this->runtime);

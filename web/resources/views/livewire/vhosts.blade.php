@@ -195,6 +195,49 @@
         </div>
     @endif
 
+    @if ($dockerTarget)
+        <div class="panel border border-warn/40 p-5">
+            <p class="text-sm">
+                Enable <span class="font-mono text-zinc-200">Docker (rootless)</span> for
+                <span class="font-mono">{{ $dockerTarget }}</span>?
+            </p>
+            <p class="mt-2 text-sm text-warn">
+                Rootless Docker only — the daemon runs as <span class="font-mono">azerioid-supervised</span>, never via the
+                <span class="font-mono">docker</span> group or rootful <span class="font-mono">docker.service</span>.
+                Ports publish as <span class="font-mono">127.0.0.1:37000–37999</span> only. Files and Terminal use the
+                host docroot (build context), not the container filesystem. See
+                <a href="https://docs.docker.com/engine/security/rootless/" target="_blank" rel="noopener noreferrer" class="underline">Docker rootless docs</a>.
+            </p>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Mode
+                <select class="field mt-1 max-w-xs" wire:model.live="dockerMode">
+                    <option value="image">Pull image</option>
+                    <option value="compose">Compose file</option>
+                    <option value="dockerfile">Dockerfile</option>
+                </select>
+            </label>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Internal port (container listen)
+                <input class="field mt-1 max-w-[12rem]" wire:model="dockerInternalPort" inputmode="numeric" placeholder="8080">
+            </label>
+            @if ($dockerMode === 'image')
+                <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Image
+                    <input class="field mt-1 max-w-md font-mono text-sm" wire:model="dockerImage" placeholder="nginx:alpine">
+                </label>
+            @elseif ($dockerMode === 'compose')
+                <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Compose path (optional)
+                    <input class="field mt-1 max-w-md font-mono text-sm" wire:model="dockerCompose" placeholder="docker-compose.yml">
+                </label>
+            @else
+                <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Dockerfile path (optional)
+                    <input class="field mt-1 max-w-md font-mono text-sm" wire:model="dockerDockerfile" placeholder="Dockerfile">
+                </label>
+            @endif
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="enableDocker">Enable Docker</button>
+                <button class="btn-ghost" wire:click="cancelDocker">Cancel</button>
+            </div>
+        </div>
+    @endif
+
     @if ($octaneTarget)
         <div class="panel border border-warn/40 p-5">
             <p class="text-sm">
@@ -266,6 +309,15 @@
                                         · {{ $v['pm2_entry'] }}
                                     @endif
                                 </div>
+                            @elseif (($v['runtime'] ?? 'fpm') === 'docker')
+                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">Docker</span>
+                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
+                                    Rootless · 127.0.0.1:{{ $v['docker_port'] ?? '?' }}→:{{ $v['docker_internal_port'] ?? '?' }}
+                                    · {{ $v['docker_mode'] ?? '?' }}
+                                    @if (!empty($v['docker_image']))
+                                        · {{ $v['docker_image'] }}
+                                    @endif
+                                </div>
                             @elseif (($v['type'] ?? '') === 'php')
                                 <span class="font-mono text-[11px] uppercase text-zinc-400">PHP-FPM</span>
                                 @if (empty($v['readonly']) && empty($v['laravel_app']))
@@ -334,10 +386,20 @@
                                     <button type="button" class="text-xs text-accent" wire:click="reloadPm2('{{ $v['domain'] }}')">Reload application</button>
                                     <button type="button" class="text-xs text-accent" wire:click="askPm2Scale('{{ $v['domain'] }}')">Scale</button>
                                     <button type="button" class="text-xs text-warn" wire:click="disablePm2('{{ $v['domain'] }}')">Switch off PM2</button>
-                                @elseif (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && ($v['runtime'] ?? 'fpm') === 'fpm')
-                                    <button type="button" class="text-xs text-accent" wire:click="askOctane('{{ $v['domain'] }}')">Enable Octane</button>
-                                @elseif (in_array($v['type'] ?? '', ['proxy', 'static'], true) && !empty($v['node_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane'], true))
-                                    <button type="button" class="text-xs text-accent" wire:click="askPm2('{{ $v['domain'] }}')">Enable PM2</button>
+                                @elseif (($v['runtime'] ?? 'fpm') === 'docker')
+                                    <button type="button" class="text-xs text-accent" wire:click="rebuildDocker('{{ $v['domain'] }}')">Rebuild</button>
+                                    <button type="button" class="text-xs text-accent" wire:click="restartDocker('{{ $v['domain'] }}')">Restart</button>
+                                    <button type="button" class="text-xs text-warn" wire:click="disableDocker('{{ $v['domain'] }}')">Switch off Docker</button>
+                                @else
+                                    @if (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && ($v['runtime'] ?? 'fpm') === 'fpm')
+                                        <button type="button" class="text-xs text-accent" wire:click="askOctane('{{ $v['domain'] }}')">Enable Octane</button>
+                                    @endif
+                                    @if (in_array($v['type'] ?? '', ['proxy', 'static'], true) && !empty($v['node_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane', 'docker'], true))
+                                        <button type="button" class="text-xs text-accent" wire:click="askPm2('{{ $v['domain'] }}')">Enable PM2</button>
+                                    @endif
+                                    @if (in_array($v['type'] ?? '', ['proxy', 'static'], true) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane', 'docker'], true))
+                                        <button type="button" class="text-xs text-accent" wire:click="askDocker('{{ $v['domain'] }}')">Enable Docker</button>
+                                    @endif
                                 @endif
                                 <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
                                 <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>

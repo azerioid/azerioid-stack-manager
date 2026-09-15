@@ -11,6 +11,7 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Terminal\TerminalManager;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostUser;
@@ -34,13 +35,18 @@ final class VhostDel
             }
         }
 
-        // The panel owns octane-/pm2-<domain> workers outright, so they go with the vhost.
+        // The panel owns octane-/pm2-/docker-<domain> workers outright, so they go with the vhost.
         // Operator-created processes still need the explicit remove flag.
         $octaneProgram = OctaneManager::programName($domain);
         $pm2Program = Pm2Manager::programName($domain);
+        $dockerProgram = DockerManager::programName($domain);
         $operatorOwned = array_values(array_filter(
             $linked,
-            static fn (array $program): bool => !in_array($program['name'] ?? '', [$octaneProgram, $pm2Program], true)
+            static fn (array $program): bool => !in_array(
+                $program['name'] ?? '',
+                [$octaneProgram, $pm2Program, $dockerProgram],
+                true
+            )
         ));
 
         if ($operatorOwned !== [] && !self::boolInput($input['remove_supervisor_programs'] ?? false)) {

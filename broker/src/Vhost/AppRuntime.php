@@ -6,13 +6,14 @@ namespace AzerioidPanel\Broker\Vhost;
 use AzerioidPanel\Broker\BrokerException;
 
 /**
- * Per-vhost application runtime modes (PHP-FPM, Octane, PM2).
+ * Per-vhost application runtime modes (PHP-FPM, Octane, PM2, Docker).
  */
 final class AppRuntime
 {
     public const FPM = 'fpm';
     public const OCTANE = 'octane';
     public const PM2 = 'pm2';
+    public const DOCKER = 'docker';
 
     public static function normalize(mixed $value): string
     {
@@ -25,7 +26,8 @@ final class AppRuntime
             self::FPM, 'php-fpm', 'traditional' => self::FPM,
             self::OCTANE, 'frankenphp' => self::OCTANE,
             self::PM2, 'pm2-runtime', 'node-pm2' => self::PM2,
-            default => throw new BrokerException('runtime must be fpm, octane, or pm2.', 2),
+            self::DOCKER, 'container', 'rootless-docker' => self::DOCKER,
+            default => throw new BrokerException('runtime must be fpm, octane, pm2, or docker.', 2),
         };
     }
 }

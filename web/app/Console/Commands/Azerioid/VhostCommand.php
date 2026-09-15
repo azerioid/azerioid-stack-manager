@@ -11,8 +11,8 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane|pm2}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2)}
+        {action : list|add|edit|del|files|octane|pm2|docker}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status (with docker)}
         {--domain= : Vhost domain}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -31,8 +31,14 @@ class VhostCommand extends Command
         {--max-requests= : Requests per Octane worker before it is recycled (octane enable)}
         {--instances= : PM2 cluster worker count (pm2 enable|scale; default 1)}
         {--entry= : Optional Node entry script relative to the app root (pm2 enable)}
-        {--port= : Loopback port (octane enable: 34000-34999; pm2 enable: 36000-36999)}
-        {--json : JSON output (list / files list / octane / pm2)}';
+        {--port= : Loopback port (octane: 34000-34999; pm2: 36000-36999; docker: 37000-37999)}
+        {--mode= : Docker mode: image|compose|dockerfile (docker enable)}
+        {--image= : Container image (docker enable --mode=image)}
+        {--internal-port= : Container listen port (docker enable; required)}
+        {--compose= : Compose file relative to docroot (docker enable; default docker-compose.yml)}
+        {--dockerfile= : Dockerfile relative to docroot (docker enable; default Dockerfile)}
+        {--lines= : Log line count (docker logs; default 100)}
+        {--json : JSON output (list / files list / octane / pm2 / docker)}';
 
     protected $description = 'Manage virtual hosts via broker vhost.* actions';
 
@@ -46,6 +52,7 @@ class VhostCommand extends Command
             'files' => $this->files(),
             'octane' => $this->octane(),
             'pm2' => $this->pm2(),
+            'docker' => $this->docker(),
             default => $this->invalidAction(),
         };
     }
@@ -120,7 +127,9 @@ class VhostCommand extends Command
                     ? 'octane:'.(string) ($v['octane_port'] ?? '?')
                     : (($v['runtime'] ?? 'fpm') === 'pm2'
                         ? 'pm2:'.(string) ($v['pm2_port'] ?? '?')
-                        : (string) ($v['runtime'] ?? 'fpm')),
+                        : (($v['runtime'] ?? 'fpm') === 'docker'
+                            ? 'docker:'.(string) ($v['docker_port'] ?? '?')
+                            : (string) ($v['runtime'] ?? 'fpm'))),
             ];
         }
 
@@ -569,9 +578,107 @@ class VhostCommand extends Command
             .' program='.(string) ($data['pm2_program'] ?? '?')." ({$state}).";
     }
 
+    private function docker(): int
+    {
+        $op = strtolower(trim((string) $this->argument('filesOp')));
+        if (! in_array($op, ['enable', 'disable', 'build', 'restart', 'logs', 'status'], true)) {
+            $this->error('Unknown docker operation. Use: enable|disable|build|restart|logs|status');
+
+            return self::INVALID;
+        }
+        try {
+            $domain = Validator::domain((string) $this->option('domain'));
+            $input = [];
+            if ($op === 'enable') {
+                if ($this->option('mode')) {
+                    $input['mode'] = (string) $this->option('mode');
+                }
+                if ($this->option('image')) {
+                    $input['image'] = (string) $this->option('image');
+                }
+                if ($this->option('internal-port')) {
+                    $input['internal_port'] = (string) $this->option('internal-port');
+                }
+                if ($this->option('port')) {
+                    $input['port'] = (string) $this->option('port');
+                }
+                if ($this->option('compose')) {
+                    $input['compose'] = (string) $this->option('compose');
+                }
+                if ($this->option('dockerfile')) {
+                    $input['dockerfile'] = (string) $this->option('dockerfile');
+                }
+            }
+            if ($op === 'logs' && $this->option('lines')) {
+                $input['lines'] = (string) $this->option('lines');
+            }
+            $timeout = match ($op) {
+                'enable', 'build' => 900,
+                'logs' => 120,
+                default => 180,
+            };
+            $res = $this->brokerCall('vhost.docker.'.$op, [$domain], $input, $timeout);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+            $data = is_array($res->data) ? $res->data : [];
+            if ($this->wantsJson()) {
+                return $this->emitData($data);
+            }
+            if ($op === 'logs') {
+                $this->line((string) ($data['output'] ?? ''));
+
+                return self::SUCCESS;
+            }
+            $this->line(match ($op) {
+                'enable' => "Docker enabled for {$domain} on 127.0.0.1:".(string) ($data['docker_port'] ?? '?')
+                    .' → container :'.(string) ($data['docker_internal_port'] ?? '?')
+                    .' (mode '.(string) ($data['docker_mode'] ?? '?').', supervisor program '
+                    .(string) ($data['docker_program'] ?? '?').').',
+                'disable' => "Docker disabled for {$domain}; the vhost no longer runs a container.",
+                'build' => "Rebuilt Docker workload for {$domain} (mode ".(string) ($data['docker_mode'] ?? '?').').',
+                'restart' => "Restarted Docker supervisor program for {$domain}.",
+                default => $this->dockerStatusLine($domain, $data),
+            });
+            if ($op === 'enable') {
+                $this->warn('Rootless Docker only (azerioid-supervised). Publish is loopback-only '
+                    .'(127.0.0.1:37000–37999). Files/Terminal use the host docroot as build context, not the '
+                    .'container filesystem. See '
+                    .(string) ($data['docs_url'] ?? 'https://docs.docker.com/engine/security/rootless/').'.');
+            }
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    /** @param  array<string,mixed>  $data */
+    private function dockerStatusLine(string $domain, array $data): string
+    {
+        if ((string) ($data['runtime'] ?? 'fpm') !== 'docker') {
+            $hint = ! empty($data['docker_app']) ? 'Dockerfile/compose detected' : 'no Dockerfile/compose';
+
+            return "{$domain}: runtime=fpm ({$hint}).";
+        }
+
+        $state = is_array($data['program'] ?? null) && is_array($data['program']['status'] ?? null)
+            ? (string) ($data['program']['status']['state'] ?? 'unknown')
+            : 'unknown';
+        $containerState = is_array($data['container'] ?? null)
+            ? (string) ($data['container']['state'] ?? '?')
+            : '?';
+
+        return "{$domain}: runtime=docker port=".(string) ($data['docker_port'] ?? '?')
+            .' internal='.(string) ($data['docker_internal_port'] ?? '?')
+            .' mode='.(string) ($data['docker_mode'] ?? '?')
+            .' program='.(string) ($data['docker_program'] ?? '?')
+            ." ({$state}, container={$containerState}).";
+    }
+
     private function invalidAction(): int
     {
-        $this->error('Unknown vhost action. Use: list|add|edit|del|files|octane|pm2');
+        $this->error('Unknown vhost action. Use: list|add|edit|del|files|octane|pm2|docker');
 
         return self::INVALID;
     }

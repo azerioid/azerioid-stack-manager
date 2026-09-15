@@ -43,6 +43,28 @@ CADDY;
         $this->assertSame('127.0.0.1:36001', $parsed['reverse_proxy']);
     }
 
+    public function test_parses_docker_managed_proxy_vhost(): void
+    {
+        $contents = <<<'CADDY'
+# azerioid-managed engine=caddy type=proxy root=/data/www/app.test runtime=docker docker_port=37001 docker_internal_port=8080 docker_mode=image docker_image=nginx:alpine
+app.test {
+    reverse_proxy 127.0.0.1:37001 {
+        header_up Host {http.request.host}
+    }
+}
+CADDY;
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/app.test.conf', $contents, []);
+
+        $this->assertSame('proxy', $parsed['type']);
+        $this->assertSame('docker', $parsed['runtime']);
+        $this->assertSame('/data/www/app.test', $parsed['root']);
+        $this->assertSame(37001, $parsed['docker_port']);
+        $this->assertSame(8080, $parsed['docker_internal_port']);
+        $this->assertSame('image', $parsed['docker_mode']);
+        $this->assertSame('nginx:alpine', $parsed['docker_image']);
+        $this->assertSame('127.0.0.1:37001', $parsed['reverse_proxy']);
+    }
+
     public function test_panel_managed_proxy_is_not_readonly(): void
     {
         $contents = <<<'CADDY'

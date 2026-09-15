@@ -13,6 +13,7 @@ use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Vhost\AppRuntime;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
@@ -222,6 +223,12 @@ final class CaddyDriver implements WebServerDriver
             $spec['pm2_port'],
             $spec['pm2_instances'],
             $spec['pm2_entry'],
+            $spec['docker_port'],
+            $spec['docker_internal_port'],
+            $spec['docker_mode'],
+            $spec['docker_image'],
+            $spec['docker_compose'],
+            $spec['docker_dockerfile'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -273,6 +280,12 @@ final class CaddyDriver implements WebServerDriver
             'pm2_port' => $spec['pm2_port'],
             'pm2_instances' => $spec['pm2_instances'],
             'pm2_entry' => $spec['pm2_entry'],
+            'docker_port' => $spec['docker_port'],
+            'docker_internal_port' => $spec['docker_internal_port'],
+            'docker_mode' => $spec['docker_mode'],
+            'docker_image' => $spec['docker_image'],
+            'docker_compose' => $spec['docker_compose'],
+            'docker_dockerfile' => $spec['docker_dockerfile'],
         ]));
 
         return [
@@ -291,6 +304,12 @@ final class CaddyDriver implements WebServerDriver
             'pm2_port' => $spec['pm2_port'],
             'pm2_instances' => $spec['pm2_instances'],
             'pm2_entry' => $spec['pm2_entry'],
+            'docker_port' => $spec['docker_port'],
+            'docker_internal_port' => $spec['docker_internal_port'],
+            'docker_mode' => $spec['docker_mode'],
+            'docker_image' => $spec['docker_image'],
+            'docker_compose' => $spec['docker_compose'],
+            'docker_dockerfile' => $spec['docker_dockerfile'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -383,6 +402,12 @@ final class CaddyDriver implements WebServerDriver
         ?int $pm2Port = null,
         ?int $pm2Instances = null,
         ?string $pm2Entry = null,
+        ?int $dockerPort = null,
+        ?int $dockerInternalPort = null,
+        ?string $dockerMode = null,
+        ?string $dockerImage = null,
+        ?string $dockerCompose = null,
+        ?string $dockerDockerfile = null,
     ): string {
         $engine = VhostEngine::normalize($engine);
         if ($type === 'proxy') {
@@ -397,6 +422,10 @@ final class CaddyDriver implements WebServerDriver
             && $pm2Port !== null
             && !VhostEngine::isBackend($engine)
             && $normalizedRuntime === AppRuntime::PM2;
+        $docker = $type === 'proxy'
+            && $dockerPort !== null
+            && !VhostEngine::isBackend($engine)
+            && $normalizedRuntime === AppRuntime::DOCKER;
         $mode = TlsMode::effective($tlsMode, $domain);
         if ($mode === TlsMode::OFF) {
             $siteLabel = "http://{$domain}";
@@ -426,6 +455,21 @@ final class CaddyDriver implements WebServerDriver
             $entry = is_string($pm2Entry) ? (preg_replace('/\s+/', '', trim($pm2Entry)) ?? '') : '';
             if ($entry !== '') {
                 $runtimePart .= " pm2_entry={$entry}";
+            }
+        } elseif ($docker) {
+            $runtimePart = ' runtime=' . AppRuntime::DOCKER
+                . " docker_port={$dockerPort} docker_internal_port={$dockerInternalPort}";
+            if (is_string($dockerMode) && $dockerMode !== '') {
+                $runtimePart .= ' docker_mode=' . preg_replace('/\s+/', '', $dockerMode);
+            }
+            if (is_string($dockerImage) && $dockerImage !== '') {
+                $runtimePart .= ' docker_image=' . preg_replace('/\s+/', '', $dockerImage);
+            }
+            if (is_string($dockerCompose) && $dockerCompose !== '') {
+                $runtimePart .= ' docker_compose=' . preg_replace('/\s+/', '', $dockerCompose);
+            }
+            if (is_string($dockerDockerfile) && $dockerDockerfile !== '') {
+                $runtimePart .= ' docker_dockerfile=' . preg_replace('/\s+/', '', $dockerDockerfile);
             }
         }
         $managed = "# azerioid-managed engine={$engine} type={$type}{$phpPart}{$rootPart}{$runtimePart}\n";
@@ -461,6 +505,17 @@ PROXY;
         } elseif ($pm2) {
             $proxyBlock = <<<PROXY
     reverse_proxy 127.0.0.1:{$pm2Port} {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+PROXY;
+        } elseif ($docker) {
+            $proxyBlock = <<<PROXY
+    reverse_proxy 127.0.0.1:{$dockerPort} {
         header_up Host {http.request.host}
         header_up X-Forwarded-For {http.request.remote.host}
         header_up X-Forwarded-Proto {http.request.scheme}
@@ -523,7 +578,7 @@ EOF;
         }
         $root = (string) ($changes['root'] ?? ($parsed['root'] ?? ''));
         $pendingRuntime = AppRuntime::normalize($changes['runtime'] ?? ($parsed['runtime'] ?? AppRuntime::FPM));
-        if ($root === '' && ($type !== 'proxy' || $pendingRuntime === AppRuntime::PM2)) {
+        if ($root === '' && ($type !== 'proxy' || in_array($pendingRuntime, [AppRuntime::PM2, AppRuntime::DOCKER], true))) {
             throw new BrokerException('Docroot is required for this vhost.', 2);
         }
         if (isset($changes['root']) && $root !== '' && !$runtime->isDir($root)) {
@@ -570,7 +625,9 @@ EOF;
             'root' => $root,
             'type' => $type,
             'php_version' => $type === 'php' ? $phpVersion : null,
-            'upstream' => $type === 'proxy' && $runtimeSpec['runtime'] !== AppRuntime::PM2 ? $upstream : null,
+            'upstream' => $type === 'proxy' && !in_array($runtimeSpec['runtime'], [AppRuntime::PM2, AppRuntime::DOCKER], true)
+                ? $upstream
+                : null,
             'tls_mode' => $tlsMode,
             'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
             'tls_key' => is_string($tlsKey) ? $tlsKey : null,
@@ -581,13 +638,24 @@ EOF;
             'pm2_port' => $runtimeSpec['pm2_port'],
             'pm2_instances' => $runtimeSpec['pm2_instances'],
             'pm2_entry' => $runtimeSpec['pm2_entry'],
+            'docker_port' => $runtimeSpec['docker_port'],
+            'docker_internal_port' => $runtimeSpec['docker_internal_port'],
+            'docker_mode' => $runtimeSpec['docker_mode'],
+            'docker_image' => $runtimeSpec['docker_image'],
+            'docker_compose' => $runtimeSpec['docker_compose'],
+            'docker_dockerfile' => $runtimeSpec['docker_dockerfile'],
         ];
     }
 
     /**
      * @param  array<string,mixed>  $parsed
      * @param  array<string,mixed>  $changes
-     * @return array{runtime:string,octane_port:?int,octane_max_requests:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string}
+     * @return array{
+     *   runtime:string,octane_port:?int,octane_max_requests:?int,
+     *   pm2_port:?int,pm2_instances:?int,pm2_entry:?string,
+     *   docker_port:?int,docker_internal_port:?int,docker_mode:?string,
+     *   docker_image:?string,docker_compose:?string,docker_dockerfile:?string
+     * }
      */
     private function mergeRuntimeSpec(string $domain, string $type, string $engine, array $parsed, array $changes): array
     {
@@ -598,10 +666,47 @@ EOF;
             'pm2_port' => null,
             'pm2_instances' => null,
             'pm2_entry' => null,
+            'docker_port' => null,
+            'docker_internal_port' => null,
+            'docker_mode' => null,
+            'docker_image' => null,
+            'docker_compose' => null,
+            'docker_dockerfile' => null,
         ];
         $appRuntime = AppRuntime::normalize(
             $changes['runtime'] ?? ($parsed['runtime'] ?? AppRuntime::FPM)
         );
+
+        if ($appRuntime === AppRuntime::DOCKER) {
+            if ($type !== 'proxy') {
+                throw new BrokerException('Docker is only available for proxy vhosts.', 3);
+            }
+            if (VhostEngine::isBackend($engine)) {
+                throw new BrokerException(
+                    "Docker requires the Caddy engine; {$domain} uses the {$engine} backend engine.",
+                    3
+                );
+            }
+
+            return [
+                'runtime' => AppRuntime::DOCKER,
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'pm2_port' => null,
+                'pm2_instances' => null,
+                'pm2_entry' => null,
+                'docker_port' => DockerManager::validatePort($changes['docker_port'] ?? ($parsed['docker_port'] ?? null)),
+                'docker_internal_port' => DockerManager::validateInternalPort(
+                    $changes['docker_internal_port'] ?? ($parsed['docker_internal_port'] ?? null)
+                ),
+                'docker_mode' => DockerManager::validateMode(
+                    $changes['docker_mode'] ?? ($parsed['docker_mode'] ?? DockerManager::MODE_IMAGE)
+                ),
+                'docker_image' => self::sanitizeDockerMarker($changes['docker_image'] ?? ($parsed['docker_image'] ?? null)),
+                'docker_compose' => self::sanitizeDockerMarker($changes['docker_compose'] ?? ($parsed['docker_compose'] ?? null)),
+                'docker_dockerfile' => self::sanitizeDockerMarker($changes['docker_dockerfile'] ?? ($parsed['docker_dockerfile'] ?? null)),
+            ];
+        }
 
         if ($appRuntime === AppRuntime::PM2) {
             if ($type !== 'proxy') {
@@ -623,6 +728,12 @@ EOF;
                     $changes['pm2_instances'] ?? ($parsed['pm2_instances'] ?? Pm2Manager::DEFAULT_INSTANCES)
                 ),
                 'pm2_entry' => self::sanitizePm2Entry($changes['pm2_entry'] ?? ($parsed['pm2_entry'] ?? null)),
+                'docker_port' => null,
+                'docker_internal_port' => null,
+                'docker_mode' => null,
+                'docker_image' => null,
+                'docker_compose' => null,
+                'docker_dockerfile' => null,
             ];
         }
 
@@ -648,6 +759,12 @@ EOF;
             'pm2_port' => null,
             'pm2_instances' => null,
             'pm2_entry' => null,
+            'docker_port' => null,
+            'docker_internal_port' => null,
+            'docker_mode' => null,
+            'docker_image' => null,
+            'docker_compose' => null,
+            'docker_dockerfile' => null,
         ];
     }
 
@@ -664,7 +781,20 @@ EOF;
         return $entry;
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string,runtime:string,octane_port:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string} */
+    private static function sanitizeDockerMarker(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+        $marker = preg_replace('/\s+/', '', trim($value)) ?? '';
+        if ($marker === '') {
+            return null;
+        }
+
+        return $marker;
+    }
+
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string,runtime:string,octane_port:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string,docker_port:?int,docker_internal_port:?int,docker_mode:?string} */
     private function editSnapshot(array $parsed): array
     {
         $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
@@ -689,6 +819,15 @@ EOF;
                 : null,
             'pm2_entry' => $appRuntime === AppRuntime::PM2
                 ? ($parsed['pm2_entry'] ?? null)
+                : null,
+            'docker_port' => $appRuntime === AppRuntime::DOCKER
+                ? ($parsed['docker_port'] ?? null)
+                : null,
+            'docker_internal_port' => $appRuntime === AppRuntime::DOCKER
+                ? ($parsed['docker_internal_port'] ?? null)
+                : null,
+            'docker_mode' => $appRuntime === AppRuntime::DOCKER
+                ? ($parsed['docker_mode'] ?? null)
                 : null,
         ];
     }

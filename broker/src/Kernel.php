@@ -73,6 +73,7 @@ use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
 use AzerioidPanel\Broker\Actions\VhostOctane;
+use AzerioidPanel\Broker\Actions\VhostDocker;
 use AzerioidPanel\Broker\Actions\VhostPm2;
 use AzerioidPanel\Broker\Actions\WebFrontRouterMigrate;
 use AzerioidPanel\Broker\Actions\WebReleaseSitePorts;
@@ -114,6 +115,12 @@ final class Kernel
         'vhost.pm2.disable' => VhostPm2::class,
         'vhost.pm2.reload' => VhostPm2::class,
         'vhost.pm2.scale' => VhostPm2::class,
+        'vhost.docker.status' => VhostDocker::class,
+        'vhost.docker.enable' => VhostDocker::class,
+        'vhost.docker.disable' => VhostDocker::class,
+        'vhost.docker.build' => VhostDocker::class,
+        'vhost.docker.restart' => VhostDocker::class,
+        'vhost.docker.logs' => VhostDocker::class,
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,
