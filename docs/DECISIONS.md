@@ -319,6 +319,8 @@ Port range `34000–34999` is reserved for these workers (see `docs/port-ownersh
 
 **Explicitly rejected for v1:** rootful daemon + `docker` group for panel users; DIND requiring `--privileged`; any UI that manages unrelated host containers/images/volumes.
 
+**Host-mount handling in compose mode:** an operator-supplied `docker-compose.yml` / `Dockerfile` can still request arbitrary host-path bind mounts (e.g. `-v /etc:/host-etc`). This is **not blocked outright** in v1. Rootless Docker's UID-mapping means any such mount is constrained to what the `azerioid-supervised` user itself can already access on the host — it cannot escalate to root or reach files that UID doesn't own/read, so the blast radius is bounded by the same limits proven in the adversarial test (fleet evidence: `/etc/shadow` via bind-mount → Permission denied; host writes land as the supervised UID, never root). Accepted tradeoff: an operator who supplies a malicious or careless compose file can still access/modify anything `azerioid-supervised` can reach (e.g. other Docker-runtime vhosts' own container data, if that UID has access) — this is a known, bounded risk, not equivalent to host compromise. Scanning/restricting compose file mounts is not implemented in v1; revisit if this proves insufficient in practice.
+
 ### Runtime pattern
 
 - **Caddy** `reverse_proxy` → `127.0.0.1:N` with the same forwarding headers as proxy / Octane / PM2.
