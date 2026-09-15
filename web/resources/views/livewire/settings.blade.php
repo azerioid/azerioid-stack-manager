@@ -176,6 +176,42 @@
         </form>
     </section>
 
+    <section class="panel p-5 space-y-4">
+        <h2 class="text-sm font-medium">Mail</h2>
+        @if ($mailError)
+            <p class="text-sm text-bad">{{ $mailError }}</p>
+        @endif
+        @if ($mailInstalled)
+            <form wire:submit="setMailHostname" class="flex flex-wrap items-end gap-3">
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Mail hostname
+                    <input class="field mt-1 w-72" wire:model="mailHostname" placeholder="mail.example.com">
+                </label>
+                <button class="btn-primary" type="submit">Save</button>
+            </form>
+            <p class="text-xs text-zinc-500">
+                Required before enabling mail for a domain. Manage mailboxes, DNS, and relay settings on
+                <a class="text-brass-400" href="{{ route('mail') }}">Mail</a>.
+            </p>
+        @else
+            <p class="text-sm text-zinc-400">
+                The mail component is not installed. Install it from
+                <a class="text-brass-400" href="{{ route('components') }}">Components</a> to host mailboxes for your domains.
+            </p>
+        @endif
+
+        <form wire:submit="saveMailAlerts" class="space-y-2 border-t border-white/5 pt-4">
+            <label class="flex items-center gap-2 text-sm text-zinc-300">
+                <input type="checkbox" wire:model="mailAlertsViaLocalMail">
+                Send panel alerts through the local mail component
+            </label>
+            <p class="text-xs text-zinc-500">
+                Off by default. Panel alerts keep using your external SMTP so that alerting still works when this
+                server's own mail stack is the thing that broke.
+            </p>
+            <button class="btn-ghost text-xs" type="submit">Save alert routing</button>
+        </form>
+    </section>
+
     <section class="panel p-5 space-y-2">
         <h2 class="text-sm font-medium">Integrations</h2>
         <p class="text-sm text-zinc-400">Telegram bot token, Spaces keys, and the backup passphrase are entered on <a class="text-brass-400" href="{{ route('alerts') }}">Alerts</a> and <a class="text-brass-400" href="{{ route('backups') }}">Backups</a>. They are encrypted with <span class="font-mono">APP_KEY</span>, masked after save, and never written to the audit log in plaintext.</p>

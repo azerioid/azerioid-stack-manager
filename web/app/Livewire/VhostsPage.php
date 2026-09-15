@@ -31,6 +31,8 @@ class VhostsPage extends Component
     public ?string $confirmDelete = null;
     public bool $removeSupervisorOnDelete = false;
     public array $supervisorByVhost = [];
+    public array $mailDomains = [];
+    public bool $dropMailOnDelete = false;
     public bool $showForm = false;
     public ?string $octaneTarget = null;
     public string $octaneMaxRequests = '500';
@@ -221,6 +223,7 @@ class VhostsPage extends Component
     {
         $this->confirmDelete = $domain;
         $this->removeSupervisorOnDelete = false;
+        $this->dropMailOnDelete = false;
     }
 
     public function delete(BrokerClient $broker, ?string $domain = null): void
@@ -230,6 +233,7 @@ class VhostsPage extends Component
             $this->error = 'Confirm deletion from the panel UI before removing a vhost.';
             $this->confirmDelete = null;
             $this->removeSupervisorOnDelete = false;
+            $this->dropMailOnDelete = false;
 
             return;
         }
@@ -240,6 +244,7 @@ class VhostsPage extends Component
             $this->error = $this->operatorMessage($e->getMessage());
             $this->confirmDelete = null;
             $this->removeSupervisorOnDelete = false;
+            $this->dropMailOnDelete = false;
 
             return;
         }
@@ -247,14 +252,21 @@ class VhostsPage extends Component
         if ($this->removeSupervisorOnDelete) {
             $stdin['remove_supervisor_programs'] = true;
         }
+        if ($this->dropMailOnDelete && isset($this->mailDomains[$domain])) {
+            $stdin['drop_mail'] = true;
+            $stdin['confirm'] = Validator::DROP_MAIL_CONFIRM;
+        }
         $res = $broker->call('vhost.del', [Validator::domain($domain)], $stdin);
         if (! $res->ok) {
             $this->error = $this->operatorMessage((string) $res->error);
         } else {
-            $this->flash = "Deleted {$domain}. Website files were left in place.";
+            $this->flash = $this->dropMailOnDelete
+                ? "Deleted {$domain} and its mailboxes. Website files were left in place."
+                : "Deleted {$domain}. Website files were left in place.";
         }
         $this->confirmDelete = null;
         $this->removeSupervisorOnDelete = false;
+        $this->dropMailOnDelete = false;
         $this->reload($broker);
     }
 
@@ -412,6 +424,16 @@ class VhostsPage extends Component
                     $vd = $program['vhost_domain'] ?? null;
                     if ($vd) {
                         $this->supervisorByVhost[$vd][] = $program['name'];
+                    }
+                }
+            } catch (BrokerCallException) {
+            }
+            $this->mailDomains = [];
+            try {
+                foreach ($broker->call('mail.domain.list', [], [], null, false)->dataOrFail()['domains'] ?? [] as $md) {
+                    $name = (string) ($md['domain'] ?? '');
+                    if ($name !== '') {
+                        $this->mailDomains[$name] = (int) ($md['mailbox_count'] ?? 0);
                     }
                 }
             } catch (BrokerCallException) {

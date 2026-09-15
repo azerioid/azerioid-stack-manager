@@ -38,6 +38,10 @@ class SettingsPage extends Component
     public string $dnsRotateProvider = '';
     public string $dnsRotateToken = '';
     public ?string $dnsError = null;
+    public bool $mailAlertsViaLocalMail = false;
+    public bool $mailInstalled = false;
+    public string $mailHostname = '';
+    public ?string $mailError = null;
     public string $totp_password = '';
     public string $totp_code = '';
     public ?string $totpError = null;
@@ -68,6 +72,52 @@ class SettingsPage extends Component
             }
         }
         $this->reloadDnsProviders($broker);
+        $this->reloadMail($broker);
+    }
+
+    private function reloadMail(BrokerClient $broker): void
+    {
+        $this->mailAlertsViaLocalMail = (bool) Setting::get('alerts_via_local_mail', false);
+        $res = $broker->call('mail.status', [], ['probe' => false], 30, false);
+        if (! $res->ok) {
+            return;
+        }
+        $this->mailInstalled = (bool) ($res->data['installed'] ?? false);
+        $this->mailHostname = (string) ($res->data['hostname'] ?? '');
+    }
+
+    /**
+     * Panel alerts stay on the operator's external SMTP unless they opt in here
+     * (ADR A36 §9.9). Auto-switching would make alerting depend on the very host
+     * that is failing when mail breaks.
+     */
+    public function saveMailAlerts(BrokerClient $broker): void
+    {
+        $this->mailError = null;
+        if ($this->mailAlertsViaLocalMail && ! $this->mailInstalled) {
+            $this->mailAlertsViaLocalMail = false;
+            $this->mailError = 'Install the mail component before routing panel alerts through it.';
+
+            return;
+        }
+        Setting::put('alerts_via_local_mail', $this->mailAlertsViaLocalMail);
+        $broker->call('mail.alerts.set', [], ['enabled' => $this->mailAlertsViaLocalMail], 30);
+        $this->flash = $this->mailAlertsViaLocalMail
+            ? 'Panel alerts will be sent through the local mail component.'
+            : 'Panel alerts will use your configured external SMTP.';
+    }
+
+    public function setMailHostname(BrokerClient $broker): void
+    {
+        $this->mailError = null;
+        $res = $broker->call('mail.hostname.set', [], ['hostname' => trim($this->mailHostname)], 60);
+        if (! $res->ok) {
+            $this->mailError = (string) $res->error;
+
+            return;
+        }
+        $this->mailHostname = (string) ($res->data['hostname'] ?? $this->mailHostname);
+        $this->flash = "Mail hostname set to {$this->mailHostname}.";
     }
 
     public function rotateDnsCredential(BrokerClient $broker): void
@@ -287,7 +337,7 @@ class SettingsPage extends Component
             'totpEnrolled' => $user instanceof User && $user->hasTwoFactorEnabled(),
         ])->layoutData([
             'heading' => 'Settings',
-            'sub' => 'Admin, session, panel domain, DNS-01 credentials, php.ini',
+            'sub' => 'Admin, session, panel domain, mail, DNS-01 credentials, php.ini',
         ]);
     }
 }

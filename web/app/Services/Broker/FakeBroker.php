@@ -69,6 +69,15 @@ final class FakeBroker
 
     public string $panelDomainTlsMode = 'auto';
 
+    /** @var array<string, mixed> mail state: hostname, domains, mailboxes, aliases, smarthost */
+    public array $mail = [];
+
+    /** Local fake defaults to a blocked :25 — the case most operators actually hit. */
+    public bool $mailOutbound25Open = false;
+
+    /** Simulates a host that already runs Exim, so the REPLACE-MTA flow is exercisable. */
+    public bool $fakeForeignMtaPresent = false;
+
     public function __construct()
     {
         $this->reset();
@@ -87,6 +96,16 @@ final class FakeBroker
         $this->dnsCredentialsPresent = [];
         $this->panelDomain = null;
         $this->panelDomainTlsMode = 'auto';
+        $this->mailOutbound25Open = false;
+        $this->fakeForeignMtaPresent = false;
+        $this->mail = [
+            'hostname' => '',
+            'domains' => [],
+            'mailboxes' => [],
+            'aliases' => [],
+            'smarthost' => null,
+            'alerts_via_local_mail' => false,
+        ];
         $this->databaseEngine = 'mariadb';
         $this->postgresqlConfigured = false;
         $this->mongodbConfigured = false;
@@ -381,6 +400,38 @@ final class FakeBroker
                 'vhost.files.rename' => $this->vhostFilesOp('rename', $args, $stdin),
                 'vhost.files.move' => $this->vhostFilesOp('move', $args, $stdin),
                 'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
+                'mail.status' => $this->mailStatus(),
+                'mail.probe.outbound25' => $this->mailProbe(),
+                'mail.relay.selftest' => [
+                    'passed' => true,
+                    'checked' => true,
+                    'detail' => 'Unauthenticated relay to a foreign domain was rejected, as required.',
+                    'transcript' => ['RCPT TO:<relay-test@example.com> =554 5.7.1 Relay access denied'],
+                ],
+                'mail.hostname.show' => ['hostname' => $this->mail['hostname']],
+                'mail.hostname.set' => $this->mailHostnameSet($stdin),
+                'mail.domain.list' => ['domains' => $this->mailDomainSummaries()],
+                'mail.domain.enable' => $this->mailDomainEnable($args),
+                'mail.domain.disable' => $this->mailDomainDisable($args, $stdin),
+                'mail.mailbox.list' => ['mailboxes' => $this->mailMailboxRows()],
+                'mail.mailbox.add' => $this->mailMailboxAdd($args, $stdin),
+                'mail.mailbox.passwd' => $this->mailMailboxPasswd($args, $stdin),
+                'mail.mailbox.disable' => $this->mailMailboxToggle($args, true),
+                'mail.mailbox.enable' => $this->mailMailboxToggle($args, false),
+                'mail.mailbox.del' => $this->mailMailboxDel($args),
+                'mail.alias.list' => ['aliases' => $this->mailAliasRows()],
+                'mail.alias.add' => $this->mailAliasAdd($args),
+                'mail.alias.del' => $this->mailAliasDel($args),
+                'mail.dns.records' => $this->mailDnsRecords($args),
+                'mail.dkim.rotate' => ['domain' => $args[0] ?? '', 'selector' => 'azerioid', 'rotated' => true],
+                'mail.smarthost.show' => ['smarthost' => $this->mail['smarthost']],
+                'mail.smarthost.set' => $this->mailSmarthostSet($stdin),
+                'mail.smarthost.clear' => $this->requireConfirm($stdin, 'CLEAR-RELAY', $this->mailSmarthostClear()),
+                'mail.smarthost.test' => ['reachable' => $this->mail['smarthost'] !== null, 'detail' => 'Fake relay reachable.'],
+                'mail.queue' => $this->mailQueue($stdin),
+                'mail.logs' => ['lines' => ['Sep 14 21:00:00 fake postfix/smtpd[1]: connect from localhost[127.0.0.1]'], 'path' => '/var/log/mail.log'],
+                'mail.test.send' => ['queued' => true, 'from' => $args[0] ?? '', 'to' => $args[1] ?? '', 'queue_id' => 'FAKE0001'],
+                'mail.alerts.set' => $this->mailAlertsSet($stdin),
                 default => throw new BrokerCallException('Unknown action.', 2),
             };
             return new BrokerResponse(true, $data, null, 0);
@@ -537,6 +588,398 @@ final class FakeBroker
      * @param  array<string,mixed>  $ok
      * @return array<string,mixed>
      */
+    // ------------------------------------------------------------------ mail
+
+    private function mailInstalled(): bool
+    {
+        return isset($this->fakeInstalledComponents['mail']);
+    }
+
+    private function assertMailInstalled(): void
+    {
+        if (! $this->mailInstalled()) {
+            throw new BrokerCallException('The mail component is not installed.', 3);
+        }
+    }
+
+    private function assertMailHostname(): string
+    {
+        $this->assertMailInstalled();
+        $hostname = (string) $this->mail['hostname'];
+        if ($hostname === '') {
+            throw new BrokerCallException('Set the mail hostname before enabling mail for a domain.', 3);
+        }
+
+        return $hostname;
+    }
+
+    /** @return array<string, mixed> */
+    private function mailProbe(): array
+    {
+        $open = $this->mailOutbound25Open;
+
+        return [
+            'open' => $open,
+            'host' => 'gmail-smtp-in.l.google.com',
+            'port' => 25,
+            'latency_ms' => 12,
+            'banner' => $open ? '220 mx.google.com ESMTP' : '',
+            'error' => $open ? '' : 'Connection timed out',
+            'message' => $open
+                ? 'Direct mail delivery: available'
+                : 'Direct mail delivery: blocked by your provider — configure a relay to send mail',
+            'delivery_mode_hint' => $open ? 'direct' : 'smarthost',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function mailSvc(string $unit): array
+    {
+        if ($this->mailInstalled()) {
+            return $this->svc($unit);
+        }
+
+        return [
+            'unit' => $unit,
+            'id' => $unit . '.service',
+            'active_state' => 'inactive',
+            'sub_state' => 'dead',
+            'main_pid' => 0,
+            'n_restarts' => 0,
+            'active_enter_timestamp' => null,
+            'unit_file_state' => 'not-found',
+            'description' => $unit,
+            'running' => false,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function mailStatus(): array
+    {
+        $outbound = $this->mailProbe();
+        $smarthost = $this->mail['smarthost'];
+
+        return [
+            'installed' => $this->mailInstalled(),
+            'hostname' => $this->mail['hostname'],
+            'hostname_set' => $this->mail['hostname'] !== '',
+            'server_ip' => '203.0.113.10',
+            'ptr' => ['ip' => '203.0.113.10', 'ptr' => '', 'matches' => false, 'note' => 'Set reverse DNS at your VPS provider.'],
+            'services' => [
+                'postfix' => $this->mailSvc('postfix'),
+                'dovecot' => $this->mailSvc('dovecot'),
+                'opendkim' => $this->mailSvc('opendkim'),
+            ],
+            'domains' => $this->mailDomainSummaries(),
+            'mailbox_count' => count($this->mail['mailboxes']),
+            'alias_count' => count($this->mail['aliases']),
+            'delivery_mode' => $smarthost !== null ? 'smarthost' : 'direct',
+            'smarthost' => $smarthost,
+            'outbound25' => $outbound,
+            'delivery_message' => $outbound['message'],
+            'relay_cta' => $outbound['open'] === false && $smarthost === null,
+            'firewall' => ['backend' => 'ufw', 'open' => [25, 465, 587, 993], 'detail' => 'Opened 25, 465, 587, 993.'],
+            'max_message_bytes' => 26214400,
+            'alerts_via_local_mail' => (bool) $this->mail['alerts_via_local_mail'],
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function mailHostnameSet(array $stdin): array
+    {
+        $this->assertMailInstalled();
+        $this->mail['hostname'] = Validator::mailHostname((string) ($stdin['hostname'] ?? ''));
+
+        return ['hostname' => $this->mail['hostname']];
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function mailDomainSummaries(): array
+    {
+        $rows = [];
+        foreach ($this->mail['domains'] as $domain => $meta) {
+            $rows[] = [
+                'domain' => $domain,
+                'enabled' => (bool) ($meta['enabled'] ?? false),
+                'dkim_selector' => (string) ($meta['dkim_selector'] ?? 'azerioid'),
+                'enabled_at' => (string) ($meta['enabled_at'] ?? '2026-09-14T00:00:00+00:00'),
+                'mailbox_count' => count(array_filter(
+                    $this->mail['mailboxes'],
+                    static fn (array $m): bool => $m['domain'] === $domain
+                )),
+                'alias_count' => count(array_filter(
+                    $this->mail['aliases'],
+                    static fn (array $a): bool => $a['domain'] === $domain
+                )),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailDomainEnable(array $args): array
+    {
+        $this->assertMailHostname();
+        $domain = Validator::domain($args[0] ?? '');
+        $this->mail['domains'][$domain] = ['enabled' => true, 'dkim_selector' => 'azerioid'];
+
+        return ['domain' => $domain, 'enabled' => true, 'dkim_selector' => 'azerioid'];
+    }
+
+    /**
+     * @param  list<string>        $args
+     * @param  array<string,mixed> $stdin
+     * @return array<string,mixed>
+     */
+    private function mailDomainDisable(array $args, array $stdin): array
+    {
+        $this->assertMailInstalled();
+        $domain = Validator::domain($args[0] ?? '');
+        $mailboxes = array_filter($this->mail['mailboxes'], static fn (array $m): bool => $m['domain'] === $domain);
+        if ($mailboxes !== [] && ($stdin['drop_mail'] ?? false) !== true) {
+            throw new BrokerCallException(
+                "Domain {$domain} still has " . count($mailboxes) . ' mailbox(es). '
+                . 'Pass drop_mail=true with confirm=DROP-MAIL to delete them.',
+                3
+            );
+        }
+        if ($mailboxes !== []) {
+            $this->requireConfirm($stdin, 'DROP-MAIL', []);
+            foreach (array_keys($mailboxes) as $address) {
+                unset($this->mail['mailboxes'][$address]);
+            }
+        }
+        foreach ($this->mail['aliases'] as $address => $alias) {
+            if ($alias['domain'] === $domain) {
+                unset($this->mail['aliases'][$address]);
+            }
+        }
+        unset($this->mail['domains'][$domain]);
+
+        return ['domain' => $domain, 'enabled' => false, 'mailboxes_removed' => count($mailboxes)];
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function mailMailboxRows(): array
+    {
+        $rows = [];
+        foreach ($this->mail['mailboxes'] as $address => $meta) {
+            $rows[] = ['address' => $address] + $meta;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<string>        $args
+     * @param  array<string,mixed> $stdin
+     * @return array<string,mixed>
+     */
+    private function mailMailboxAdd(array $args, array $stdin): array
+    {
+        $this->assertMailInstalled();
+        $domain = Validator::domain($args[1] ?? '');
+        if (! isset($this->mail['domains'][$domain])) {
+            throw new BrokerCallException("Mail is not enabled for {$domain}.", 3);
+        }
+        $localPart = Validator::mailLocalPart($args[0] ?? '');
+        $address = $localPart . '@' . $domain;
+        if (isset($this->mail['mailboxes'][$address])) {
+            throw new BrokerCallException("Mailbox {$address} already exists.", 3);
+        }
+        $generated = trim((string) ($stdin['password'] ?? '')) === '';
+        $this->mail['mailboxes'][$address] = [
+            'domain' => $domain,
+            'local_part' => $localPart,
+            'disabled' => false,
+            'created_at' => now()->toIso8601String(),
+        ];
+
+        return [
+            'address' => $address,
+            'generated_password' => $generated ? 'Fake-Password-Shown-Once' : null,
+        ];
+    }
+
+    /**
+     * @param  list<string>        $args
+     * @param  array<string,mixed> $stdin
+     * @return array<string,mixed>
+     */
+    private function mailMailboxPasswd(array $args, array $stdin): array
+    {
+        $address = $this->mailMailbox($args[0] ?? '');
+        $generated = trim((string) ($stdin['password'] ?? '')) === '';
+
+        return [
+            'address' => $address,
+            'generated_password' => $generated ? 'Fake-Password-Shown-Once' : null,
+        ];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailMailboxToggle(array $args, bool $disabled): array
+    {
+        $address = $this->mailMailbox($args[0] ?? '');
+        $this->mail['mailboxes'][$address]['disabled'] = $disabled;
+
+        return ['address' => $address, 'disabled' => $disabled];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailMailboxDel(array $args): array
+    {
+        $address = $this->mailMailbox($args[0] ?? '');
+        unset($this->mail['mailboxes'][$address]);
+
+        return ['address' => $address, 'deleted' => true];
+    }
+
+    private function mailMailbox(string $address): string
+    {
+        $this->assertMailInstalled();
+        $address = Validator::mailAddress($address);
+        if (! isset($this->mail['mailboxes'][$address])) {
+            throw new BrokerCallException("Mailbox {$address} does not exist.", 3);
+        }
+
+        return $address;
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function mailAliasRows(): array
+    {
+        $rows = [];
+        foreach ($this->mail['aliases'] as $address => $meta) {
+            $rows[] = ['address' => $address] + $meta;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailAliasAdd(array $args): array
+    {
+        $this->assertMailInstalled();
+        $address = Validator::mailAddress($args[0] ?? '');
+        $destination = Validator::mailAddress($args[1] ?? '');
+        $domain = explode('@', $address)[1];
+        if (! isset($this->mail['domains'][$domain])) {
+            throw new BrokerCallException("Mail is not enabled for {$domain}.", 3);
+        }
+        $this->mail['aliases'][$address] = ['domain' => $domain, 'destination' => $destination];
+
+        return ['address' => $address, 'destination' => $destination];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailAliasDel(array $args): array
+    {
+        $this->assertMailInstalled();
+        $address = Validator::mailAddress($args[0] ?? '');
+        unset($this->mail['aliases'][$address]);
+
+        return ['address' => $address, 'deleted' => true];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @return array<string,mixed>
+     */
+    private function mailDnsRecords(array $args): array
+    {
+        $domain = Validator::domain($args[0] ?? '');
+        $hostname = (string) $this->mail['hostname'];
+        $smarthost = $this->mail['smarthost'];
+        $spf = $smarthost !== null
+            ? 'v=spf1 include:' . $smarthost['host'] . ' ~all'
+            : "v=spf1 a:{$hostname} ip4:203.0.113.10 ~all";
+
+        $records = [
+            ['type' => 'MX', 'name' => $domain, 'value' => "10 {$hostname}", 'state' => 'missing'],
+            ['type' => 'A', 'name' => $hostname, 'value' => '203.0.113.10', 'state' => 'ok'],
+            ['type' => 'TXT', 'name' => $domain, 'value' => $spf, 'state' => 'missing'],
+            ['type' => 'TXT', 'name' => "_dmarc.{$domain}", 'value' => "v=DMARC1; p=none; rua=mailto:postmaster@{$domain}; fo=1", 'state' => 'missing'],
+            ['type' => 'TXT', 'name' => "azerioid._domainkey.{$domain}", 'value' => 'v=DKIM1; k=rsa; p=FAKEKEY', 'state' => 'missing'],
+            ['type' => 'PTR', 'name' => '203.0.113.10', 'value' => $hostname, 'state' => 'unknown'],
+        ];
+        foreach ($records as $i => $record) {
+            $records[$i] = $record + ['purpose' => 'Fake record for local UI development.', 'required' => true, 'observed' => '', 'note' => ''];
+        }
+
+        return ['domain' => $domain, 'records' => $records];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function mailSmarthostSet(array $stdin): array
+    {
+        $this->assertMailInstalled();
+        $this->mail['smarthost'] = [
+            'host' => Validator::smarthostHost((string) ($stdin['host'] ?? '')),
+            'port' => Validator::port($stdin['port'] ?? 587),
+            'username' => (string) ($stdin['username'] ?? ''),
+            'tls' => (string) ($stdin['tls'] ?? 'starttls'),
+        ];
+
+        return ['smarthost' => $this->mail['smarthost']];
+    }
+
+    /** @return array<string,mixed> */
+    private function mailSmarthostClear(): array
+    {
+        $this->mail['smarthost'] = null;
+
+        return ['cleared' => true, 'delivery_mode' => 'direct'];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function mailQueue(array $stdin): array
+    {
+        if (($stdin['flush'] ?? false) === true) {
+            $this->requireConfirm($stdin, 'FLUSH-QUEUE', []);
+
+            return ['flushed' => true, 'total' => 0, 'active' => 0, 'deferred' => 0, 'hold' => 0, 'entries' => []];
+        }
+
+        return ['total' => 0, 'active' => 0, 'deferred' => 0, 'hold' => 0, 'entries' => []];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function mailAlertsSet(array $stdin): array
+    {
+        $this->mail['alerts_via_local_mail'] = ($stdin['enabled'] ?? false) === true;
+
+        return ['alerts_via_local_mail' => $this->mail['alerts_via_local_mail']];
+    }
+
     private function requireConfirm(array $stdin, string $expected, array $ok): array
     {
         if (($stdin['confirm'] ?? '') !== $expected) {
@@ -1176,6 +1619,16 @@ final class FakeBroker
                 'installable' => true,
                 'description' => 'Browser-based SQL administration for MariaDB, PostgreSQL, and SQLite. Does not support MongoDB.',
             ],
+            [
+                'id' => 'mail',
+                'display_name' => 'Mail (Postfix)',
+                'category' => 'mail',
+                'system' => false,
+                'status' => 'not_installed',
+                'installable' => true,
+                'unit' => 'postfix',
+                'description' => 'Opt-in Postfix + Dovecot + OpenDKIM for panel-managed domains.',
+            ],
         ];
 
         return array_map(function (array $row): array {
@@ -1215,7 +1668,7 @@ final class FakeBroker
     {
         return [
             'redis', 'mariadb', 'postgresql', 'nginx', 'apache', 'supervisor',
-            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer',
+            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail',
         ];
     }
 
@@ -1230,6 +1683,9 @@ final class FakeBroker
         if ($id === 'mariadb' && isset($this->fakeInstalledComponents['postgresql'])) {
             return ['component_id' => $id, 'ok' => false, 'issues' => ['Conflicts with postgresql, which is already present on this host.']];
         }
+        if ($id === 'mail' && $this->fakeForeignMtaPresent) {
+            return ['component_id' => $id, 'ok' => false, 'issues' => ['Conflicts with exim4, which is already present on this host.']];
+        }
         return ['component_id' => $id, 'ok' => true, 'issues' => []];
     }
 
@@ -1241,6 +1697,17 @@ final class FakeBroker
         }
         if (in_array($id, ['php-8.4'], true)) {
             throw new BrokerCallException('Panel PHP runtime cannot be installed from the Components page.', 3);
+        }
+        if ($id === 'mail' && $this->fakeForeignMtaPresent) {
+            $options = is_array($stdin['options'] ?? null) ? $stdin['options'] : [];
+            if (($options['confirm'] ?? '') !== 'REPLACE-MTA') {
+                throw new BrokerCallException(
+                    'Installed MTA package(s): exim4. Installing the mail component replaces it. '
+                    . 'Confirm with REPLACE-MTA to proceed.',
+                    3
+                );
+            }
+            $this->fakeForeignMtaPresent = false;
         }
         $this->fakeInstalledComponents[$id] = true;
         if ($id === 'mariadb') {

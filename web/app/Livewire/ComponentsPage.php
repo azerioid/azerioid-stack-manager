@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Jobs\RunComponentOperationJob;
 use App\Models\ComponentOperation;
 use App\Services\Broker\BrokerClient;
+use AzerioidPanel\Broker\Validator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -33,6 +34,12 @@ class ComponentsPage extends Component
     public ?string $pendingInstall = null;
 
     public string $nodeMajor = '22';
+
+    /** Typed REPLACE-MTA phrase for a mail install over an existing mail transport (ADR A36 §9.8). */
+    public string $replaceMtaConfirm = '';
+
+    /** @var list<string> */
+    public array $foreignMtaReasons = [];
 
     /** @var list<array<string, string>> */
     public array $preflightRemediations = [];
@@ -69,18 +76,24 @@ class ComponentsPage extends Component
     {
         $component = collect($this->catalog)->firstWhere('id', $componentId);
         $options = is_array($component['install_options'] ?? null) ? $component['install_options'] : [];
-        if ($options === []) {
+        // Mail always opens a confirm step: it is reputation-sensitive, and it may
+        // need to replace an existing mail transport.
+        if ($options === [] && $componentId !== 'mail') {
             $this->queueInstall($componentId, [], $broker);
 
             return;
         }
         $this->pendingInstall = $componentId;
+        $this->replaceMtaConfirm = '';
+        $this->foreignMtaReasons = $componentId === 'mail' ? $this->detectForeignMta($broker) : [];
         $this->nodeMajor = (string) ($options['node_major']['default'] ?? '22');
     }
 
     public function cancelInstall(): void
     {
         $this->pendingInstall = null;
+        $this->replaceMtaConfirm = '';
+        $this->foreignMtaReasons = [];
     }
 
     public function confirmInstall(BrokerClient $broker): void
@@ -92,9 +105,38 @@ class ComponentsPage extends Component
         if ($this->pendingInstall === 'nodejs') {
             $options['node_major'] = $this->nodeMajor;
         }
+        if ($this->pendingInstall === 'mail' && $this->foreignMtaReasons !== []) {
+            if (trim($this->replaceMtaConfirm) !== Validator::REPLACE_MTA_CONFIRM) {
+                $this->error = 'Type ' . Validator::REPLACE_MTA_CONFIRM . ' exactly to replace the existing mail transport.';
+
+                return;
+            }
+            $options['confirm'] = Validator::REPLACE_MTA_CONFIRM;
+        }
         $componentId = $this->pendingInstall;
         $this->pendingInstall = null;
+        $this->replaceMtaConfirm = '';
+        $this->foreignMtaReasons = [];
         $this->queueInstall($componentId, $options, $broker);
+    }
+
+    /**
+     * Registry conflicts for mail name real packages (exim4, sendmail), so preflight
+     * issues double as the "a foreign MTA is here" signal for the confirm modal.
+     *
+     * @return list<string>
+     */
+    private function detectForeignMta(BrokerClient $broker): array
+    {
+        $preflight = $broker->call('component.preflight', ['mail'], [], null, false);
+        if (! $preflight->ok || ! is_array($preflight->data['issues'] ?? null)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map('strval', $preflight->data['issues']),
+            static fn (string $issue): bool => str_starts_with($issue, 'Conflicts with ')
+        ));
     }
 
     public function install(string $componentId, BrokerClient $broker): void
@@ -117,8 +159,15 @@ class ComponentsPage extends Component
 
             return;
         }
-        $issues = $preflight->data['issues'] ?? [];
-        if (is_array($issues) && $issues !== []) {
+        $issues = is_array($preflight->data['issues'] ?? null) ? $preflight->data['issues'] : [];
+        // A mail conflict is an MTA the operator just agreed to replace, not a blocker.
+        if ($componentId === 'mail' && isset($options['confirm'])) {
+            $issues = array_values(array_filter(
+                $issues,
+                static fn ($issue): bool => ! str_starts_with((string) $issue, 'Conflicts with ')
+            ));
+        }
+        if ($issues !== []) {
             $this->preflightRemediations = is_array($preflight->data['remediations'] ?? null)
                 ? $preflight->data['remediations']
                 : [];

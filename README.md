@@ -45,6 +45,7 @@ Captured from a live Ubuntu 24.04 panel (UI anonymized where needed).
 | **Cache / KV** | Redis, Memcached |
 | **Runtimes** | PHP 8.1–8.3 (site pools); Node.js 20 / 22 / 24 (runtime only — no PM2 in v1) |
 | **Process manager** | Supervisor (programs run as `azerioid-supervised`, never root) |
+| **Mail** | Postfix + Dovecot + OpenDKIM (opt-in; authenticated submission only, virtual mailboxes, DKIM/SPF/DMARC guidance, direct or smarthost outbound) |
 | **Tools** | Adminer (panel session–gated SQL UI; MariaDB / PostgreSQL / SQLite — not MongoDB) |
 
 ## Feature highlights
@@ -56,11 +57,12 @@ Proven on supported distros in operator testing — not marketing vapor:
 - **Databases with remote access modes** — localhost / specific IPs / global (with explicit confirmation); MariaDB and PostgreSQL enforce per-database host rules; MongoDB remote access is instance-wide firewall
 - **Per-vhost Terminal and File Manager** — broker drops to the vhost user (`az-vh-…`); path traversal and symlink escape rejected
 - **Supervisor processes** — create/start/stop/logs from UI or CLI
+- **Mail server (opt-in)** — per-domain mailboxes and aliases on Postfix/Dovecot/OpenDKIM, copy-paste MX/SPF/DKIM/DMARC records with live verification, and a smarthost path for the many VPS providers that block outbound port 25. Replacing an existing MTA always requires a typed `REPLACE-MTA`; deleting a mail-enabled vhost requires `DROP-MAIL`
 - **CLI parity** — `azerioid` wraps the same broker path as the dashboard (`origin=cli` in audit)
 - **Tag self-update** — `azerioid panel update` installs semver git tags with rollback on failure
 - **White-label panel domain** — bind the panel to a hostname on `:443`; IP:3169 and SSH tunnel stay as fallback
 
-**Honest limits (v1):** single admin (no multi-user RBAC yet). Node.js is runtime install only. Archive extract is not offered in the File Manager (zip-slip scoped out).
+**Honest limits (v1):** single admin (no multi-user RBAC yet). Node.js is runtime install only. Archive extract is not offered in the File Manager (zip-slip scoped out). Mail ships without webmail, spam filtering, quotas, or catch-all addresses; deliverability still depends on reverse DNS you set at your VPS provider.
 
 ## Supported operating systems
 
@@ -128,11 +130,19 @@ azerioid vhost add --domain=app.example.com --type=php --php=8.4 --root=/data/ww
 azerioid db add --engine=mariadb --name=appdb --user=appdb
 azerioid component install redis
 azerioid process create --vhost=app.example.com --command='node server.js' --name=app-node
+azerioid component install mail   # refuses foreign Exim/Sendmail unless --option=confirm=REPLACE-MTA
+azerioid mail hostname set --hostname=mail.example.com
+azerioid mail domain enable --domain=app.example.com
+azerioid mail mailbox add --address=inbox@app.example.com   # password printed once
+azerioid mail status   # “Direct mail delivery: available” or “…blocked… configure a relay”
+azerioid mail smarthost set --host=smtp.provider.example --port=587 --username=apikey
+# relay password: AZERIOID_RELAY_PASSWORD=… (never argv)
+azerioid mail dns records --domain=app.example.com
 azerioid panel update check
 azerioid panel update apply --confirm
 ```
 
-Secrets (DB passwords, DNS tokens, backup passphrase, TOTP re-auth) go through the environment or one-time stdout — not argv flags. See `azerioid help`.
+Secrets (DB passwords, DNS tokens, backup passphrase, TOTP re-auth, mail/smarthost passwords) go through the environment or one-time stdout — not argv flags. See `azerioid help`.
 
 ## Uninstall
 

@@ -293,6 +293,71 @@ final class Validator
         return $password;
     }
 
+    public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
+
+    public const DROP_MAIL_CONFIRM = 'DROP-MAIL';
+
+    public const MAIL_LOCAL_PART_PATTERN = '/^[a-z0-9]([a-z0-9._+-]{0,62}[a-z0-9])?$/';
+
+    /** Mail hostname is an explicit operator setting (A36 §9.6) — never derived from a vhost. */
+    public static function mailHostname(string $hostname): string
+    {
+        $hostname = strtolower(trim($hostname));
+        if ($hostname === '' || !preg_match(self::DOMAIN_PATTERN, $hostname)) {
+            throw new BrokerException('Mail hostname must be a fully-qualified domain name.', 2);
+        }
+
+        return $hostname;
+    }
+
+    public static function mailLocalPart(string $localPart): string
+    {
+        $localPart = strtolower(trim($localPart));
+        if ($localPart === '' || !preg_match(self::MAIL_LOCAL_PART_PATTERN, $localPart)) {
+            throw new BrokerException('Invalid mailbox name (use letters, digits, dot, underscore, plus, hyphen).', 2);
+        }
+
+        return $localPart;
+    }
+
+    public static function mailAddress(string $address): string
+    {
+        $address = strtolower(trim($address));
+        if (substr_count($address, '@') !== 1) {
+            throw new BrokerException('Invalid email address.', 2);
+        }
+        [$local, $domain] = explode('@', $address, 2);
+
+        return self::mailLocalPart($local) . '@' . self::domain($domain);
+    }
+
+    /** Relay host for a smarthost: FQDN or IPv4. */
+    public static function smarthostHost(string $host): string
+    {
+        $host = strtolower(trim($host));
+        if ($host === '') {
+            throw new BrokerException('Relay host is required.', 2);
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            return $host;
+        }
+
+        return self::domain($host);
+    }
+
+    public static function port(int|string $port): int
+    {
+        if (!is_numeric($port)) {
+            throw new BrokerException('Port must be numeric.', 2);
+        }
+        $value = (int) $port;
+        if ($value < 1 || $value > 65535) {
+            throw new BrokerException('Port must be between 1 and 65535.', 2);
+        }
+
+        return $value;
+    }
+
     public static function typedConfirm(string $got, string $expected): string
     {
         $got = trim($got);

@@ -23,6 +23,7 @@ final class ComponentRepoInstaller
 
         match ($componentId) {
             'mongodb' => $this->installMongoDbRepo($os, $log),
+            'mail' => $this->ensureEpel($os, $log),
             'nodejs' => $this->installNodeSourceRepo(
                 $os,
                 (string) ($options['node_major'] ?? '22'),
@@ -30,6 +31,39 @@ final class ComponentRepoInstaller
             ),
             default => null,
         };
+    }
+
+    /**
+     * OpenDKIM is not in EL base/AppStream, so EPEL is an accepted dependency of
+     * the mail component (ADR A36 §9.5). CRB is enabled alongside it because EPEL
+     * packages routinely build against it.
+     */
+    private function ensureEpel(OsRelease $os, OperationLogger $log): void
+    {
+        if ($os->pkgMgr !== 'dnf') {
+            return;
+        }
+        if (!PackageQuery::isInstalled($this->runtime, 'epel-release', $os->pkgMgr)) {
+            $log->info('Adding EPEL (required for OpenDKIM on EL).');
+            $result = $this->runtime->exec(['/usr/bin/dnf', '-y', 'install', 'epel-release'], null, 300);
+            if (!$result->ok()) {
+                throw new BrokerException('Could not enable EPEL, which OpenDKIM requires on this OS.', 1);
+            }
+        }
+
+        // CRB is "powertools" before EL9; try both and let the wrong one fail quietly.
+        foreach (['crb', 'powertools'] as $repo) {
+            $enabled = $this->runtime->exec(
+                ['/usr/bin/dnf', 'config-manager', '--set-enabled', $repo],
+                null,
+                120
+            );
+            if ($enabled->ok()) {
+                $log->info("Enabled {$repo} repository for EPEL dependencies.");
+                break;
+            }
+        }
+        $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);
     }
 
     private function ensurePhpRepo(OsRelease $os, OperationLogger $log): void

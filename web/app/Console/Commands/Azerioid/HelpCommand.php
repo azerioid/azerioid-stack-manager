@@ -36,6 +36,23 @@ Usage:
   azerioid db access show --engine=<e> --name=<db> [--json]
   azerioid db access set  --engine=<e> --name=<db> --mode=localhost|specific|global [--ip=<ip>[,<ip>...]] [--confirm]
 
+  azerioid mail status [--json]
+  azerioid mail hostname show|set --hostname=<fqdn>
+  azerioid mail domain list|enable|disable --domain=<d> [--drop-mail --confirm=DROP-MAIL]
+  azerioid mail mailbox list [--domain=<d>] [--json]
+  azerioid mail mailbox add|passwd|disable|enable --address=<user@domain>
+  azerioid mail mailbox del --address=<user@domain> [--drop-mail --confirm=DROP-MAIL]
+  azerioid mail alias list|add|del --address=<alias@domain> [--destination=<addr>] [--confirm-external]
+  azerioid mail dns --domain=<d> [--json]
+  azerioid mail dkim rotate --domain=<d>
+  azerioid mail smarthost show|test
+  azerioid mail smarthost set --host=<relay> [--port=587] --username=<u> [--tls=starttls|wrapper]
+  azerioid mail smarthost clear --confirm=CLEAR-RELAY
+  azerioid mail probe | selftest [--json]
+  azerioid mail queue [--flush --confirm=FLUSH-QUEUE] [--json]
+  azerioid mail logs [--lines=100] [--json]
+  azerioid mail test send --from=<mailbox> --to=<addr> [--subject=<s>]
+
   azerioid component list [--json]
   azerioid component install <id> [--version=<v>] [--option=key=value]...
   azerioid component remove  <id>
@@ -68,7 +85,8 @@ Usage:
   azerioid audit tail [--follow] [--lines=50] [--json]
 
 Secrets:
-  DB passwords are generated and printed once — never accepted via argv.
+  DB and mailbox passwords are generated and printed once — never accepted via argv.
+  Mail relay password: set AZERIOID_RELAY_PASSWORD in the environment, or run interactively — never argv.
   DNS-01 API tokens: set AZERIOID_DNS_API_TOKEN (or DNS_API_TOKEN) in the environment — never argv.
   Backup passphrase: saved in the Backups UI, or AZERIOID_BACKUP_PASSPHRASE — never argv.
   TOTP re-auth: AZERIOID_ADMIN_PASSWORD and AZERIOID_TOTP_CODE — never argv.
@@ -77,6 +95,8 @@ Secrets:
   vhost octane is opt-in per vhost and Laravel-only: it runs FrankenPHP under Supervisor on 127.0.0.1:34000-34999
   with Caddy reverse-proxying to it. New PHP vhosts stay on PHP-FPM, and the panel's own runtime never uses Octane.
   Long-lived workers keep constructors and static state between requests — see https://laravel.com/docs/octane.
+  Mail is opt-in and reputation-sensitive: installing over a foreign MTA (including Debian's Exim) needs a typed
+  REPLACE-MTA confirmation, and `mail status` reports whether outbound port 25 is open or blocked by your provider.
   updates apply / backup restore / panel update apply require --confirm. Log rotation is system logrotate (no CLI).
   Panel self-update targets semver git tags (latest by real semver, or --v=<tag>); dirty source trees are refused; failures roll back.
 TXT);

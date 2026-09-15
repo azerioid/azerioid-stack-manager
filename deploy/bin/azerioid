@@ -36,7 +36,7 @@ case "${cmd}" in
     status|version|audit)
         exec "${PHP_BIN}" "${ARTISAN}" "azerioid:${cmd}" "$@"
         ;;
-    updates|backup|totp)
+    updates|backup|totp|mail)
         exec "${PHP_BIN}" "${ARTISAN}" "azerioid:${cmd}" "$@"
         ;;
     vhost|db|component|service|process|panel)

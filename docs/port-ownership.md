@@ -35,6 +35,8 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 6. **Backend engine ports** (8081/8082) are loopback-only and are **not** opened on the host firewall (explicit deny when ufw/firewalld is active). Defense in depth beyond bind address.
 7. **Conflict detection:** registry `conflicts` is for real package clashes (e.g. two database engines), not Caddy vs Nginx on `:80`.
 8. **Octane worker ports** (34000–34999) are loopback-only and allocated per vhost as the first unused, non-listening port in the range. They are never opened on the host firewall, and the panel's own runtime never uses them — Octane is opt-in for site vhosts only (ADR A35).
+9. **Mail ports** (25/465/587/993) are the only managed ports besides 80/443 that are opened to the internet, and only when the opt-in `mail` component is installed. The broker opens them explicitly through `MailFirewall` (ufw or firewalld) at install and closes them at uninstall — never implicitly, and never by leaving the firewall untouched. Plaintext IMAP (143) and POP3 (110/995) are not offered. Port 25 accepts inbound mail but never advertises AUTH; authenticated submission lives on 587/465 only (ADR A36).
+10. **Mail conflicts are replaceable, not fatal.** The `mail` registry entry conflicts with `exim4`/`sendmail`, but the operator resolves that by typing `REPLACE-MTA`, after which the broker removes the foreign MTA and installs Postfix. Every other component still hard-fails on conflict.
 
 ## Component port registry
 
@@ -49,6 +51,10 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 | MongoDB | 27017 | 127.0.0.1 (default); `0.0.0.0` when any DB is remote | tcp | managed (`mongod`) |
 | Redis | 6379 | 127.0.0.1 | tcp | managed (`redis`) |
 | Memcached | 11211 | 127.0.0.1 | tcp | managed (`memcached`) |
+| Postfix SMTP (inbound) | 25 | 0.0.0.0 / :: | tcp | managed (`mail`) |
+| Postfix submissions (implicit TLS) | 465 | 0.0.0.0 / :: | tcp | managed (`mail`) |
+| Postfix submission (STARTTLS) | 587 | 0.0.0.0 / :: | tcp | managed (`mail`) |
+| Dovecot IMAPS | 993 | 0.0.0.0 / :: | tcp | managed (`mail`) |
 | Laravel Octane workers | 34000–34999 | 127.0.0.1 | tcp | managed (`azerioid-supervised`, program `octane-<domain>`) |
 | Vhost terminals (ttyd) | 35000–35999 | 127.0.0.1 | tcp | managed (per-vhost user) |
 

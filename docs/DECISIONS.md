@@ -280,9 +280,22 @@ Constraints:
 
 Port range `34000–34999` is reserved for these workers (see `docs/port-ownership.md`), allocated as the first unused, non-listening port. Default `--max-requests` is 500.
 
-## A36 — Mail server component (future)
+## A36 — Mail server component
 
-**Status:** Under consideration, not implemented  
-**Decision:** A reasonable future registry-driven component (Postfix/Exim + admin interface) following the same pattern as MariaDB/PostgreSQL/Redis. Has its own significant security surface (SPF/DKIM/DMARC, relay-abuse prevention, spam filtering) requiring the same security-first treatment as every other component. No action taken now.
+**Status:** **Implemented on `feature/mail-server`** (2026-09-14) — not merged to `main` until fleet proof is complete. Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
+**Decision:** Ship an opt-in, registry-driven **Postfix + Dovecot + OpenDKIM** component (not Exim) for panel-managed domains, following the same install/managed pattern as MariaDB/PostgreSQL/Redis.
+
+**v1 product (locked):**
+- Vhost-scoped mailboxes/aliases (delete vhost refuses while mail exists unless `--drop-mail` / typed confirm); full **send + receive** (MX → Maildir) together.
+- Explicit **mail hostname** panel setting (A22-style); TLS prefers existing Caddy/Let’s Encrypt material, else dedicated certbot cert.
+- **Direct outbound MX and smarthost/relay are equally first-class.** Live outbound TCP/25 probe (same pattern proven on fleet droplet `64.226.78.176`, where :25 was open) drives mandatory plain-language UI/CLI status: “Direct mail delivery: available” vs “blocked by your provider — configure a relay…”, with a prominent Configure-relay CTA when blocked. DO and peers document default SMTP blocks on newer accounts — most operators will need relay; do not treat smarthost as v1.1.
+- **Smarthost DKIM/DMARC (fleet-proven 2026-09-15, `let.az` → Gmail via Brevo):** Content-modifying relays commonly invalidate the panel’s local OpenDKIM body hash (`dkim=neutral` on the local selector). That is expected, not a signing defect. DMARC still passes when the relay’s own domain-authenticated DKIM aligns with `From:` (`d=<domain>`). In smarthost mode, relay domain authentication is the deliverability signal; UI must not imply local DKIM authenticates mail after smarthost is active. Direct mode still depends on local OpenDKIM end-to-end.
+- CLI **`azerioid mail …`** ships in v1 with full UI parity (including status probe wording).
+- EPEL accepted for OpenDKIM on EL; foreign MTA removal **always** requires typed `REPLACE-MTA` (no Debian-Exim exception); panel Laravel alerts stay on external SMTP unless Settings opt-in; hardcoded ~25 MiB max message, no quota UI.
+- Explicitly out: webmail, spam-filter tuning UI, mailing lists (same scoping discipline as Terminal/File Manager/Node A16).
+
+**Security posture (unique vs other components):** No open relay (`mynetworks` localhost-only; SASL only on submission 587/465, never AUTH on port 25); rate limits + fail2ban on auth ports; open-relay self-test before “healthy”; DNS record generation for SPF/DKIM/DMARC (operator publishes); reputation/blocklisting and provider SMTP filters do not map to Adminer or DB components.
+
+**Spec:** [`docs/mail-server-design.md`](./mail-server-design.md) — all former open questions resolved; ready for implementation.
 
 

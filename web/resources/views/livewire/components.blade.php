@@ -53,6 +53,29 @@
                     </select>
                 </label>
             @endif
+            @if ($pendingInstall === 'mail')
+                <p class="text-sm text-zinc-400">
+                    Mail is opt-in and reputation-sensitive. It opens ports 25, 465, 587, and 993 to the internet.
+                    After install you must set a mail hostname, publish DNS, and set reverse DNS (PTR) at your VPS
+                    provider. Outbound port 25 is blocked by default at many providers — the Mail page will tell you
+                    plainly and offer relay setup.
+                </p>
+                @if ($foreignMtaReasons !== [])
+                    <div class="rounded-md border border-bad/40 bg-bad/10 p-4 space-y-3">
+                        <p class="text-sm text-bad">This host already has a mail transport:</p>
+                        <ul class="list-disc space-y-1 pl-5 text-sm text-zinc-300">
+                            @foreach ($foreignMtaReasons as $reason)
+                                <li>{{ $reason }}</li>
+                            @endforeach
+                        </ul>
+                        <p class="text-sm text-zinc-400">
+                            Installing Postfix removes those packages. Anything relying on the current transport to send
+                            mail will stop working. Type <span class="font-mono text-zinc-200">REPLACE-MTA</span> to proceed.
+                        </p>
+                        <input class="field w-64 font-mono" wire:model="replaceMtaConfirm" placeholder="REPLACE-MTA" autocomplete="off">
+                    </div>
+                @endif
+            @endif
             <div class="flex gap-2">
                 <button type="button" class="btn-primary" wire:click="confirmInstall">Queue install</button>
                 <button type="button" class="btn-ghost" wire:click="cancelInstall">Cancel</button>

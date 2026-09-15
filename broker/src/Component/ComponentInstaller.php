@@ -6,6 +6,11 @@ namespace AzerioidPanel\Broker\Component;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseProvisioner;
+use AzerioidPanel\Broker\Mail\ForeignMta;
+use AzerioidPanel\Broker\Mail\MailFirewall;
+use AzerioidPanel\Broker\Mail\MailPaths;
+use AzerioidPanel\Broker\Mail\MailProvisioner;
+use AzerioidPanel\Broker\Mail\MailState;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
@@ -40,8 +45,16 @@ final class ComponentInstaller
         foreach (is_array($preflight['warnings'] ?? null) ? $preflight['warnings'] : [] as $warning) {
             $log->warn((string) $warning);
         }
-        if (!$preflight['ok']) {
+        // Mail's registry conflicts (exim4, sendmail) describe a replaceable MTA, not a
+        // dead end: the operator resolves them by typing REPLACE-MTA rather than by
+        // uninstalling packages by hand. Everything else still hard-fails on conflict.
+        if (!$preflight['ok'] && !($componentId === 'mail' && $this->onlyMtaConflicts($preflight['issues']))) {
             throw new BrokerException('Preflight failed: ' . implode(' ', $preflight['issues']), 2);
+        }
+
+        $foreignMta = null;
+        if ($componentId === 'mail') {
+            $foreignMta = $this->assertMtaReplacementConfirmed($os, $options, $log);
         }
 
         $unit = trim((string) ($distro['unit_name'] ?? ''));
@@ -52,6 +65,10 @@ final class ComponentInstaller
         try {
             $log->info('Acquired package manager lock.');
             $this->repairDpkgIfNeeded($log, $os);
+            if ($foreignMta !== null && $foreignMta['packages'] !== []) {
+                $log->warn('Removing foreign MTA package(s) after REPLACE-MTA confirmation: ' . implode(', ', $foreignMta['packages']));
+                $this->removePackages($os, $foreignMta['packages'], $log);
+            }
             (new ComponentRepoInstaller($this->runtime))->ensureForInstall($os, $componentId, $options, $log);
             if ($maskDuringInstall) {
                 $log->info("Masking {$unit} during package install so postinst cannot bind :80/:443 (Caddy owns those ports).");
@@ -94,12 +111,24 @@ final class ComponentInstaller
             if ($componentId === 'adminer') {
                 (new AdminerTool($this->config, $this->runtime))->install($definition, $log);
             }
-            ManagedManifest::record($this->runtime, $this->config->managedComponentsPath, $componentId, [
+            if ($componentId === 'mail') {
+                $paths = MailPaths::for($this->runtime, $this->config, $os);
+                (new MailProvisioner($this->config, $this->runtime, $paths))->provision($log);
+                $firewall = (new MailFirewall($this->runtime))->open();
+                $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
+            }
+            $meta = [
                 'unit' => $unit,
                 'packages' => $distro['packages'],
                 'installed_at' => $this->runtime->now(),
-                'options' => $options,
-            ]);
+                'options' => $this->redactInstallOptions($options),
+            ];
+            if ($componentId === 'mail') {
+                // Adopt-vs-fresh is part of the managed record (A36 §2.2 step 3).
+                $meta['adopted_mta'] = $foreignMta !== null && $foreignMta['present'];
+                $meta['replaced_packages'] = $foreignMta['packages'] ?? [];
+            }
+            ManagedManifest::record($this->runtime, $this->config->managedComponentsPath, $componentId, $meta);
             $log->info('Install completed successfully.');
         } finally {
             if ($maskDuringInstall) {
@@ -121,7 +150,7 @@ final class ComponentInstaller
     /**
      * @return array<string, mixed>
      */
-    public function uninstall(string $componentId, string $operationId): array
+    public function uninstall(string $componentId, string $operationId, array $options = []): array
     {
         $componentId = Validator::componentId($componentId);
         $definition = $this->definition($componentId);
@@ -146,6 +175,9 @@ final class ComponentInstaller
         try {
             if ($componentId === 'adminer') {
                 (new AdminerTool($this->config, $this->runtime))->uninstall($log);
+            }
+            if ($componentId === 'mail') {
+                $this->teardownMail($os, $options, $log);
             }
             if ($unit !== '') {
                 $log->info("Stopping unit {$unit}");
@@ -181,6 +213,111 @@ final class ComponentInstaller
             'lines' => $lines,
             'missing' => false,
         ];
+    }
+
+    /**
+     * A36 §9.8: replacing any foreign MTA — including Debian's stock Exim — always
+     * requires a typed REPLACE-MTA. There is no auto-replace convenience exception,
+     * because silently uninstalling the host's mail transport is not recoverable
+     * from the panel.
+     *
+     * @param  array<string,mixed>  $options
+     * @return array{present:bool,packages:list<string>,reasons:list<string>}|null
+     */
+    private function assertMtaReplacementConfirmed(OsRelease $os, array $options, OperationLogger $log): ?array
+    {
+        $detector = new ForeignMta($this->config, $this->runtime, $os);
+        $detected = $detector->detect();
+        if (!$detected['present']) {
+            return null;
+        }
+
+        try {
+            Validator::typedConfirm((string) ($options['confirm'] ?? ''), Validator::REPLACE_MTA_CONFIRM);
+        } catch (BrokerException) {
+            // The generic confirmation error leaves the operator with nothing to act on;
+            // say what was found and what to type.
+            throw new BrokerException(
+                implode(' ', $detected['reasons'])
+                . ' Installing the mail component replaces it. Confirm with '
+                . Validator::REPLACE_MTA_CONFIRM . ' to proceed.',
+                3
+            );
+        }
+        foreach ($detected['reasons'] as $reason) {
+            $log->warn('Existing mail transport detected: ' . $reason);
+        }
+
+        return [
+            'present' => true,
+            'packages' => $detector->packagesToRemove(),
+            'reasons' => $detected['reasons'],
+        ];
+    }
+
+    /**
+     * Mail removal closes the public ports and stops the auxiliary units, but keeps
+     * /var/vmail unless the operator explicitly drops it — operator data survives an
+     * uninstall here for the same reason /data/www does (A29).
+     *
+     * @param array<string,mixed> $options
+     */
+    private function teardownMail(OsRelease $os, array $options, OperationLogger $log): void
+    {
+        $firewall = (new MailFirewall($this->runtime))->close();
+        $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
+
+        foreach (['dovecot', 'opendkim'] as $unit) {
+            $this->runtime->exec(['/usr/bin/systemctl', 'disable', '--now', $unit], null, 60);
+        }
+
+        $paths = MailPaths::for($this->runtime, $this->config, $os);
+        $vmailRoot = $paths->vmailRoot();
+        $dropMail = in_array(strtolower(trim((string) ($options['drop_mail'] ?? ''))), ['1', 'true', 'yes', 'on'], true)
+            || ($options['drop_mail'] ?? false) === true;
+        if (!$dropMail) {
+            $log->info("Retaining mailbox data in {$vmailRoot} (pass drop_mail to remove it).");
+
+            return;
+        }
+        Validator::typedConfirm((string) ($options['confirm'] ?? ''), Validator::DROP_MAIL_CONFIRM);
+        $log->warn("Removing all mailbox data under {$vmailRoot} after DROP-MAIL confirmation.");
+        $this->runtime->exec(['/bin/rm', '-rf', $vmailRoot], null, 300);
+        foreach ([MailState::STATE_PATH, MailState::PASSDB_PATH] as $path) {
+            if ($this->runtime->fileExists($path)) {
+                $this->runtime->deleteFile($path);
+            }
+        }
+    }
+
+    /** @param list<string> $issues */
+    private function onlyMtaConflicts(array $issues): bool
+    {
+        if ($issues === []) {
+            return false;
+        }
+        foreach ($issues as $issue) {
+            if (!str_starts_with((string) $issue, 'Conflicts with ')) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Install options land in the managed manifest, which is not a secret store.
+     *
+     * @param  array<string,mixed>  $options
+     * @return array<string,mixed>
+     */
+    private function redactInstallOptions(array $options): array
+    {
+        foreach (['confirm', 'password', 'token', 'secret'] as $key) {
+            unset($options[$key]);
+        }
+
+        return $options;
     }
 
     /** @return array<string, mixed> */
