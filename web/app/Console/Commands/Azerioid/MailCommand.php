@@ -321,6 +321,10 @@ class MailCommand extends Command
             }
             $this->line('Outbound mode: ' . (string) ($data['delivery_mode'] ?? 'direct')
                 . ' (SPF below matches this mode).');
+            if ((string) ($data['delivery_mode'] ?? 'direct') === 'smarthost') {
+                $this->line('Smarthost: receivers authenticate via the relay’s domain DKIM/SPF once their DNS is published.');
+                $this->line('Local OpenDKIM may fail body-hash checks if the relay modifies content — that is expected, not a signing bug.');
+            }
             $this->renderRecords((array) ($data['records'] ?? []));
 
             return self::SUCCESS;

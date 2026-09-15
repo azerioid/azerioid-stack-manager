@@ -125,7 +125,9 @@ final class MailDns
                 'type' => 'TXT',
                 'name' => $dkimSelector . '._domainkey.' . $domain,
                 'value' => $dkimValue,
-                'purpose' => 'DKIM — public key for the signature this server adds to outbound mail.',
+                'purpose' => $smarthost !== null
+                    ? 'DKIM — public key for this server’s local signature (used in direct mode; a content-modifying relay may break body-hash verification — publish the relay’s own domain DKIM/branding records for deliverability).'
+                    : 'DKIM — public key for the signature this server adds to outbound mail.',
                 'required' => true,
             ];
         }

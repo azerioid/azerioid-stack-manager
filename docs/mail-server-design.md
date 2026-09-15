@@ -111,10 +111,12 @@ Google/Yahoo bulk-sender rules make SPF+DKIM+DMARC table-stakes for deliverabili
 
 | Mode | When | Behavior |
 |------|------|----------|
-| **Direct** | Live outbound TCP/25 probe succeeds (connect + optional SMTP banner to a well-known MX, e.g. `gmail-smtp-in.l.google.com:25`) | Postfix delivers to recipient MX on :25 as usual |
-| **Smarthost / relay** | Probe fails **or** operator chooses relay anyway | `relayhost` + SMTP AUTH (SASL) to an external provider (SES, SendGrid, Mailgun, generic SMTP). Credentials stored like other panel secrets (not argv, not audit bodies) |
+| **Direct** | Live outbound TCP/25 probe succeeds (connect + optional SMTP banner to a well-known MX, e.g. `gmail-smtp-in.l.google.com:25`) | Postfix delivers to recipient MX on :25 as usual; the panel’s local OpenDKIM signature is what receivers verify for DKIM alignment |
+| **Smarthost / relay** | Probe fails **or** operator chooses relay anyway | `relayhost` + SMTP AUTH (SASL) to an external provider (SES, SendGrid, Mailgun, Brevo, generic SMTP). Credentials stored like other panel secrets (not argv, not audit bodies) |
 
 Evidence informing this (2026-09-14 fleet probe): outbound :25 was **open** on Ubuntu droplet `64.226.78.176`, while [DigitalOcean’s docs](https://docs.digitalocean.com/support/why-is-smtp-blocked/) state 25/465/587 are **blocked by default** on Droplets — so openness on one tested host must not be generalized. Most real installs will need relay; the UI must treat that as the common case, not an edge case.
+
+**Smarthost DKIM / DMARC (proven 2026-09-15 on `let.az` → Gmail via Brevo):** Many transactional relays modify the message after local signing (tracking pixels, List-Unsubscribe, footers, reformatting). When that happens, the panel’s own OpenDKIM body-hash typically fails at the destination (`dkim=neutral` / fail for the local selector) — **expected for a content-modifying relay, not a signing bug**. DMARC can still **pass** if the relay’s own domain-authenticated DKIM signature aligns with the `From:` domain (`d=<your domain>`), which reputable providers support once their domain-authentication / branding DNS is complete. DMARC requires SPF *or* DKIM to pass with alignment — not both, and not specifically the panel’s local signature. In smarthost mode, **relay domain authentication is what matters for deliverability**; keep publishing the panel’s DKIM TXT for direct mode and for relays that preserve the body, but do not treat a failed local signature after relay mutation as a defect. Direct mode continues to rely on local OpenDKIM end-to-end as originally designed.
 
 ---
 
@@ -313,7 +315,7 @@ Not wireframes — feature list at the same fidelity as prior component proposal
    Counts + deferred sample; “Flush deferred” with confirm; link/snippet of recent mail log (PII-aware truncation of message bodies).
 
 8. **Test send**  
-   Modal: from mailbox, to address, subject — exercises the **active** outbound path (direct or smarthost) and still DKIM-signs when local signing applies.
+   Modal: from mailbox, to address, subject — exercises the **active** outbound path (direct or smarthost). Direct mode: local OpenDKIM authenticates the message. Smarthost mode: the relay’s domain-authenticated DKIM (after completing the provider’s DNS setup) is what receivers use for DMARC; the panel may still add a local signature, but it can legitimately fail body-hash verification if the relay modifies content (§3.5).
 
 ### 7.3 What the UI must say up front
 
@@ -340,6 +342,8 @@ This is **core v1 UX**, not a buried warning. Implementation must not downgrade 
 
 **CLI:** `azerioid mail status` reports the same direct-vs-blocked wording (and whether a smarthost is configured), suitable for operators who never open the Mail page.
 
+**Smarthost authentication messaging:** When a relay is configured, health-strip / test-send copy must **not** imply that “your” (local OpenDKIM) signature is what authenticates mail at the destination. Say that the **relay’s** domain authentication carries DMARC once the provider’s DKIM/SPF/branding records are published; note that local signatures may show `neutral`/fail after a content-modifying relay without indicating a panel defect (§3.5). Direct-mode copy may still speak to local DKIM.
+
 ---
 
 ## 8. Implementation phasing (after this approved spec)
@@ -353,7 +357,7 @@ Suggested engineering slices for the future implementation task:
 | M2 | Hardened Postfix/Dovecot baseline + open-relay self-test + **outbound-25 probe** + mail hostname setting + TLS material selection |
 | M3 | Virtual domain/mailbox/alias maps (vhost-scoped) + IMAPS/submission + inbound Maildir |
 | M4 | OpenDKIM + DNS records UI/CLI (mode-aware SPF) |
-| M5 | **Smarthost first-class path** + health-strip/CLI messaging both states + real test send via external relay |
+| M5 | **Smarthost first-class path** + health-strip/CLI messaging both states + real test send via external relay; copy distinguishes relay DKIM (deliverability) from local OpenDKIM (may fail after content-modifying relays) |
 | M6 | Queue/logs + fleet proof (Ubuntu, Debian, Alma, Rocky, CentOS) |
 | M7 | Docs (README + port-ownership) + PHPUnit/broker tests + Settings opt-in for panel alerts via local mail |
 
@@ -385,9 +389,9 @@ The implementation task is done when:
 - [ ] Unauthenticated external relay attempt fails; submission without auth fails; SASL+TLS submission succeeds.
 - [ ] Mailbox + alias CRUD works (vhost-scoped); IMAPS login works; inbound + outbound round-trip for an enabled domain with correct DNS (direct path where :25 is open).
 - [ ] Explicit mail hostname setting required; TLS prefers Caddy/LE material then certbot fallback.
-- [ ] Panel shows accurate SPF/DKIM/DMARC/MX guidance; DKIM signature present on outbound test where local signing applies.
+- [ ] Panel shows accurate SPF/DKIM/DMARC/MX guidance. **Direct mode:** local OpenDKIM signature verifies end-to-end on an outbound test. **Smarthost mode:** relay domain authentication (provider DKIM aligned with `From:`) is the acceptance bar for deliverability/DMARC; a local OpenDKIM body-hash `neutral`/fail after a content-modifying relay is expected and not a failure (§3.5). UI/CLI copy must not claim local DKIM is what authenticates mail once smarthost is active.
 - [ ] **Outbound-25 probe** correctly detects open and blocked states; UI health strip + `azerioid mail status` show the mandated plain-language copy; blocked state shows a prominent **Configure relay** CTA. Proven on at least one host with :25 open and one blocked (or simulated block) so both UI states are verified.
-- [ ] **Smarthost/relay** works end-to-end (real test send via a real external relay provider) as a first-class path — not a fallback hack.
+- [ ] **Smarthost/relay** works end-to-end (real test send via a real external relay provider) as a first-class path — not a fallback hack. Proven path may show DMARC pass via the relay’s aligned DKIM even when the panel’s local selector fails body-hash verification.
 - [ ] Vhost delete refuses while mailboxes exist unless `--drop-mail` / typed confirm.
 - [ ] Panel alert mail remains on external SMTP unless Settings opt-in.
 - [ ] Max message size default applied; no quota UI.

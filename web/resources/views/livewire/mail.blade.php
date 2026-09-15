@@ -218,6 +218,9 @@
             <p class="text-sm text-zinc-400">
                 Publish these at your DNS provider. SPF reflects your current outbound path, so it changes if you add or
                 remove a relay. PTR is set at your VPS provider, not in your DNS zone.
+                @if (($status['delivery_mode'] ?? 'direct') === 'smarthost')
+                    With a relay active, also complete the provider’s domain-authentication / branding DNS — that is what receivers use for DMARC. The panel’s local DKIM TXT still matters for direct mode; it may not verify at the destination if the relay modifies message content.
+                @endif
             </p>
             <table class="w-full text-sm">
                 <thead class="text-left font-mono text-xs uppercase text-zinc-500">
@@ -401,7 +404,12 @@
         </form>
         <p class="text-xs text-zinc-500">
             The test exercises whichever outbound path is active right now
-            ({{ $status['delivery_mode'] ?? 'direct' }}) and is DKIM-signed when local signing applies.
+            ({{ $status['delivery_mode'] ?? 'direct' }}).
+            @if (($status['delivery_mode'] ?? 'direct') === 'smarthost')
+                With a relay, receivers authenticate via the provider’s domain DKIM/SPF after you finish their DNS setup — not the panel’s local OpenDKIM signature (which can fail body-hash checks if the relay modifies the message).
+            @else
+                In direct mode, the panel’s local OpenDKIM signature is what receivers verify.
+            @endif
         </p>
     </section>
     @endif
