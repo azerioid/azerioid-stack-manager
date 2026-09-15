@@ -8,7 +8,9 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\AcmeStatusHint;
 use AzerioidPanel\Broker\Tls\CertProbe;
 use AzerioidPanel\Broker\Tls\TlsMode;
+use AzerioidPanel\Broker\Vhost\AppRuntime;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
+use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Web\WebServers;
 
 final class VhostList
@@ -135,31 +137,63 @@ final class VhostList
      */
     private static function withRuntimeFields(Runtime $runtime, array $vhost): array
     {
-        $appRuntime = OctaneManager::normalizeRuntime($vhost['runtime'] ?? OctaneManager::RUNTIME_FPM);
+        $appRuntime = AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM);
         $vhost['runtime'] = $appRuntime;
-        $vhost['octane_port'] = $appRuntime === OctaneManager::RUNTIME_OCTANE
+        $vhost['octane_port'] = $appRuntime === AppRuntime::OCTANE
             ? ($vhost['octane_port'] ?? null)
             : null;
-        $vhost['octane_max_requests'] = $appRuntime === OctaneManager::RUNTIME_OCTANE
+        $vhost['octane_max_requests'] = $appRuntime === AppRuntime::OCTANE
             ? ($vhost['octane_max_requests'] ?? OctaneManager::DEFAULT_MAX_REQUESTS)
+            : null;
+        $vhost['pm2_port'] = $appRuntime === AppRuntime::PM2
+            ? ($vhost['pm2_port'] ?? null)
+            : null;
+        $vhost['pm2_instances'] = $appRuntime === AppRuntime::PM2
+            ? ($vhost['pm2_instances'] ?? Pm2Manager::DEFAULT_INSTANCES)
+            : null;
+        $vhost['pm2_entry'] = $appRuntime === AppRuntime::PM2
+            ? ($vhost['pm2_entry'] ?? null)
             : null;
 
         $domain = (string) ($vhost['domain'] ?? '');
         $vhost['octane_program'] = null;
         $vhost['laravel_app'] = false;
         $vhost['laravel_app_detail'] = null;
-        if ($domain === '' || (string) ($vhost['type'] ?? '') !== 'php' || !empty($vhost['readonly'])) {
+        $vhost['pm2_program'] = null;
+        $vhost['node_app'] = false;
+        $vhost['node_app_detail'] = null;
+
+        if ($domain === '' || !empty($vhost['readonly'])) {
+            return $vhost;
+        }
+
+        $type = (string) ($vhost['type'] ?? '');
+        if ($type === 'php') {
+            try {
+                $vhost['octane_program'] = OctaneManager::programName($domain);
+            } catch (\Throwable) {
+                $vhost['octane_program'] = null;
+            }
+            $detected = OctaneManager::detectLaravel($runtime, $vhost['root'] ?? null);
+            $vhost['laravel_app'] = $detected['laravel'];
+            $vhost['laravel_app_detail'] = $detected['detail'];
+
+            return $vhost;
+        }
+
+        $root = (string) ($vhost['root'] ?? '');
+        if ($root === '') {
             return $vhost;
         }
 
         try {
-            $vhost['octane_program'] = OctaneManager::programName($domain);
+            $vhost['pm2_program'] = Pm2Manager::programName($domain);
         } catch (\Throwable) {
-            $vhost['octane_program'] = null;
+            $vhost['pm2_program'] = null;
         }
-        $detected = OctaneManager::detectLaravel($runtime, $vhost['root'] ?? null);
-        $vhost['laravel_app'] = $detected['laravel'];
-        $vhost['laravel_app_detail'] = $detected['detail'];
+        $detected = Pm2Manager::detectNodeApp($runtime, $root);
+        $vhost['node_app'] = $detected['node'];
+        $vhost['node_app_detail'] = $detected['detail'];
 
         return $vhost;
     }

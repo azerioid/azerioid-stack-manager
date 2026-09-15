@@ -223,16 +223,7 @@ final class OctaneManager
 
     public static function normalizeRuntime(mixed $value): string
     {
-        $raw = strtolower(trim((string) $value));
-        if ($raw === '') {
-            return self::RUNTIME_FPM;
-        }
-
-        return match ($raw) {
-            self::RUNTIME_FPM, 'php-fpm', 'traditional' => self::RUNTIME_FPM,
-            self::RUNTIME_OCTANE, 'frankenphp' => self::RUNTIME_OCTANE,
-            default => throw new BrokerException('runtime must be fpm or octane.', 2),
-        };
+        return AppRuntime::normalize($value);
     }
 
     public static function validatePort(mixed $value): int

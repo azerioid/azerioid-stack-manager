@@ -12,7 +12,9 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
+use AzerioidPanel\Broker\Vhost\AppRuntime;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
+use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostRegistration;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
@@ -217,6 +219,9 @@ final class CaddyDriver implements WebServerDriver
             $spec['runtime'],
             $spec['octane_port'],
             $spec['octane_max_requests'],
+            $spec['pm2_port'],
+            $spec['pm2_instances'],
+            $spec['pm2_entry'],
         );
 
         $tmp = $confPath . '.lacmp-tmp';
@@ -265,6 +270,9 @@ final class CaddyDriver implements WebServerDriver
             'runtime' => $spec['runtime'],
             'octane_port' => $spec['octane_port'],
             'octane_max_requests' => $spec['octane_max_requests'],
+            'pm2_port' => $spec['pm2_port'],
+            'pm2_instances' => $spec['pm2_instances'],
+            'pm2_entry' => $spec['pm2_entry'],
         ]));
 
         return [
@@ -280,6 +288,9 @@ final class CaddyDriver implements WebServerDriver
             'runtime' => $spec['runtime'],
             'octane_port' => $spec['octane_port'],
             'octane_max_requests' => $spec['octane_max_requests'],
+            'pm2_port' => $spec['pm2_port'],
+            'pm2_instances' => $spec['pm2_instances'],
+            'pm2_entry' => $spec['pm2_entry'],
             'source' => $confPath,
             'apply' => $applied,
         ];
@@ -366,18 +377,26 @@ final class CaddyDriver implements WebServerDriver
         ?string $tlsCert = null,
         ?string $tlsKey = null,
         string $engine = VhostEngine::CADDY,
-        string $appRuntime = OctaneManager::RUNTIME_FPM,
+        string $appRuntime = AppRuntime::FPM,
         ?int $octanePort = null,
         ?int $octaneMaxRequests = null,
+        ?int $pm2Port = null,
+        ?int $pm2Instances = null,
+        ?string $pm2Entry = null,
     ): string {
         $engine = VhostEngine::normalize($engine);
         if ($type === 'proxy') {
             $engine = VhostEngine::CADDY;
         }
+        $normalizedRuntime = AppRuntime::normalize($appRuntime);
         $octane = $type === 'php'
             && $octanePort !== null
             && !VhostEngine::isBackend($engine)
-            && OctaneManager::normalizeRuntime($appRuntime) === OctaneManager::RUNTIME_OCTANE;
+            && $normalizedRuntime === AppRuntime::OCTANE;
+        $pm2 = $type === 'proxy'
+            && $pm2Port !== null
+            && !VhostEngine::isBackend($engine)
+            && $normalizedRuntime === AppRuntime::PM2;
         $mode = TlsMode::effective($tlsMode, $domain);
         if ($mode === TlsMode::OFF) {
             $siteLabel = "http://{$domain}";
@@ -400,6 +419,14 @@ final class CaddyDriver implements WebServerDriver
             $maxRequests = $octaneMaxRequests ?? OctaneManager::DEFAULT_MAX_REQUESTS;
             $runtimePart = ' runtime=' . OctaneManager::RUNTIME_OCTANE
                 . " octane_port={$octanePort} octane_max_requests={$maxRequests}";
+        } elseif ($pm2) {
+            $instances = $pm2Instances ?? Pm2Manager::DEFAULT_INSTANCES;
+            $runtimePart = ' runtime=' . AppRuntime::PM2
+                . " pm2_port={$pm2Port} pm2_instances={$instances}";
+            $entry = is_string($pm2Entry) ? (preg_replace('/\s+/', '', trim($pm2Entry)) ?? '') : '';
+            if ($entry !== '') {
+                $runtimePart .= " pm2_entry={$entry}";
+            }
         }
         $managed = "# azerioid-managed engine={$engine} type={$type}{$phpPart}{$rootPart}{$runtimePart}\n";
 
@@ -423,6 +450,17 @@ PROXY;
             // FrankenPHP worker on loopback — same forwarding headers as a type=proxy site.
             $proxyBlock = <<<PROXY
     reverse_proxy 127.0.0.1:{$octanePort} {
+        header_up Host {http.request.host}
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+PROXY;
+        } elseif ($pm2) {
+            $proxyBlock = <<<PROXY
+    reverse_proxy 127.0.0.1:{$pm2Port} {
         header_up Host {http.request.host}
         header_up X-Forwarded-For {http.request.remote.host}
         header_up X-Forwarded-Proto {http.request.scheme}
@@ -472,12 +510,20 @@ PROXY;
 EOF;
     }
 
-    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string,engine:string,runtime:string,octane_port:?int,octane_max_requests:?int} */
+    /** @return array{root:string,type:string,php_version:?string,upstream:?string,tls_mode:string,tls_cert:?string,tls_key:?string,engine:string,runtime:string,octane_port:?int,octane_max_requests:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string} */
     private function mergeEditSpec(Runtime $runtime, Config $config, string $domain, array $parsed, array $changes): array
     {
         $type = (string) ($parsed['type'] ?? 'static');
+        if (isset($changes['type'])) {
+            $newType = (string) $changes['type'];
+            if (!in_array($newType, ['php', 'static', 'proxy'], true)) {
+                throw new BrokerException('type must be php, static, or proxy.', 2);
+            }
+            $type = $newType;
+        }
         $root = (string) ($changes['root'] ?? ($parsed['root'] ?? ''));
-        if ($root === '' && $type !== 'proxy') {
+        $pendingRuntime = AppRuntime::normalize($changes['runtime'] ?? ($parsed['runtime'] ?? AppRuntime::FPM));
+        if ($root === '' && ($type !== 'proxy' || $pendingRuntime === AppRuntime::PM2)) {
             throw new BrokerException('Docroot is required for this vhost.', 2);
         }
         if (isset($changes['root']) && $root !== '' && !$runtime->isDir($root)) {
@@ -518,35 +564,70 @@ EOF;
             $engine = VhostEngine::CADDY;
         }
 
-        [$appRuntime, $octanePort, $octaneMaxRequests] = $this->mergeRuntimeSpec($domain, $type, $engine, $parsed, $changes);
+        $runtimeSpec = $this->mergeRuntimeSpec($domain, $type, $engine, $parsed, $changes);
 
         return [
             'root' => $root,
             'type' => $type,
             'php_version' => $type === 'php' ? $phpVersion : null,
-            'upstream' => $type === 'proxy' ? $upstream : null,
+            'upstream' => $type === 'proxy' && $runtimeSpec['runtime'] !== AppRuntime::PM2 ? $upstream : null,
             'tls_mode' => $tlsMode,
             'tls_cert' => is_string($tlsCert) ? $tlsCert : null,
             'tls_key' => is_string($tlsKey) ? $tlsKey : null,
             'engine' => $engine,
-            'runtime' => $appRuntime,
-            'octane_port' => $octanePort,
-            'octane_max_requests' => $octaneMaxRequests,
+            'runtime' => $runtimeSpec['runtime'],
+            'octane_port' => $runtimeSpec['octane_port'],
+            'octane_max_requests' => $runtimeSpec['octane_max_requests'],
+            'pm2_port' => $runtimeSpec['pm2_port'],
+            'pm2_instances' => $runtimeSpec['pm2_instances'],
+            'pm2_entry' => $runtimeSpec['pm2_entry'],
         ];
     }
 
     /**
      * @param  array<string,mixed>  $parsed
      * @param  array<string,mixed>  $changes
-     * @return array{0:string,1:?int,2:?int}
+     * @return array{runtime:string,octane_port:?int,octane_max_requests:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string}
      */
     private function mergeRuntimeSpec(string $domain, string $type, string $engine, array $parsed, array $changes): array
     {
-        $appRuntime = OctaneManager::normalizeRuntime(
-            $changes['runtime'] ?? ($parsed['runtime'] ?? OctaneManager::RUNTIME_FPM)
+        $empty = [
+            'runtime' => AppRuntime::FPM,
+            'octane_port' => null,
+            'octane_max_requests' => null,
+            'pm2_port' => null,
+            'pm2_instances' => null,
+            'pm2_entry' => null,
+        ];
+        $appRuntime = AppRuntime::normalize(
+            $changes['runtime'] ?? ($parsed['runtime'] ?? AppRuntime::FPM)
         );
-        if ($appRuntime !== OctaneManager::RUNTIME_OCTANE) {
-            return [OctaneManager::RUNTIME_FPM, null, null];
+
+        if ($appRuntime === AppRuntime::PM2) {
+            if ($type !== 'proxy') {
+                throw new BrokerException('PM2 is only available for proxy vhosts.', 3);
+            }
+            if (VhostEngine::isBackend($engine)) {
+                throw new BrokerException(
+                    "PM2 requires the Caddy engine; {$domain} uses the {$engine} backend engine.",
+                    3
+                );
+            }
+
+            return [
+                'runtime' => AppRuntime::PM2,
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'pm2_port' => Pm2Manager::validatePort($changes['pm2_port'] ?? ($parsed['pm2_port'] ?? null)),
+                'pm2_instances' => Pm2Manager::validateInstances(
+                    $changes['pm2_instances'] ?? ($parsed['pm2_instances'] ?? Pm2Manager::DEFAULT_INSTANCES)
+                ),
+                'pm2_entry' => self::sanitizePm2Entry($changes['pm2_entry'] ?? ($parsed['pm2_entry'] ?? null)),
+            ];
+        }
+
+        if ($appRuntime !== AppRuntime::OCTANE) {
+            return $empty;
         }
         if ($type !== 'php') {
             throw new BrokerException('Octane is only available for PHP vhosts.', 3);
@@ -559,19 +640,35 @@ EOF;
         }
 
         return [
-            OctaneManager::RUNTIME_OCTANE,
-            OctaneManager::validatePort($changes['octane_port'] ?? ($parsed['octane_port'] ?? null)),
-            OctaneManager::validateMaxRequests(
+            'runtime' => AppRuntime::OCTANE,
+            'octane_port' => OctaneManager::validatePort($changes['octane_port'] ?? ($parsed['octane_port'] ?? null)),
+            'octane_max_requests' => OctaneManager::validateMaxRequests(
                 $changes['octane_max_requests'] ?? ($parsed['octane_max_requests'] ?? OctaneManager::DEFAULT_MAX_REQUESTS)
             ),
+            'pm2_port' => null,
+            'pm2_instances' => null,
+            'pm2_entry' => null,
         ];
     }
 
-    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string,runtime:string,octane_port:?int} */
+    private static function sanitizePm2Entry(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+        $entry = preg_replace('/\s+/', '', trim($value)) ?? '';
+        if ($entry === '') {
+            return null;
+        }
+
+        return $entry;
+    }
+
+    /** @return array{root:?string,php_version:?string,tls:bool,tls_mode:string,type:string,engine:string,runtime:string,octane_port:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string} */
     private function editSnapshot(array $parsed): array
     {
         $mode = (string) ($parsed['tls_mode'] ?? ( ! empty($parsed['tls']) ? TlsMode::AUTO : TlsMode::OFF));
-        $appRuntime = OctaneManager::normalizeRuntime($parsed['runtime'] ?? OctaneManager::RUNTIME_FPM);
+        $appRuntime = AppRuntime::normalize($parsed['runtime'] ?? AppRuntime::FPM);
 
         return [
             'root' => $parsed['root'] ?? null,
@@ -581,8 +678,17 @@ EOF;
             'type' => (string) ($parsed['type'] ?? 'static'),
             'engine' => VhostEngine::normalize($parsed['engine'] ?? VhostEngine::CADDY),
             'runtime' => $appRuntime,
-            'octane_port' => $appRuntime === OctaneManager::RUNTIME_OCTANE
+            'octane_port' => $appRuntime === AppRuntime::OCTANE
                 ? ($parsed['octane_port'] ?? null)
+                : null,
+            'pm2_port' => $appRuntime === AppRuntime::PM2
+                ? ($parsed['pm2_port'] ?? null)
+                : null,
+            'pm2_instances' => $appRuntime === AppRuntime::PM2
+                ? ($parsed['pm2_instances'] ?? null)
+                : null,
+            'pm2_entry' => $appRuntime === AppRuntime::PM2
+                ? ($parsed['pm2_entry'] ?? null)
                 : null,
         ];
     }

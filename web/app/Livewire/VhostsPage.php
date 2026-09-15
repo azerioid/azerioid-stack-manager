@@ -36,6 +36,10 @@ class VhostsPage extends Component
     public bool $showForm = false;
     public ?string $octaneTarget = null;
     public string $octaneMaxRequests = '500';
+    public ?string $pm2Target = null;
+    public ?string $pm2ScaleTarget = null;
+    public string $pm2Instances = '1';
+    public string $pm2Entry = '';
 
     public ?string $editingDomain = null;
     public string $editRoot = '';
@@ -343,6 +347,165 @@ class VhostsPage extends Component
             $this->error = $this->operatorMessage($e->getMessage());
         }
         $this->reload($broker);
+    }
+
+    public function askPm2(string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->showForm = false;
+        $this->pm2Target = $domain;
+        $this->pm2ScaleTarget = null;
+        $this->pm2Instances = '1';
+        $this->pm2Entry = '';
+    }
+
+    public function askPm2Scale(string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->pm2Target = null;
+        $this->pm2ScaleTarget = $domain;
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $domain) {
+                $this->pm2Instances = (string) ($v['pm2_instances'] ?? '1');
+
+                return;
+            }
+        }
+        $this->pm2Instances = '1';
+    }
+
+    public function cancelPm2(): void
+    {
+        $this->reset('pm2Target', 'pm2ScaleTarget', 'pm2Instances', 'pm2Entry');
+        $this->pm2Instances = '1';
+    }
+
+    public function enablePm2(BrokerClient $broker): void
+    {
+        $domain = (string) $this->pm2Target;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $this->assertPm2Candidate($domain);
+            $input = [
+                'instances' => trim($this->pm2Instances),
+            ];
+            $entry = trim($this->pm2Entry);
+            if ($entry !== '') {
+                $input['entry'] = $entry;
+            }
+            $res = $broker->call('vhost.pm2.enable', [$domain], $input, 900);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $port = is_array($res->data) ? ($res->data['pm2_port'] ?? '?') : '?';
+                $this->flash = "PM2 is now serving {$domain} from 127.0.0.1:{$port}. Deploys need a worker reload.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->cancelPm2();
+        $this->reload($broker);
+    }
+
+    public function disablePm2(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.pm2.disable', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $this->flash = "{$domain} no longer runs under PM2.";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function reloadPm2(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.pm2.reload', [$domain], [], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $method = is_array($res->data) ? (string) ($res->data['method'] ?? 'pm2-reload') : 'pm2-reload';
+                $this->flash = "Reloaded PM2 workers for {$domain} ({$method}).";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function scalePm2(BrokerClient $broker): void
+    {
+        $domain = (string) $this->pm2ScaleTarget;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.pm2.scale', [$domain], [
+                'instances' => trim($this->pm2Instances),
+            ], 300);
+            if (! $res->ok) {
+                $this->error = $this->operatorMessage((string) $res->error);
+            } else {
+                $n = is_array($res->data) ? ($res->data['pm2_instances'] ?? '?') : '?';
+                $this->flash = "Scaled PM2 on {$domain} to {$n} worker(s).";
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->cancelPm2();
+        $this->reload($broker);
+    }
+
+    /** PM2 only runs Node apps on proxy/static Caddy vhosts — never trust the UI-hidden button. */
+    private function assertPm2Candidate(string $domain): void
+    {
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            $type = (string) ($v['type'] ?? '');
+            if ($type === 'php') {
+                throw new \RuntimeException(
+                    'PM2 is for Node apps. This is a PHP vhost — use Octane for Laravel, or create a separate Node site.'
+                );
+            }
+            if (! in_array($type, ['proxy', 'static'], true)) {
+                throw new \RuntimeException('PM2 is only available for proxy or static vhosts with a Node entrypoint.');
+            }
+            if (in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new \RuntimeException(
+                    "PM2 requires the Caddy engine. Switch {$domain} to engine=caddy first."
+                );
+            }
+            $runtime = (string) ($v['runtime'] ?? 'fpm');
+            if (in_array($runtime, ['pm2', 'octane'], true)) {
+                throw new \RuntimeException("PM2 cannot be enabled while {$domain} uses runtime={$runtime}.");
+            }
+            if (empty($v['node_app'])) {
+                throw new \RuntimeException(
+                    "{$domain} does not look like a Node application, so PM2 cannot run it. "
+                    .(string) ($v['node_app_detail'] ?? '')
+                );
+            }
+
+            return;
+        }
+        throw new \RuntimeException("{$domain} is not a mutable panel vhost.");
     }
 
     /** Octane only runs Laravel — never trust the UI-hidden button. */

@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker;
 
+use AzerioidPanel\Broker\Vhost\AppRuntime;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Web\ManagedVhost;
 use AzerioidPanel\Broker\Web\VhostEngine;
@@ -27,6 +28,9 @@ final class CaddyParser
      *   runtime: string,
      *   octane_port: ?int,
      *   octane_max_requests: ?int,
+     *   pm2_port: ?int,
+     *   pm2_instances: ?int,
+     *   pm2_entry: ?string,
      *   readonly: bool,
      *   source: string
      * }
@@ -59,6 +63,7 @@ final class CaddyParser
         $hasTlsBlock = $hasTlsInternal || ($tlsCert !== null);
 
         $octane = ($managed['runtime'] ?? null) === OctaneManager::RUNTIME_OCTANE;
+        $pm2 = ($managed['runtime'] ?? null) === AppRuntime::PM2;
 
         $type = 'static';
         if (VhostEngine::isBackend($engine)) {
@@ -72,6 +77,12 @@ final class CaddyParser
         } elseif ($octane) {
             // Octane sites render reverse_proxy to the loopback worker but stay type=php.
             $type = $managed['type'] ?? 'php';
+            if (isset($managed['root']) && $managed['root'] !== '') {
+                $root = $managed['root'];
+            }
+        } elseif ($pm2) {
+            // PM2 sites render reverse_proxy to the loopback worker but stay type=proxy with root in managed comment.
+            $type = $managed['type'] ?? 'proxy';
             if (isset($managed['root']) && $managed['root'] !== '') {
                 $root = $managed['root'];
             }
@@ -119,9 +130,16 @@ final class CaddyParser
             'tls_key' => $tlsKey,
             'reverse_proxy' => $proxy,
             'engine' => $engine,
-            'runtime' => $octane ? OctaneManager::RUNTIME_OCTANE : OctaneManager::RUNTIME_FPM,
+            'runtime' => match (true) {
+                $octane => OctaneManager::RUNTIME_OCTANE,
+                $pm2 => AppRuntime::PM2,
+                default => OctaneManager::RUNTIME_FPM,
+            },
             'octane_port' => $octane ? $managed['octane_port'] : null,
             'octane_max_requests' => $octane ? $managed['octane_max_requests'] : null,
+            'pm2_port' => $pm2 ? $managed['pm2_port'] : null,
+            'pm2_instances' => $pm2 ? $managed['pm2_instances'] : null,
+            'pm2_entry' => $pm2 ? $managed['pm2_entry'] : null,
             'readonly' => $active && ManagedVhost::isReadonly(
                 $path,
                 $domains,
@@ -176,7 +194,7 @@ final class CaddyParser
     }
 
     /**
-     * @return array{engine:?string,type:?string,php:?string,root:?string,runtime:?string,octane_port:?int,octane_max_requests:?int}
+     * @return array{engine:?string,type:?string,php:?string,root:?string,runtime:?string,octane_port:?int,octane_max_requests:?int,pm2_port:?int,pm2_instances:?int,pm2_entry:?string}
      */
     private static function parseManagedComment(string $contents): array
     {
@@ -188,6 +206,9 @@ final class CaddyParser
             'runtime' => null,
             'octane_port' => null,
             'octane_max_requests' => null,
+            'pm2_port' => null,
+            'pm2_instances' => null,
+            'pm2_entry' => null,
         ];
         if (!preg_match('/^#\s*azerioid-managed\s+(.+)$/m', $contents, $m)) {
             return $out;
@@ -205,7 +226,7 @@ final class CaddyParser
         if (preg_match('/\broot=(\S+)/', $rest, $r)) {
             $out['root'] = $r[1];
         }
-        if (preg_match('/\bruntime=(fpm|octane)\b/', $rest, $rn)) {
+        if (preg_match('/\bruntime=(fpm|octane|pm2)\b/', $rest, $rn)) {
             $out['runtime'] = $rn[1];
         }
         if (preg_match('/\boctane_port=([0-9]{2,5})\b/', $rest, $op)) {
@@ -213,6 +234,15 @@ final class CaddyParser
         }
         if (preg_match('/\boctane_max_requests=([0-9]{1,7})\b/', $rest, $om)) {
             $out['octane_max_requests'] = (int) $om[1];
+        }
+        if (preg_match('/\bpm2_port=([0-9]{2,5})\b/', $rest, $pp)) {
+            $out['pm2_port'] = (int) $pp[1];
+        }
+        if (preg_match('/\bpm2_instances=([0-9]{1,3})\b/', $rest, $pi)) {
+            $out['pm2_instances'] = (int) $pi[1];
+        }
+        if (preg_match('/\bpm2_entry=(\S+)/', $rest, $pe)) {
+            $out['pm2_entry'] = $pe[1];
         }
 
         return $out;

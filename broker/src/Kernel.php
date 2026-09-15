@@ -73,6 +73,7 @@ use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
 use AzerioidPanel\Broker\Actions\VhostOctane;
+use AzerioidPanel\Broker\Actions\VhostPm2;
 use AzerioidPanel\Broker\Actions\WebFrontRouterMigrate;
 use AzerioidPanel\Broker\Actions\WebReleaseSitePorts;
 
@@ -108,6 +109,11 @@ final class Kernel
         'vhost.octane.enable' => VhostOctane::class,
         'vhost.octane.disable' => VhostOctane::class,
         'vhost.octane.reload' => VhostOctane::class,
+        'vhost.pm2.status' => VhostPm2::class,
+        'vhost.pm2.enable' => VhostPm2::class,
+        'vhost.pm2.disable' => VhostPm2::class,
+        'vhost.pm2.reload' => VhostPm2::class,
+        'vhost.pm2.scale' => VhostPm2::class,
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,
