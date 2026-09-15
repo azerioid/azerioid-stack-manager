@@ -11,8 +11,8 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status (with octane)}
+        {action : list|add|edit|del|files|octane|pm2}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2)}
         {--domain= : Vhost domain}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -29,8 +29,10 @@ class VhostCommand extends Command
         {--dest= : Destination relative path (files rename)}
         {--recursive : Recursive delete of a directory (files delete)}
         {--max-requests= : Requests per Octane worker before it is recycled (octane enable)}
-        {--port= : Loopback port for the Octane worker, 34000-34999 (octane enable)}
-        {--json : JSON output (list / files list / octane)}';
+        {--instances= : PM2 cluster worker count (pm2 enable|scale; default 1)}
+        {--entry= : Optional Node entry script relative to the app root (pm2 enable)}
+        {--port= : Loopback port (octane enable: 34000-34999; pm2 enable: 36000-36999)}
+        {--json : JSON output (list / files list / octane / pm2)}';
 
     protected $description = 'Manage virtual hosts via broker vhost.* actions';
 
@@ -43,6 +45,7 @@ class VhostCommand extends Command
             'del', 'delete', 'rm' => $this->delVhost(),
             'files' => $this->files(),
             'octane' => $this->octane(),
+            'pm2' => $this->pm2(),
             default => $this->invalidAction(),
         };
     }
@@ -115,7 +118,9 @@ class VhostCommand extends Command
                 (string) ($v['engine'] ?? $v['stack'] ?? 'caddy'),
                 ($v['runtime'] ?? 'fpm') === 'octane'
                     ? 'octane:'.(string) ($v['octane_port'] ?? '?')
-                    : (string) ($v['runtime'] ?? 'fpm'),
+                    : (($v['runtime'] ?? 'fpm') === 'pm2'
+                        ? 'pm2:'.(string) ($v['pm2_port'] ?? '?')
+                        : (string) ($v['runtime'] ?? 'fpm')),
             ];
         }
 
@@ -484,9 +489,89 @@ class VhostCommand extends Command
         return $raw === false ? '' : $raw;
     }
 
+    private function pm2(): int
+    {
+        $op = strtolower(trim((string) $this->argument('filesOp')));
+        if (! in_array($op, ['enable', 'disable', 'reload', 'status', 'scale'], true)) {
+            $this->error('Unknown pm2 operation. Use: enable|disable|reload|status|scale');
+
+            return self::INVALID;
+        }
+        try {
+            $domain = Validator::domain((string) $this->option('domain'));
+            $input = [];
+            if ($op === 'enable') {
+                if ($this->option('instances')) {
+                    $input['instances'] = (string) $this->option('instances');
+                }
+                if ($this->option('entry')) {
+                    $input['entry'] = (string) $this->option('entry');
+                }
+                if ($this->option('port')) {
+                    $input['port'] = (string) $this->option('port');
+                }
+            }
+            if ($op === 'scale') {
+                if (! $this->option('instances')) {
+                    throw new \RuntimeException('--instances= is required for pm2 scale.');
+                }
+                $input['instances'] = (string) $this->option('instances');
+            }
+            $res = $this->brokerCall('vhost.pm2.'.$op, [$domain], $input, $op === 'enable' ? 900 : 180);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+            $data = is_array($res->data) ? $res->data : [];
+            if ($this->wantsJson()) {
+                return $this->emitData($data);
+            }
+            $this->line(match ($op) {
+                'enable' => "PM2 enabled for {$domain} on 127.0.0.1:".(string) ($data['pm2_port'] ?? '?')
+                    .' ('.(string) ($data['pm2_instances'] ?? '?').' worker(s), entry '
+                    .(string) ($data['pm2_entry'] ?? '?').', supervisor program '
+                    .(string) ($data['pm2_program'] ?? '?').').',
+                'disable' => "PM2 disabled for {$domain}; the vhost no longer runs under PM2.",
+                'reload' => "Reloaded PM2 workers for {$domain} via ".(string) ($data['method'] ?? 'pm2-reload').'.',
+                'scale' => "Scaled PM2 on {$domain} to ".(string) ($data['pm2_instances'] ?? '?').' worker(s).',
+                default => $this->pm2StatusLine($domain, $data),
+            });
+            if ($op === 'enable') {
+                $this->warn('PM2 cluster mode shares one listen port across workers. Reload performs a zero-downtime '
+                    .'rolling restart; each worker is a fresh Node process afterward (module cache is not shared '
+                    .'like a long-lived PHP worker). Cluster workers do not share in-memory session or state — '
+                    .'use sticky sessions or an external store. The app must listen on process.env.PORT '
+                    .'(and preferably 127.0.0.1). See '
+                    .(string) ($data['cluster_docs_url'] ?? 'https://pm2.keymetrics.io/docs/usage/cluster-mode/').'.');
+            }
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    /** @param  array<string,mixed>  $data */
+    private function pm2StatusLine(string $domain, array $data): string
+    {
+        if ((string) ($data['runtime'] ?? 'fpm') !== 'pm2') {
+            $node = ! empty($data['node_app']) ? 'Node app detected' : 'not a Node app';
+
+            return "{$domain}: runtime=fpm ({$node}).";
+        }
+
+        $state = is_array($data['program'] ?? null) && is_array($data['program']['status'] ?? null)
+            ? (string) ($data['program']['status']['state'] ?? 'unknown')
+            : 'unknown';
+
+        return "{$domain}: runtime=pm2 port=".(string) ($data['pm2_port'] ?? '?')
+            .' instances='.(string) ($data['pm2_instances'] ?? '?')
+            .' entry='.(string) ($data['pm2_entry'] ?? '?')
+            .' program='.(string) ($data['pm2_program'] ?? '?')." ({$state}).";
+    }
+
     private function invalidAction(): int
     {
-        $this->error('Unknown vhost action. Use: list|add|edit|del|files|octane');
+        $this->error('Unknown vhost action. Use: list|add|edit|del|files|octane|pm2');
 
         return self::INVALID;
     }

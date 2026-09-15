@@ -7,6 +7,7 @@ use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\Files\VhostPath;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
+use AzerioidPanel\Broker\Vhost\Pm2Manager;
 
 /**
  * Local / test stand-in. Mirrors broker JSON shapes so the UI can be
@@ -175,6 +176,42 @@ final class FakeBroker
                 'source' => '/etc/caddy/conf.d/projob.az.conf',
             ],
             [
+                'domains' => ['node.example.com'],
+                'domain' => 'node.example.com',
+                'root' => '/data/www/node.example.com',
+                'php_socket' => null,
+                'php_version' => null,
+                'type' => 'static',
+                'tls' => true,
+                'tls_mode' => 'auto',
+                'tls_status' => [
+                    'enabled' => true,
+                    'mode' => 'auto',
+                    'issuer_type' => 'lets_encrypt',
+                    'ok' => true,
+                    'pending' => false,
+                    'failed' => false,
+                    'label' => "Let's Encrypt (HTTP-01)",
+                ],
+                'reverse_proxy' => null,
+                'engine' => 'caddy',
+                'runtime' => 'fpm',
+                'octane_port' => null,
+                'octane_max_requests' => null,
+                'octane_program' => null,
+                'laravel_app' => false,
+                'laravel_app_detail' => null,
+                'pm2_port' => null,
+                'pm2_instances' => null,
+                'pm2_entry' => null,
+                'pm2_program' => null,
+                'node_app' => true,
+                'node_app_detail' => 'Found server.js.',
+                'readonly' => false,
+                'enabled' => true,
+                'source' => '/etc/caddy/conf.d/node.example.com.conf',
+            ],
+            [
                 'domains' => [],
                 'domain' => 'default',
                 'root' => '/data/www/default',
@@ -298,6 +335,11 @@ final class FakeBroker
                 'vhost.octane.enable' => $this->octane('enable', $args, $stdin),
                 'vhost.octane.disable' => $this->octane('disable', $args, $stdin),
                 'vhost.octane.reload' => $this->octane('reload', $args, $stdin),
+                'vhost.pm2.status' => $this->pm2('status', $args, $stdin),
+                'vhost.pm2.enable' => $this->pm2('enable', $args, $stdin),
+                'vhost.pm2.disable' => $this->pm2('disable', $args, $stdin),
+                'vhost.pm2.reload' => $this->pm2('reload', $args, $stdin),
+                'vhost.pm2.scale' => $this->pm2('scale', $args, $stdin),
                 'web.release-site-ports' => [
                     'released' => false,
                     'deprecated' => true,
@@ -1170,6 +1212,14 @@ final class FakeBroker
             'octane_program' => ($args[2] ?? 'php') === 'php' ? OctaneManager::programName((string) $domain) : null,
             'laravel_app' => false,
             'laravel_app_detail' => null,
+            'pm2_port' => null,
+            'pm2_instances' => null,
+            'pm2_entry' => null,
+            'pm2_program' => in_array($args[2] ?? '', ['proxy', 'static'], true)
+                ? Pm2Manager::programName((string) $domain)
+                : null,
+            'node_app' => false,
+            'node_app_detail' => null,
             'readonly' => false,
             'enabled' => true,
             'source' => '/etc/caddy/conf.d/' . $domain . '.conf',
@@ -1424,17 +1474,204 @@ final class FakeBroker
         throw new BrokerCallException('Vhost config does not exist.', 3);
     }
 
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function pm2(string $op, array $args, array $stdin): array
+    {
+        try {
+            return $this->pm2Op($op, $args, $stdin);
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string, mixed>  $stdin
+     * @return array<string, mixed>
+     */
+    private function pm2Op(string $op, array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $index = $this->pm2VhostIndex($domain);
+        $vhost = $this->vhosts[$index];
+        $program = Pm2Manager::programName($domain);
+        $enabled = ($vhost['runtime'] ?? 'fpm') === 'pm2';
+
+        if ($op === 'status') {
+            return [
+                'domain' => $domain,
+                'runtime' => $vhost['runtime'] ?? 'fpm',
+                'pm2_port' => $vhost['pm2_port'] ?? null,
+                'pm2_instances' => $vhost['pm2_instances'] ?? null,
+                'pm2_entry' => $vhost['pm2_entry'] ?? null,
+                'pm2_program' => $program,
+                'program' => $this->supervisorPrograms[$program] ?? null,
+                'node_app' => (bool) ($vhost['node_app'] ?? false),
+                'node_app_detail' => $vhost['node_app_detail'] ?? null,
+                'docs_url' => Pm2Manager::DOCS_URL,
+                'cluster_docs_url' => Pm2Manager::CLUSTER_DOCS_URL,
+            ];
+        }
+
+        if ($op === 'enable') {
+            $this->assertSupervisorInstalled();
+            $this->assertNodeComponentInstalled();
+            if ($enabled) {
+                throw new BrokerCallException("PM2 is already enabled for {$domain}.", 3);
+            }
+            if (! ($vhost['node_app'] ?? false)) {
+                throw new BrokerCallException(
+                    "{$domain} does not look like a Node application, so PM2 cannot run it. "
+                    .(string) ($vhost['node_app_detail'] ?? ''),
+                    3
+                );
+            }
+            $instances = Pm2Manager::validateInstances($stdin['instances'] ?? Pm2Manager::DEFAULT_INSTANCES);
+            $port = array_key_exists('port', $stdin) && $stdin['port'] !== null && $stdin['port'] !== ''
+                ? Pm2Manager::validatePort($stdin['port'])
+                : Pm2Manager::PORT_MIN + $index;
+            $entry = isset($stdin['entry']) && is_string($stdin['entry']) && trim($stdin['entry']) !== ''
+                ? trim($stdin['entry'])
+                : 'server.js';
+            $this->vhosts[$index]['pm2_prev_type'] = (string) ($vhost['type'] ?? 'static');
+            $this->vhosts[$index]['runtime'] = 'pm2';
+            $this->vhosts[$index]['type'] = 'proxy';
+            $this->vhosts[$index]['pm2_port'] = $port;
+            $this->vhosts[$index]['pm2_instances'] = $instances;
+            $this->vhosts[$index]['pm2_entry'] = $entry;
+            $this->vhosts[$index]['reverse_proxy'] = '127.0.0.1:'.$port;
+            $this->supervisorPrograms[$program] = [
+                'command' => "/usr/bin/env PM2_HOME=/var/lib/azerioid-panel/pm2/fake PORT={$port} pm2-runtime start {$entry} --name app -i {$instances}",
+                'directory' => (string) ($vhost['root'] ?? ''),
+                'user' => 'azerioid-supervised',
+                'autostart' => true,
+                'autorestart' => true,
+                'vhost_domain' => $domain,
+                'log_stdout' => '/var/log/azerioid-supervised/'.$program.'.stdout.log',
+                'log_stderr' => '/var/log/azerioid-supervised/'.$program.'.stderr.log',
+                'state' => 'running',
+                'status_raw' => 'RUNNING pid 4343',
+            ];
+
+            return [
+                'domain' => $domain,
+                'enabled' => true,
+                'runtime' => 'pm2',
+                'pm2_port' => $port,
+                'pm2_instances' => $instances,
+                'pm2_program' => $program,
+                'pm2_entry' => $entry,
+                'app_dir' => (string) ($vhost['root'] ?? ''),
+                'docs_url' => Pm2Manager::DOCS_URL,
+                'cluster_docs_url' => Pm2Manager::CLUSTER_DOCS_URL,
+            ];
+        }
+
+        if (! $enabled) {
+            throw new BrokerCallException("PM2 is not enabled for {$domain}.", 3);
+        }
+
+        if ($op === 'reload') {
+            return [
+                'domain' => $domain,
+                'reloaded' => true,
+                'method' => 'pm2-reload',
+                'pm2_program' => $program,
+                'output' => 'fake pm2-reload ok',
+            ];
+        }
+
+        if ($op === 'scale') {
+            $instances = Pm2Manager::validateInstances($stdin['instances'] ?? null);
+            $this->vhosts[$index]['pm2_instances'] = $instances;
+
+            return [
+                'domain' => $domain,
+                'scaled' => true,
+                'pm2_instances' => $instances,
+                'pm2_program' => $program,
+                'output' => 'fake pm2 scale ok',
+            ];
+        }
+
+        $prevType = (string) ($vhost['pm2_prev_type'] ?? 'static');
+        $this->vhosts[$index]['runtime'] = 'fpm';
+        $this->vhosts[$index]['pm2_port'] = null;
+        $this->vhosts[$index]['pm2_instances'] = null;
+        $this->vhosts[$index]['pm2_entry'] = null;
+        unset($this->vhosts[$index]['pm2_prev_type']);
+        $this->vhosts[$index]['type'] = $prevType === 'proxy' ? 'proxy' : 'static';
+        $this->vhosts[$index]['reverse_proxy'] = $prevType === 'proxy' ? null : null;
+        if ($this->vhosts[$index]['type'] === 'static') {
+            $this->vhosts[$index]['reverse_proxy'] = null;
+        }
+        $removed = isset($this->supervisorPrograms[$program]);
+        unset($this->supervisorPrograms[$program]);
+
+        return [
+            'domain' => $domain,
+            'disabled' => true,
+            'runtime' => 'fpm',
+            'restored_type' => $this->vhosts[$index]['type'],
+            'pm2_program' => $program,
+            'program_removed' => $removed,
+        ];
+    }
+
+    private function pm2VhostIndex(string $domain): int
+    {
+        $domain = Validator::domain($domain);
+        foreach ($this->vhosts as $i => $vhost) {
+            if (($vhost['domain'] ?? '') !== $domain) {
+                continue;
+            }
+            if (! empty($vhost['readonly'])) {
+                throw new BrokerCallException('This vhost is managed externally and cannot be switched to PM2.', 3);
+            }
+            $type = (string) ($vhost['type'] ?? '');
+            if ($type === 'php') {
+                throw new BrokerCallException(
+                    'PM2 is for Node apps. This is a PHP vhost — use Octane for Laravel, or create a separate Node/proxy site.',
+                    3
+                );
+            }
+            if (! in_array($type, ['proxy', 'static'], true)) {
+                throw new BrokerCallException('PM2 is only available for proxy or static vhosts with a Node entrypoint.', 3);
+            }
+            if (in_array($vhost['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+                throw new BrokerCallException(
+                    'PM2 requires the Caddy engine. Switch '.$domain.' to engine=caddy first.',
+                    3
+                );
+            }
+
+            return (int) $i;
+        }
+
+        throw new BrokerCallException('Vhost config does not exist.', 3);
+    }
+
     private function vhostDel(array $args, array $stdin = []): array
     {
         $domain = $args[0] ?? '';
         $linked = [];
         $octaneProgram = null;
+        $pm2Program = null;
         try {
             $octaneProgram = OctaneManager::programName((string) $domain);
         } catch (\Throwable) {
         }
+        try {
+            $pm2Program = Pm2Manager::programName((string) $domain);
+        } catch (\Throwable) {
+        }
+        $ownedPrograms = array_filter([$octaneProgram, $pm2Program]);
         foreach ($this->supervisorPrograms as $name => $program) {
-            if (($program['vhost_domain'] ?? null) === $domain && $name !== $octaneProgram) {
+            if (($program['vhost_domain'] ?? null) === $domain && ! in_array($name, $ownedPrograms, true)) {
                 $linked[] = $name;
             }
         }
@@ -1447,6 +1684,9 @@ final class FakeBroker
         }
         if ($octaneProgram !== null) {
             unset($this->supervisorPrograms[$octaneProgram]);
+        }
+        if ($pm2Program !== null) {
+            unset($this->supervisorPrograms[$pm2Program]);
         }
         foreach ($linked as $name) {
             unset($this->supervisorPrograms[$name]);
@@ -1923,6 +2163,16 @@ final class FakeBroker
     {
         if (!isset($this->fakeInstalledComponents['supervisor'])) {
             throw new BrokerCallException('Supervisor is not installed. Install it from Components first.', 3);
+        }
+    }
+
+    private function assertNodeComponentInstalled(): void
+    {
+        if (! isset($this->fakeInstalledComponents['nodejs'])) {
+            throw new BrokerCallException(
+                'Node.js is not installed. Install the Node.js component from Components first.',
+                3
+            );
         }
     }
 

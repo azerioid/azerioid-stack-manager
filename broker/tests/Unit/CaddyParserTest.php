@@ -22,6 +22,27 @@ final class CaddyParserTest extends TestCase
         $this->assertTrue($parsed['tls']);
     }
 
+    public function test_parses_pm2_managed_proxy_vhost(): void
+    {
+        $contents = <<<'CADDY'
+# azerioid-managed engine=caddy type=proxy root=/data/www/node-app.test runtime=pm2 pm2_port=36001 pm2_instances=2 pm2_entry=server.js
+node-app.test {
+    reverse_proxy 127.0.0.1:36001 {
+        header_up Host {http.request.host}
+    }
+}
+CADDY;
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/node-app.test.conf', $contents, []);
+
+        $this->assertSame('proxy', $parsed['type']);
+        $this->assertSame('pm2', $parsed['runtime']);
+        $this->assertSame('/data/www/node-app.test', $parsed['root']);
+        $this->assertSame(36001, $parsed['pm2_port']);
+        $this->assertSame(2, $parsed['pm2_instances']);
+        $this->assertSame('server.js', $parsed['pm2_entry']);
+        $this->assertSame('127.0.0.1:36001', $parsed['reverse_proxy']);
+    }
+
     public function test_panel_managed_proxy_is_not_readonly(): void
     {
         $contents = <<<'CADDY'

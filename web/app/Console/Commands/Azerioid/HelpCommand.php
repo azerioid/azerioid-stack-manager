@@ -28,6 +28,8 @@ Usage:
   azerioid vhost files  list|read|write|delete|mkdir|rename --domain=<d> [--path=<rel>] [--dest=<rel>] [--recursive] [--json]
   azerioid vhost octane enable  --domain=<d> [--max-requests=500] [--port=34000-34999]
   azerioid vhost octane disable|reload|status --domain=<d> [--json]
+  azerioid vhost pm2 enable  --domain=<d> [--instances=1] [--entry=server.js] [--port=36000-36999]
+  azerioid vhost pm2 disable|reload|status|scale --domain=<d> [--instances=N] [--json]
 
   azerioid db list      [--engine=mariadb|postgresql|mongodb] [--json]
   azerioid db add       --engine=<e> --name=<db> [--user=<u>]
@@ -95,6 +97,10 @@ Secrets:
   vhost octane is opt-in per vhost and Laravel-only: it runs FrankenPHP under Supervisor on 127.0.0.1:34000-34999
   with Caddy reverse-proxying to it. New PHP vhosts stay on PHP-FPM, and the panel's own runtime never uses Octane.
   Long-lived workers keep constructors and static state between requests — see https://laravel.com/docs/octane.
+  vhost pm2 is opt-in per vhost and Node-only (proxy/static with a detected entrypoint): pm2-runtime under Supervisor
+  on 127.0.0.1:36000-36999 with Caddy reverse-proxying. Cluster workers share one port; reload is a rolling restart
+  of fresh Node processes — apps must bind to process.env.PORT; in-memory state is not shared across workers unless
+  you use sticky sessions or an external store — see https://pm2.keymetrics.io/docs/usage/cluster-mode/.
   Mail is opt-in and reputation-sensitive: installing over a foreign MTA (including Debian's Exim) needs a typed
   REPLACE-MTA confirmation, and `mail status` reports whether outbound port 25 is open or blocked by your provider.
   updates apply / backup restore / panel update apply require --confirm. Log rotation is system logrotate (no CLI).

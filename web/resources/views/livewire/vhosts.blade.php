@@ -148,6 +148,53 @@
         </form>
     @endif
 
+    @if ($pm2Target)
+        <div class="panel border border-warn/40 p-5">
+            <p class="text-sm">
+                Enable <span class="font-mono text-zinc-200">PM2 (Node cluster)</span> for
+                <span class="font-mono">{{ $pm2Target }}</span>?
+            </p>
+            <p class="mt-2 text-sm text-warn">
+                PM2 cluster mode shares one listen port across workers. Reload performs a zero-downtime rolling
+                restart; each worker is a fresh Node process afterward (unlike Octane/Laravel long-lived workers).
+                Cluster workers do <strong>not</strong> share in-memory session or state — use sticky sessions or an
+                external store. Your app must bind to <span class="font-mono">process.env.PORT</span> (and preferably
+                127.0.0.1). See
+                <a href="https://pm2.keymetrics.io/docs/usage/cluster-mode/" target="_blank" rel="noopener noreferrer" class="underline">PM2 cluster mode</a>
+                before serving production traffic — and reload workers after every deploy.
+            </p>
+            <p class="mt-2 text-xs text-zinc-400">
+                Caddy stays the front door and reverse-proxies to a Supervisor-managed <span class="font-mono">pm2-runtime</span>
+                worker on loopback (127.0.0.1:36000–36999). Switching off PM2 restores the prior vhost mode.
+            </p>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Cluster instances
+                <input class="field mt-1 max-w-[12rem]" wire:model="pm2Instances" inputmode="numeric" placeholder="1">
+            </label>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Entry script (optional)
+                <input class="field mt-1 max-w-md font-mono text-sm" wire:model="pm2Entry" placeholder="server.js">
+            </label>
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="enablePm2">Enable PM2</button>
+                <button class="btn-ghost" wire:click="cancelPm2">Cancel</button>
+            </div>
+        </div>
+    @endif
+
+    @if ($pm2ScaleTarget)
+        <div class="panel border border-accent/30 p-5">
+            <p class="text-sm">
+                Scale PM2 workers for <span class="font-mono">{{ $pm2ScaleTarget }}</span>
+            </p>
+            <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Cluster instances
+                <input class="field mt-1 max-w-[12rem]" wire:model="pm2Instances" inputmode="numeric" placeholder="1">
+            </label>
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="scalePm2">Apply scale</button>
+                <button class="btn-ghost" wire:click="cancelPm2">Cancel</button>
+            </div>
+        </div>
+    @endif
+
     @if ($octaneTarget)
         <div class="panel border border-warn/40 p-5">
             <p class="text-sm">
@@ -211,6 +258,14 @@
                                 <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
                                     FrankenPHP · 127.0.0.1:{{ $v['octane_port'] ?? '?' }} · max-req {{ $v['octane_max_requests'] ?? '?' }}
                                 </div>
+                            @elseif (($v['runtime'] ?? 'fpm') === 'pm2')
+                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">PM2</span>
+                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
+                                    Node · 127.0.0.1:{{ $v['pm2_port'] ?? '?' }} · {{ $v['pm2_instances'] ?? '?' }} worker(s)
+                                    @if (!empty($v['pm2_entry']))
+                                        · {{ $v['pm2_entry'] }}
+                                    @endif
+                                </div>
                             @elseif (($v['type'] ?? '') === 'php')
                                 <span class="font-mono text-[11px] uppercase text-zinc-400">PHP-FPM</span>
                                 @if (empty($v['readonly']) && empty($v['laravel_app']))
@@ -220,6 +275,17 @@
                                 @elseif (empty($v['readonly']) && in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true))
                                     <div class="mt-0.5 text-[10px] text-zinc-500">
                                         Octane unavailable — needs the Caddy engine
+                                    </div>
+                                @endif
+                            @elseif (in_array($v['type'] ?? '', ['proxy', 'static'], true))
+                                <span class="font-mono text-[11px] uppercase text-zinc-400">{{ $v['type'] }}</span>
+                                @if (empty($v['readonly']) && empty($v['node_app']))
+                                    <div class="mt-0.5 text-[10px] text-zinc-500" title="{{ $v['node_app_detail'] ?? '' }}">
+                                        PM2 unavailable — not a Node app
+                                    </div>
+                                @elseif (empty($v['readonly']) && in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true))
+                                    <div class="mt-0.5 text-[10px] text-zinc-500">
+                                        PM2 unavailable — needs the Caddy engine
                                     </div>
                                 @endif
                             @else
@@ -264,8 +330,14 @@
                                 @if (($v['runtime'] ?? 'fpm') === 'octane')
                                     <button type="button" class="text-xs text-accent" wire:click="reloadOctane('{{ $v['domain'] }}')">Reload application</button>
                                     <button type="button" class="text-xs text-warn" wire:click="disableOctane('{{ $v['domain'] }}')">Switch to PHP-FPM</button>
-                                @elseif (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy')
+                                @elseif (($v['runtime'] ?? 'fpm') === 'pm2')
+                                    <button type="button" class="text-xs text-accent" wire:click="reloadPm2('{{ $v['domain'] }}')">Reload application</button>
+                                    <button type="button" class="text-xs text-accent" wire:click="askPm2Scale('{{ $v['domain'] }}')">Scale</button>
+                                    <button type="button" class="text-xs text-warn" wire:click="disablePm2('{{ $v['domain'] }}')">Switch off PM2</button>
+                                @elseif (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && ($v['runtime'] ?? 'fpm') === 'fpm')
                                     <button type="button" class="text-xs text-accent" wire:click="askOctane('{{ $v['domain'] }}')">Enable Octane</button>
+                                @elseif (in_array($v['type'] ?? '', ['proxy', 'static'], true) && !empty($v['node_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane'], true))
+                                    <button type="button" class="text-xs text-accent" wire:click="askPm2('{{ $v['domain'] }}')">Enable PM2</button>
                                 @endif
                                 <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
                                 <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>
