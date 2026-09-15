@@ -14,6 +14,7 @@ The panel always uses a dedicated Caddy vhost snippet — never a second Caddy p
 | **Nginx engine** | `127.0.0.1:8082` only | Same pattern as Apache. |
 | **Laravel Octane worker** | `127.0.0.1:34000–34999` | Opt-in per vhost (ADR A35). FrankenPHP under Supervisor; Caddy `reverse_proxy` with the same headers as a `type=proxy` site. One port per Octane vhost. |
 | **PM2 (Node) worker** | `127.0.0.1:36000–36999` | Opt-in per vhost (ADR A16/A37). `pm2-runtime` under Supervisor; Caddy `reverse_proxy` like Octane/proxy. One port per PM2 vhost (cluster workers share that listen port via Node cluster). Distinct from ttyd terminals (35000–35999). |
+| **Docker (rootless) container** | `127.0.0.1:37000–37999` | Opt-in per vhost (ADR A38). Rootless `dockerd` as `azerioid-supervised`; Supervisor runs `docker`/`compose` publishing only loopback. Caddy `reverse_proxy` like Octane/PM2/proxy. One host port per Docker vhost. Never `docker` group / rootful socket for panel workloads. |
 | **Panel Caddy vhost** | `127.0.0.1:3169` (optional public HTTPS on the host IP) plus optional white-label hostname on `:443` | Unaffected by site-engine choice. A catch-all on `:3169` returns **421** so site vhosts never accidentally match the panel port. |
 
 Installing Apache or Nginx as a component does **not** require releasing `:80`/`:443`. The deprecated `web.release-site-ports` action is a no-op.
@@ -37,6 +38,7 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 7. **Conflict detection:** registry `conflicts` is for real package clashes (e.g. two database engines), not Caddy vs Nginx on `:80`.
 8. **Octane worker ports** (34000–34999) are loopback-only and allocated per vhost as the first unused, non-listening port in the range. They are never opened on the host firewall, and the panel's own runtime never uses them — Octane is opt-in for site vhosts only (ADR A35).
 8b. **PM2 worker ports** (36000–36999) follow the same loopback-only allocation rules as Octane, in a range **distinct** from Octane (34000–34999) and ttyd terminals (35000–35999) so the runtimes never collide (ADR A37).
+8c. **Docker container ports** (37000–37999) follow the same loopback-only allocation rules, distinct from Octane / ttyd / PM2 (ADR A38). Published only as `127.0.0.1:N→container` via rootless Docker; never opened on the host firewall.
 9. **Mail ports** (25/465/587/993) are the only managed ports besides 80/443 that are opened to the internet, and only when the opt-in `mail` component is installed. The broker opens them explicitly through `MailFirewall` (ufw or firewalld) at install and closes them at uninstall — never implicitly, and never by leaving the firewall untouched. Plaintext IMAP (143) and POP3 (110/995) are not offered. Port 25 accepts inbound mail but never advertises AUTH; authenticated submission lives on 587/465 only (ADR A36).
 10. **Mail conflicts are replaceable, not fatal.** The `mail` registry entry conflicts with `exim4`/`sendmail`, but the operator resolves that by typing `REPLACE-MTA`, after which the broker removes the foreign MTA and installs Postfix. Every other component still hard-fails on conflict.
 
@@ -60,6 +62,7 @@ Caddy `reverse_proxy` sets `X-Forwarded-For` / `X-Forwarded-Proto` / `X-Forwarde
 | Laravel Octane workers | 34000–34999 | 127.0.0.1 | tcp | managed (`azerioid-supervised`, program `octane-<domain>`) |
 | Vhost terminals (ttyd) | 35000–35999 | 127.0.0.1 | tcp | managed (per-vhost user) |
 | PM2 (Node) workers | 36000–36999 | 127.0.0.1 | tcp | managed (`azerioid-supervised`, program `pm2-<domain>`) |
+| Docker (rootless) containers | 37000–37999 | 127.0.0.1 | tcp | managed (`azerioid-supervised` rootless dockerd + program `docker-<domain>`) |
 
 ## EL9 / SELinux
 

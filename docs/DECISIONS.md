@@ -300,6 +300,36 @@ Port range `34000–34999` is reserved for these workers (see `docs/port-ownersh
 - **Disable** restores the prior serving mode (static file_server or prior proxy upstream) recorded at enable time, then removes the Supervisor program.
 - Port range **`36000–36999`** (see `docs/port-ownership.md`), distinct from Octane’s 34000–34999 and ttyd’s 35000–35999.
 
+## A38 — Docker container as a per-vhost runtime (rootless only)
+
+**Status:** Accepted (2026-09-15) — implementation on `feature/docker-vhost-runtime`.  
+**Decision:** Docker is an **installable component** (official Docker CE packages, not a bootstrap dependency) and an **opt-in per-vhost runtime** — “the operator already has a Dockerfile / compose file / image and wants it bound to a domain.” It is **not** a Coolify-style git build/deploy platform and **not** a Portainer-style container-fleet UI (both explicitly out of scope for v1; same thin-slice discipline as A16 / A35 / A37).
+
+### Privilege model (locked — research 2026-09-15)
+
+**Rootless Docker is the only supported mode.** Do **not** offer membership in the `docker` group and do **not** leave the rootful `docker.service` / `docker.socket` enabled for panel-managed workloads. `docker` group access is a well-documented root-equivalent (bind-mount the host and rewrite `/etc/shadow`); that directly conflicts with A25’s least-privilege identity model.
+
+**Why rootless is viable here (not a silent weaker default):**
+- Docker Engine documents rootless since 20.10; current CE packages ship `docker-ce-rootless-extras` + `dockerd-rootless-setuptool.sh`. Daemon and containers run inside a user namespace; no `SETUID` bits except `newuidmap` / `newgidmap`.
+- **Fleet prerequisites are automatable:** `uidmap`, ≥65 536 subuids/subgids for `azerioid-supervised`, `loginctl enable-linger`, cgroup v2 (Ubuntu 24.04 / Debian 12 / EL9 all ship cgroup2), `fuse-overlayfs` + `slirp4netns`/`pasta` for storage/networking when needed. Ubuntu 24.04’s `kernel.apparmor_restrict_unprivileged_userns=1` is handled by the **packaged** AppArmor profile for `/usr/bin/rootlesskit` when installing via `docker-ce-rootless-extras` (do **not** use the static `get.docker.com/rootless` path that needs a hand-rolled profile).
+- **SELinux Enforcing (EL):** rootless + native `overlay2` is known-bad historically; CE disables that combo and falls back to `fuse-overlayfs` — acceptable, do not disable SELinux.
+- Known rootless limits that **do not block** this thin slice: userspace networking (slirp4netns/pasta), no overlay networks, no AppArmor-in-container, no `--privileged` / host-root capability grants, TCP peer inside the container is NAT’d (Caddy still sets `X-Forwarded-*` per A24/A32). Privileged host ports (<1024) are irrelevant — we only publish **high loopback ports**.
+
+**Identity layout (mirrors A25 / A35 / A37):** one rootless `dockerd` owned by **`azerioid-supervised`** (systemd **user** unit + linger — Docker docs forbid a system unit with `User=` for rootless). Per-vhost Supervisor programs call `docker` / `docker compose` against that user’s `DOCKER_HOST=unix:///run/user/<uid>/docker.sock`. Files/Terminal stay on the vhost’s `az-vh-*` identity against the **build-context / docroot on the host**, never inside the container filesystem. Cross-vhost isolation matches Octane/PM2: containers do not receive mounts of other vhosts’ trees; a compromised container cannot become host-root via the daemon. Per-`az-vh-*` dockerd instances are **deferred** (more subuid ranges + linger sprawl) — not required for v1 least-privilege vs the `docker`-group alternative.
+
+**Explicitly rejected for v1:** rootful daemon + `docker` group for panel users; DIND requiring `--privileged`; any UI that manages unrelated host containers/images/volumes.
+
+### Runtime pattern
+
+- **Caddy** `reverse_proxy` → `127.0.0.1:N` with the same forwarding headers as proxy / Octane / PM2.
+- Managed comment: `type=proxy root=… runtime=docker docker_port=N docker_internal_port=M` plus image or compose markers so Files/Terminal keep the host build context.
+- **Inputs:** (a) pull a pre-built image + internal listen port, or (b) build/run from `Dockerfile` / `docker-compose.yml` the operator placed in the vhost docroot via File Manager.
+- **Lifecycle** (start/stop/restart/rebuild/logs) via Supervisor + the rootless CLI; long builds use the existing queue/job path.
+- **Disable:** stop/remove the vhost’s container(s), remove the Supervisor program, restore the prior serving mode recorded at enable (static / prior proxy / php) — same restore-meta pattern as PM2. Docker-only sites with no prior mode leave a clearly non-serving / restored static stub rather than inventing a parallel “disabled container” router.
+- **Component uninstall:** refuse while any vhost still has `runtime=docker` (typed confirm / drop discipline analogous to Mail’s vhost-scoped tenancy).
+- Port range **`37000–37999`** (see `docs/port-ownership.md`), distinct from Octane / ttyd / PM2.
+- Install from **Docker’s official apt/dnf repos** (`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`, `docker-ce-rootless-extras`) — not distro `docker.io` as the primary path. After package install: **disable and mask** rootful `docker.service` / `docker.socket`, then configure rootless for `azerioid-supervised` only.
+
 ## A36 — Mail server component
 
 **Status:** Implemented and released in **v1.3.0** (2026-09-15). Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
