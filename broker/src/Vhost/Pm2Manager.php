@@ -894,6 +894,15 @@ final class Pm2Manager
     private static function execDetail(ExecResult $result): string
     {
         $detail = trim($result->stderr . "\n" . $result->stdout);
+        // PM2 7.x paints a live metrics footer with ANSI escapes (and sometimes
+        // non-UTF8 bytes). Strip CSI sequences so the broker JSON stays clean.
+        $detail = preg_replace('/\e\[[0-9;]*[A-Za-z]/', '', $detail) ?? $detail;
+        if (function_exists('mb_scrub')) {
+            $detail = mb_scrub($detail, 'UTF-8');
+        } elseif (!mb_check_encoding($detail, 'UTF-8')) {
+            $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $detail);
+            $detail = is_string($converted) ? $converted : '';
+        }
         if (strlen($detail) > 400) {
             $detail = substr($detail, -400);
         }

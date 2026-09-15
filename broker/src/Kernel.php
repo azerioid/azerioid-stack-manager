@@ -299,12 +299,27 @@ final class Kernel
 
     private function emit(bool $ok, mixed $data, ?string $error, int $code): void
     {
-        echo json_encode([
+        // PM2/CLI tools often emit ANSI + invalid UTF-8. json_encode() without
+        // INVALID_UTF8_SUBSTITUTE returns false; `echo false . "\n"` prints only a
+        // newline, and the UI then surfaces stderr progress (e.g. Caddy apply) as
+        // "Broker returned non-JSON output."
+        $flags = JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+        $json = json_encode([
             'ok' => $ok,
             'data' => $data,
             'error' => $error,
             'code' => $code,
-        ], JSON_UNESCAPED_SLASHES) . "\n";
+        ], $flags);
+        if ($json === false) {
+            fwrite(STDERR, 'broker: json_encode failed: ' . json_last_error_msg() . "\n");
+            $json = json_encode([
+                'ok' => false,
+                'data' => null,
+                'error' => 'Broker response encoding failed: ' . json_last_error_msg(),
+                'code' => 1,
+            ], $flags) ?: '{"ok":false,"data":null,"error":"Broker response encoding failed.","code":1}';
+        }
+        echo $json . "\n";
     }
 
     private static function publicError(\Throwable $e): string

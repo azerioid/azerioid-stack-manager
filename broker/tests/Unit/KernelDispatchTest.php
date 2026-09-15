@@ -193,4 +193,19 @@ final class KernelDispatchTest extends TestCase
         $this->expectException(\AzerioidPanel\Broker\BrokerException::class);
         Kernel::decodeStdinString('{not json');
     }
+
+    public function test_emit_survives_invalid_utf8_in_response_data(): void
+    {
+        $kernel = $this->kernel(new FakeRuntime());
+        $method = new \ReflectionMethod(Kernel::class, 'emit');
+        $method->setAccessible(true);
+        ob_start();
+        $method->invoke($kernel, true, ['output' => "ok\xFF\xFEbad"], null, 0);
+        $out = ob_get_clean();
+        $json = json_decode(trim($out), true);
+        $this->assertIsArray($json);
+        $this->assertTrue($json['ok']);
+        $this->assertSame(0, $json['code']);
+        $this->assertArrayHasKey('output', $json['data']);
+    }
 }
