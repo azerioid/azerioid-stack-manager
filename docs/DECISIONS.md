@@ -68,10 +68,15 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 **Status:** Accepted  
 **Decision:** v1 single admin. `users.role` nullable for future.
 
-## A16 — Node scope
+## A16 — Node scope (revised 2026-09-15)
 
-**Status:** Accepted  
-**Decision:** v1 Node = runtime install only; no PM2.
+**Status:** Accepted (revised 2026-09-15)  
+**Decision (original):** v1 Node = runtime install only; no PM2.  
+**Decision (revised 2026-09-15):** Node.js remains a **runtime-install-only** component at the system level (no npm global tooling installed by default). **PM2 is now offered as an opt-in per-vhost runtime mode** for Node-based vhosts, mirroring the A35 Octane pattern exactly: built on the existing Supervisor (A25) and proxy-vhost (Caddy `reverse_proxy`) infrastructure, never a parallel process-management system.
+
+Rationale for revising the original “no PM2” scoping: PM2’s cluster-mode and zero-downtime-reload capabilities are genuinely useful for Node vhosts and map cleanly onto infrastructure already built for Octane — this is not scope creep, it is reusing a proven pattern for a parallel use case. The general-purpose Supervisor “Processes” page (arbitrary commands, not tied to a vhost) is unchanged — PM2 is specifically for vhost-bound Node web apps that want clustering / zero-downtime reload, not a replacement for ad-hoc process management.
+
+See **A37** for the PM2 implementation constraints (pm2-runtime under Supervisor, port range, Node-app detection).
 
 ## Product naming
 
@@ -280,9 +285,24 @@ Constraints:
 
 Port range `34000–34999` is reserved for these workers (see `docs/port-ownership.md`), allocated as the first unused, non-listening port. Default `--max-requests` is 500.
 
+## A37 — PM2 is a per-vhost opt-in Node runtime (mirrors A35)
+
+**Status:** Accepted (2026-09-15) — revises A16; implementation on `feature/pm2-vhost-runtime`.  
+**Decision:** Offer **PM2 (Node cluster)** as an opt-in per-vhost runtime for Node apps, reusing Supervisor + Caddy exactly like Octane:
+
+- **Supervisor** runs **`pm2-runtime`** (foreground binary designed for Docker/systemd/Supervisor — not the daemonizing `pm2` CLI) as `azerioid-supervised`, program `pm2-<domain-slug>`, with a per-vhost `PM2_HOME` under `/var/lib/azerioid-supervised/pm2/`.
+- **Caddy** `reverse_proxy`s to `127.0.0.1:N` with the same forwarding headers as `type=proxy` / Octane. Managed comment keeps `type=proxy` (or converts from `static`) plus `runtime=pm2 pm2_port=N pm2_instances=M` so Files/Terminal keep the docroot.
+- **Shared global `npm install -g pm2`** once per host (PM2 is the supervisor binary; app `node_modules` stay in the vhost). Requires the Node.js component.
+- **Node apps only** — enable requires a detectable entry (`package.json` `scripts.start`, or `server.js` / `app.js` / `index.js` / operator-supplied entry). PHP-only / Laravel sites are refused (use Octane).
+- **Caddy engine only**; Supervisor required; enable is transactional (worker must listen before Caddy rewrite).
+- **Cluster instances** default to **1** (safe); operators raise the count for multi-core load balancing. Scale via `vhost.pm2.scale`.
+- **Reload** uses `pm2 reload <name>` against the same `PM2_HOME` (zero-downtime rolling restart of cluster workers). Caveat differs from Octane: workers are fresh Node processes after reload (module cache cleared per worker); apps that hold connections or in-memory sessions across workers still need sticky sessions or external state — document that, do not copy Octane’s Laravel singleton warning verbatim.
+- **Disable** restores the prior serving mode (static file_server or prior proxy upstream) recorded at enable time, then removes the Supervisor program.
+- Port range **`36000–36999`** (see `docs/port-ownership.md`), distinct from Octane’s 34000–34999 and ttyd’s 35000–35999.
+
 ## A36 — Mail server component
 
-**Status:** **Implemented on `feature/mail-server`** (2026-09-14) — not merged to `main` until fleet proof is complete. Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
+**Status:** Implemented and released in **v1.3.0** (2026-09-15). Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
 **Decision:** Ship an opt-in, registry-driven **Postfix + Dovecot + OpenDKIM** component (not Exim) for panel-managed domains, following the same install/managed pattern as MariaDB/PostgreSQL/Redis.
 
 **v1 product (locked):**
