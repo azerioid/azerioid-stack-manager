@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Interactive shell into a rootless Docker container.
+# Invoked by ttyd as azerioid-supervised with DOCKER_HOST already set.
+# Never run as root or az-vh-*; does not use the docker group.
+set -euo pipefail
+
+if [[ $# -lt 1 || -z "${1:-}" ]]; then
+    echo "azerioid-docker-exec: container name required" >&2
+    exit 2
+fi
+
+NAME="$1"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "azerioid-docker-exec: docker binary not found" >&2
+    exit 1
+fi
+
+if [[ -z "${DOCKER_HOST:-}" ]]; then
+    echo "azerioid-docker-exec: DOCKER_HOST is required (rootless socket only)" >&2
+    exit 1
+fi
+
+# Probe without -it so a missing shell is a clean miss (not a TTY race).
+if docker exec "$NAME" bash -c 'exit 0' >/dev/null 2>&1; then
+    exec docker exec -it "$NAME" bash
+fi
+
+if docker exec "$NAME" sh -c 'exit 0' >/dev/null 2>&1; then
+    exec docker exec -it "$NAME" sh
+fi
+
+echo "azerioid-docker-exec: neither bash nor sh is available in container '${NAME}'" >&2
+exit 1

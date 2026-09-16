@@ -22,6 +22,8 @@ use App\Http\Controllers\PanelAuthCheckController;
 use App\Http\Controllers\TerminalAuthController;
 use App\Http\Controllers\TerminalSessionController;
 use App\Http\Controllers\VhostFilesController;
+use App\Livewire\VhostContainerLogsPage;
+use App\Livewire\VhostContainerShellPage;
 use App\Livewire\VhostFilesPage;
 use App\Livewire\VhostTerminalPage;
 use Illuminate\Support\Facades\Auth;
@@ -55,6 +57,8 @@ Route::middleware(['auth', '2fa'])->group(function () {
     Route::get('/updates', UpdatesPage::class)->name('updates');
     Route::get('/vhosts', VhostsPage::class)->name('vhosts');
     Route::get('/vhosts/{domain}/terminal', VhostTerminalPage::class)->name('vhosts.terminal');
+    Route::get('/vhosts/{domain}/container-shell', VhostContainerShellPage::class)->name('vhosts.container-shell');
+    Route::get('/vhosts/{domain}/container-logs', VhostContainerLogsPage::class)->name('vhosts.container-logs');
     Route::get('/vhosts/{domain}/files', VhostFilesPage::class)->name('vhosts.files');
     Route::get('/vhosts/{domain}/files/download', [VhostFilesController::class, 'download'])->name('vhosts.files.download');
     Route::post('/vhosts/{domain}/files/zip', [VhostFilesController::class, 'zip'])->name('vhosts.files.zip');

@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Tests;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Kernel;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use PHPUnit\Framework\TestCase;
 
@@ -110,5 +111,72 @@ CADDY;
         $this->assertSame(0, $stopCode);
         $after = json_decode($this->rt->readFile($this->cfg->terminalSessionsPath), true);
         $this->assertSame([], $after['sessions'] ?? []);
+    }
+
+    public function test_container_mode_rejects_non_docker_runtime(): void
+    {
+        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'shop.example.com'], [
+            'mode' => 'container',
+            'admin_user_id' => '1',
+            'source_ip' => '127.0.0.1',
+        ]);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('runtime=docker', strtolower((string) ($json['error'] ?? '')));
+    }
+
+    public function test_container_mode_starts_as_supervised_with_docker_host(): void
+    {
+        $this->rt->files['/etc/caddy/conf.d/box.example.com.conf'] = <<<'CADDY'
+# azerioid-managed engine=caddy type=proxy root=/data/www/box.example.com runtime=docker docker_port=37000 docker_internal_port=80 docker_mode=image docker_image=nginx:alpine
+box.example.com {
+    reverse_proxy 127.0.0.1:37000 {
+        header_up Host {http.request.host}
+    }
+}
+CADDY;
+        $this->rt->dirs['/data/www/box.example.com'] = true;
+        $this->rt->files['/usr/bin/docker'] = 'fake';
+        $this->rt->files[DockerManager::DOCKER_EXEC_WRAPPER] = "#!/bin/bash\n";
+        $this->rt->script(['/usr/bin/id', '-u', 'azerioid-supervised'], 0, "1001\n");
+
+        $container = DockerManager::containerName('box.example.com');
+        $env = 'DOCKER_HOST=unix:///run/user/1001/docker.sock';
+        $inspectShell = "cd '/tmp' && exec "
+            . escapeshellarg('/usr/bin/env') . ' '
+            . escapeshellarg($env) . ' '
+            . escapeshellarg('/usr/bin/docker') . ' '
+            . escapeshellarg('inspect') . ' '
+            . escapeshellarg('--format') . ' '
+            . escapeshellarg('{{.Id}} {{.State.Status}}') . ' '
+            . escapeshellarg($container);
+        $this->rt->script(
+            ['/usr/sbin/runuser', '-u', 'azerioid-supervised', '--', '/bin/bash', '-lc', $inspectShell],
+            0,
+            "abc123 running\n"
+        );
+
+        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'box.example.com'], [
+            'mode' => 'container',
+            'admin_user_id' => '1',
+            'source_ip' => '127.0.0.1',
+        ]);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertSame('container', $json['data']['kind'] ?? null);
+        $this->assertSame('azerioid-supervised', $json['data']['username'] ?? null);
+        $this->assertSame($container, $json['data']['container'] ?? null);
+
+        $spawned = false;
+        foreach ($this->rt->execLog as $entry) {
+            $cmd = implode(' ', $entry['command'] ?? []);
+            if (str_contains($cmd, '/usr/bin/systemd-run') && str_contains($cmd, 'az-terminal-')) {
+                $this->assertStringContainsString('azerioid-supervised', $cmd);
+                $this->assertStringContainsString('DOCKER_HOST=unix:///run/user/1001/docker.sock', $cmd);
+                $this->assertStringContainsString(DockerManager::DOCKER_EXEC_WRAPPER, $cmd);
+                $this->assertStringNotContainsString('az-vh-', $cmd);
+                $spawned = true;
+                break;
+            }
+        }
+        $this->assertTrue($spawned, 'expected supervised container ttyd spawn');
     }
 }

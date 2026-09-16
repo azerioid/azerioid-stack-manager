@@ -35,6 +35,10 @@ install_broker() {
     if [[ -f "${ROOT}/deploy/bin/azerioid" ]]; then
         install -m 0755 -o root -g root "${ROOT}/deploy/bin/azerioid" /usr/local/bin/azerioid
     fi
+    install -d -m 0751 -o root -g root "${PREFIX}/sbin"
+    if [[ -f "${ROOT}/deploy/bin/azerioid-docker-exec" ]]; then
+        install -m 0755 -o root -g root "${ROOT}/deploy/bin/azerioid-docker-exec" "${PREFIX}/sbin/azerioid-docker-exec"
+    fi
 
     local sudoers=/etc/sudoers.d/azerioid-panel
     cat > "${sudoers}" <<EOF
