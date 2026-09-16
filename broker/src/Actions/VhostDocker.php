@@ -14,6 +14,14 @@ final class VhostDocker
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $manager = new DockerManager($config, $runtime);
+
+        if ($action === 'vhost.docker.image.validate') {
+            return $manager->validateRemoteImage((string) ($input['image'] ?? ($args[0] ?? '')));
+        }
+        if ($action === 'vhost.docker.image.search') {
+            return $manager->searchImages((string) ($input['query'] ?? ($args[0] ?? '')));
+        }
+
         $domain = Validator::domain((string) ($args[0] ?? ($input['domain'] ?? '')));
 
         return match ($action) {

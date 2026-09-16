@@ -121,6 +121,8 @@ final class Kernel
         'vhost.docker.build' => VhostDocker::class,
         'vhost.docker.restart' => VhostDocker::class,
         'vhost.docker.logs' => VhostDocker::class,
+        'vhost.docker.image.validate' => VhostDocker::class,
+        'vhost.docker.image.search' => VhostDocker::class,
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,

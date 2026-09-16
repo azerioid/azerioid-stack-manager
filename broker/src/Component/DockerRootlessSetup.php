@@ -7,6 +7,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
+use AzerioidPanel\Broker\Vhost\DockerManager;
 
 /**
  * Configure official Docker CE for rootless use by azerioid-supervised only (ADR A38).
@@ -31,6 +32,77 @@ final class DockerRootlessSetup
         $this->ensureLinger($log);
         $this->installRootlessDaemon($log);
         $this->assertRootless($log);
+        $this->installDockerExecWrapper($log);
+    }
+
+    /**
+     * Install azerioid-docker-exec for container shell (ttyd → rootless docker exec).
+     * Privilege: wrapper itself is root-owned; ttyd invokes it only as azerioid-supervised.
+     */
+    public function installDockerExecWrapper(?OperationLogger $log = null): void
+    {
+        $dest = DockerManager::DOCKER_EXEC_WRAPPER;
+        $dir = dirname($dest);
+        if (!$this->runtime->isDir($dir)) {
+            $this->runtime->mkdir($dir, 0751);
+        }
+        $sourceCandidates = [
+            rtrim($this->config->panelSourcePath, '/') . '/deploy/bin/azerioid-docker-exec',
+            rtrim($this->config->panelRoot, '/') . '/deploy/bin/azerioid-docker-exec',
+        ];
+        $copied = false;
+        foreach ($sourceCandidates as $src) {
+            if ($src === '' || !$this->runtime->fileExists($src)) {
+                continue;
+            }
+            $this->runtime->writeFile($dest, $this->runtime->readFile($src), 0755);
+            $copied = true;
+            break;
+        }
+        if (!$copied) {
+            $this->runtime->writeFile($dest, self::dockerExecWrapperScript(), 0755);
+        }
+        $log?->info('Installed container shell wrapper at ' . $dest . '.');
+    }
+
+    public static function dockerExecWrapperScript(): string
+    {
+        return <<<'BASH'
+#!/usr/bin/env bash
+# Interactive shell into a rootless Docker container.
+# Invoked by ttyd as azerioid-supervised with DOCKER_HOST already set.
+# Never run as root or az-vh-*; does not use the docker group.
+set -euo pipefail
+
+if [[ $# -lt 1 || -z "${1:-}" ]]; then
+    echo "azerioid-docker-exec: container name required" >&2
+    exit 2
+fi
+
+NAME="$1"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "azerioid-docker-exec: docker binary not found" >&2
+    exit 1
+fi
+
+if [[ -z "${DOCKER_HOST:-}" ]]; then
+    echo "azerioid-docker-exec: DOCKER_HOST is required (rootless socket only)" >&2
+    exit 1
+fi
+
+# Probe without -it so a missing shell is a clean miss (not a TTY race).
+if docker exec "$NAME" bash -c 'exit 0' >/dev/null 2>&1; then
+    exec docker exec -it "$NAME" bash
+fi
+
+if docker exec "$NAME" sh -c 'exit 0' >/dev/null 2>&1; then
+    exec docker exec -it "$NAME" sh
+fi
+
+echo "azerioid-docker-exec: neither bash nor sh is available in container '${NAME}'" >&2
+exit 1
+BASH;
     }
 
     public function dockerHost(): string

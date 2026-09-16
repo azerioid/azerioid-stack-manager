@@ -39,6 +39,9 @@ final class DockerManager
     public const DEFAULT_COMPOSE = 'docker-compose.yml';
     public const DEFAULT_DOCKERFILE = 'Dockerfile';
 
+    /** Installed by DockerRootlessSetup / deploy broker-setup for container shell (ttyd). */
+    public const DOCKER_EXEC_WRAPPER = '/usr/local/lib/azerioid-panel/sbin/azerioid-docker-exec';
+
     public function __construct(
         private readonly Config $config,
         private readonly Runtime $runtime,
@@ -294,6 +297,164 @@ final class DockerManager
             'lines' => $lines,
             'output' => self::execDetail($result, 8000),
             'ok' => $result->ok(),
+        ];
+    }
+
+    /**
+     * Validate that an image reference exists (manifest inspect; no layer pull when possible).
+     *
+     * @return array{ok:bool, exists:bool, image:string, detail:string}
+     */
+    public function validateRemoteImage(string $image): array
+    {
+        $this->assertDockerComponentInstalled();
+        $image = self::validateImage($image);
+        $docker = $this->dockerBin();
+        $env = $this->dockerEnvAssign();
+        $manifest = $this->runAsSupervised(
+            ['/usr/bin/env', $env, $docker, 'manifest', 'inspect', $image],
+            '/tmp',
+            60
+        );
+        if ($manifest->ok()) {
+            return [
+                'ok' => true,
+                'exists' => true,
+                'image' => $image,
+                'detail' => 'manifest inspect ok',
+            ];
+        }
+        $buildx = $this->runAsSupervised(
+            ['/usr/bin/env', $env, $docker, 'buildx', 'imagetools', 'inspect', $image],
+            '/tmp',
+            60
+        );
+        if ($buildx->ok()) {
+            return [
+                'ok' => true,
+                'exists' => true,
+                'image' => $image,
+                'detail' => 'buildx imagetools inspect ok',
+            ];
+        }
+        $detail = self::execDetail($manifest->ok() ? $buildx : $manifest, 400);
+        if ($detail === '') {
+            $detail = self::execDetail($buildx, 400);
+        }
+
+        return [
+            'ok' => true,
+            'exists' => false,
+            'image' => $image,
+            'detail' => $detail !== '' ? $detail : 'Image not found: ' . $image,
+        ];
+    }
+
+    /**
+     * Soft Docker Hub repository search (public API). Fail soft if Hub is unreachable.
+     *
+     * @return array{ok:bool, query:string, suggestions: list<array{repo_name:string}>, detail:?string}
+     */
+    public function searchImages(string $query): array
+    {
+        $query = trim($query);
+        if (strlen($query) < 2) {
+            throw new BrokerException('query must be at least 2 characters.', 2);
+        }
+        if (strlen($query) > 128) {
+            throw new BrokerException('query is too long.', 2);
+        }
+        $url = 'https://hub.docker.com/v2/search/repositories/?query='
+            . rawurlencode($query) . '&page_size=8';
+        $curl = $this->runtime->fileExists('/usr/bin/curl') ? '/usr/bin/curl' : null;
+        if ($curl === null) {
+            return [
+                'ok' => false,
+                'query' => $query,
+                'suggestions' => [],
+                'detail' => 'curl is not available for Docker Hub search.',
+            ];
+        }
+        $result = $this->runtime->exec(
+            [$curl, '-fsSL', '--max-time', '8', $url],
+            null,
+            15
+        );
+        if (!$result->ok()) {
+            return [
+                'ok' => false,
+                'query' => $query,
+                'suggestions' => [],
+                'detail' => 'Docker Hub unreachable: ' . substr(trim($result->stderr . ' ' . $result->stdout), 0, 200),
+            ];
+        }
+        $decoded = json_decode($result->stdout, true);
+        $suggestions = [];
+        foreach (is_array($decoded['results'] ?? null) ? $decoded['results'] : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $name = trim((string) ($row['repo_name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $suggestions[] = ['repo_name' => $name];
+            if (count($suggestions) >= 8) {
+                break;
+            }
+        }
+
+        return [
+            'ok' => true,
+            'query' => $query,
+            'suggestions' => $suggestions,
+            'detail' => null,
+        ];
+    }
+
+    /**
+     * Resolve a running container for interactive shell (rootless).
+     *
+     * @return array{name:string, state:string, mode:string, domain:string}
+     */
+    public function resolveShellTarget(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->requireEnabled($domain);
+        $spec = $this->specFromVhost($domain, $vhost);
+        $mode = $spec['mode'];
+
+        if ($mode === self::MODE_COMPOSE) {
+            $name = $this->resolveComposeRunningContainer($spec);
+            if ($name === null) {
+                throw new BrokerException(
+                    "No running container found for compose project on {$domain}. Start/restart Docker first.",
+                    3
+                );
+            }
+
+            return [
+                'name' => $name,
+                'state' => 'running',
+                'mode' => $mode,
+                'domain' => $domain,
+            ];
+        }
+
+        $snap = $this->containerSnapshot($domain, $vhost);
+        $state = (string) ($snap['state'] ?? 'missing');
+        if ($state !== 'running') {
+            throw new BrokerException(
+                "Container for {$domain} is not running (state={$state}). Start/restart Docker first.",
+                3
+            );
+        }
+
+        return [
+            'name' => (string) ($snap['name'] ?? self::containerName($domain)),
+            'state' => $state,
+            'mode' => $mode,
+            'domain' => $domain,
         ];
     }
 
@@ -902,6 +1063,69 @@ final class DockerManager
             'id' => $parts[0] ?? null,
             'state' => $parts[1] ?? 'unknown',
         ];
+    }
+
+    /**
+     * @param  array{
+     *   domain:string, mode:string, app_dir:string, port:int, internal_port:int,
+     *   image:?string, compose:?string, dockerfile:?string
+     * }  $spec
+     */
+    private function resolveComposeRunningContainer(array $spec): ?string
+    {
+        $docker = $this->dockerBinIfPresent();
+        if ($docker === null || !is_string($spec['compose']) || $spec['compose'] === '') {
+            return null;
+        }
+        $env = $this->dockerEnvAssign();
+        $cwd = $spec['app_dir'] !== '' ? $spec['app_dir'] : '/tmp';
+        $ps = $this->runAsSupervised(
+            [
+                '/usr/bin/env', $env, $docker, 'compose',
+                '-f', $spec['compose'],
+                '-f', $this->portsOverridePath($spec['domain']),
+                '-p', self::composeProject($spec['domain']),
+                'ps', '--status', 'running', '--format', '{{.Name}}',
+            ],
+            $cwd,
+            30
+        );
+        if ($ps->ok()) {
+            foreach (explode("\n", trim($ps->stdout)) as $line) {
+                $line = trim($line);
+                if ($line !== '') {
+                    return $line;
+                }
+            }
+        }
+        $project = self::composeProject($spec['domain']);
+        $ids = $this->runAsSupervised(
+            [
+                '/usr/bin/env', $env, $docker, 'ps', '-q',
+                '--filter', 'label=com.docker.compose.project=' . $project,
+                '--filter', 'status=running',
+            ],
+            '/tmp',
+            30
+        );
+        if (!$ids->ok()) {
+            return null;
+        }
+        $id = trim(explode("\n", trim($ids->stdout))[0] ?? '');
+        if ($id === '') {
+            return null;
+        }
+        $inspect = $this->runAsSupervised(
+            ['/usr/bin/env', $env, $docker, 'inspect', '--format', '{{.Name}}', $id],
+            '/tmp',
+            15
+        );
+        if (!$inspect->ok()) {
+            return $id;
+        }
+        $name = ltrim(trim($inspect->stdout), '/');
+
+        return $name !== '' ? $name : $id;
     }
 
     private function portsOverridePath(string $domain): string
