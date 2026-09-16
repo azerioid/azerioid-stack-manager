@@ -25,6 +25,18 @@
                     <option value="proxy">Reverse proxy (127.0.0.1)</option>
                 </select>
             </label>
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Runtime intent
+                <select class="field mt-1" wire:model.live="createRuntime">
+                    <option value="traditional">Traditional (default)</option>
+                    @if ($type === 'php')
+                        <option value="octane">Laravel Octane</option>
+                    @endif
+                    @if (in_array($type, ['proxy', 'static'], true))
+                        <option value="pm2">PM2 (Node)</option>
+                        <option value="docker">Docker (rootless)</option>
+                    @endif
+                </select>
+            </label>
             @if ($type === 'php')
                 <label class="text-xs uppercase tracking-wide text-zinc-500">PHP version
                     <select class="field mt-1" wire:model="php_version">
@@ -40,12 +52,63 @@
                 </label>
             @endif
             <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
-                <select class="field mt-1" wire:model="engine" @disabled($type === 'proxy')>
+                <select class="field mt-1" wire:model="engine" @disabled($type === 'proxy' || $createRuntime === 'docker')>
                     <option value="caddy">Caddy (direct)</option>
                     <option value="apache">Apache (via Caddy)</option>
                     <option value="nginx">Nginx (via Caddy)</option>
                 </select>
             </label>
+            @if ($createRuntime === 'octane')
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Octane max requests
+                    <input class="field mt-1" wire:model="octaneMaxRequests" inputmode="numeric" placeholder="500">
+                </label>
+            @endif
+            @if ($createRuntime === 'pm2')
+                <label class="text-xs uppercase tracking-wide text-zinc-500">PM2 instances
+                    <input class="field mt-1" wire:model="pm2Instances" inputmode="numeric" placeholder="1">
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">PM2 entry (optional)
+                    <input class="field mt-1 font-mono text-sm" wire:model="pm2Entry" placeholder="server.js">
+                </label>
+            @endif
+            @if ($createRuntime === 'docker')
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Docker mode
+                    <select class="field mt-1" wire:model.live="dockerMode">
+                        <option value="image">Pull image</option>
+                        <option value="compose">Compose file</option>
+                        <option value="dockerfile">Dockerfile</option>
+                    </select>
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Internal port
+                    <input class="field mt-1" wire:model="dockerInternalPort" inputmode="numeric" placeholder="8080">
+                </label>
+                @if ($dockerMode === 'image')
+                    <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">Image
+                        <input class="field mt-1 font-mono text-sm" wire:model.live.debounce.400ms="dockerImage" placeholder="nginx:alpine">
+                        @if ($dockerImageError)
+                            <span class="mt-1 block text-xs text-bad">{{ $dockerImageError }}</span>
+                        @endif
+                        @if ($dockerImageSuggestions !== [])
+                            <ul class="mt-1 max-w-md rounded border border-white/10 bg-ink-900 text-xs">
+                                @foreach ($dockerImageSuggestions as $sug)
+                                    <li>
+                                        <button type="button" class="block w-full px-2 py-1 text-left font-mono hover:bg-white/5"
+                                            wire:click="pickDockerImage('{{ $sug['repo_name'] }}')">{{ $sug['repo_name'] }}</button>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @endif
+                    </label>
+                @elseif ($dockerMode === 'compose')
+                    <label class="text-xs uppercase tracking-wide text-zinc-500">Compose path (optional)
+                        <input class="field mt-1 font-mono text-sm" wire:model="dockerCompose" placeholder="docker-compose.yml">
+                    </label>
+                @else
+                    <label class="text-xs uppercase tracking-wide text-zinc-500">Dockerfile path (optional)
+                        <input class="field mt-1 font-mono text-sm" wire:model="dockerDockerfile" placeholder="Dockerfile">
+                    </label>
+                @endif
+            @endif
             <label class="text-xs uppercase tracking-wide text-zinc-500 md:col-span-2">TLS mode
                 <select class="field mt-1" wire:model.live="tlsMode">
                     <option value="off">Off (HTTP only)</option>
@@ -220,7 +283,20 @@
             </label>
             @if ($dockerMode === 'image')
                 <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Image
-                    <input class="field mt-1 max-w-md font-mono text-sm" wire:model="dockerImage" placeholder="nginx:alpine">
+                    <input class="field mt-1 max-w-md font-mono text-sm" wire:model.live.debounce.400ms="dockerImage" placeholder="nginx:alpine">
+                    @if ($dockerImageError)
+                        <span class="mt-1 block text-xs text-bad">{{ $dockerImageError }}</span>
+                    @endif
+                    @if ($dockerImageSuggestions !== [])
+                        <ul class="mt-1 max-w-md rounded border border-white/10 bg-ink-900 text-xs">
+                            @foreach ($dockerImageSuggestions as $sug)
+                                <li>
+                                    <button type="button" class="block w-full px-2 py-1 text-left font-mono hover:bg-white/5"
+                                        wire:click="pickDockerImage('{{ $sug['repo_name'] }}')">{{ $sug['repo_name'] }}</button>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
                 </label>
             @elseif ($dockerMode === 'compose')
                 <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Compose path (optional)
@@ -403,6 +479,10 @@
                                 @endif
                                 <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
                                 <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>
+                                @if (($v['runtime'] ?? 'fpm') === 'docker')
+                                    <a href="/vhosts/{{ $v['domain'] }}/container-shell" class="text-xs text-accent">Container shell</a>
+                                    <a href="/vhosts/{{ $v['domain'] }}/container-logs" class="text-xs text-accent">Container logs</a>
+                                @endif
                                 <button type="button" class="text-xs text-accent" wire:click="startEdit('{{ $v['domain'] }}')">Edit</button>
                                 <button type="button" class="text-xs text-bad" wire:click="askDelete('{{ $v['domain'] }}')">Delete</button>
                             @endif

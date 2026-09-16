@@ -356,6 +356,8 @@ final class FakeBroker
                 'vhost.docker.build' => $this->docker('build', $args, $stdin),
                 'vhost.docker.restart' => $this->docker('restart', $args, $stdin),
                 'vhost.docker.logs' => $this->docker('logs', $args, $stdin),
+                'vhost.docker.image.validate' => $this->dockerImageValidate($stdin, $args),
+                'vhost.docker.image.search' => $this->dockerImageSearch($stdin, $args),
                 'web.release-site-ports' => [
                     'released' => false,
                     'deprecated' => true,
@@ -2572,6 +2574,13 @@ final class FakeBroker
     private function terminalSessionStart(array $args, array $stdin): array
     {
         $domain = (string) ($args[0] ?? '');
+        $kind = strtolower(trim((string) ($stdin['mode'] ?? 'host')));
+        if ($kind === '') {
+            $kind = 'host';
+        }
+        if (! in_array($kind, ['host', 'container'], true)) {
+            throw new BrokerCallException('mode must be host or container.', 2);
+        }
         foreach ($this->vhosts as $v) {
             if (($v['domain'] ?? '') !== $domain) {
                 continue;
@@ -2579,12 +2588,22 @@ final class FakeBroker
             if (! empty($v['readonly'])) {
                 throw new BrokerCallException('Terminal access is not available for read-only or system vhosts.', 3);
             }
+            if ($kind === 'container') {
+                if (($v['runtime'] ?? 'fpm') !== 'docker') {
+                    throw new BrokerCallException('Container shell requires runtime=docker on this vhost.', 3);
+                }
+            }
             $id = bin2hex(random_bytes(16));
+            $container = $kind === 'container' ? DockerManager::containerName($domain) : null;
             $this->terminalSessions[$id] = [
                 'id' => $id,
+                'kind' => $kind,
                 'domain' => $domain,
                 'root' => $v['root'] ?? '',
-                'username' => 'az-vh-' . str_replace('.', '-', $domain),
+                'username' => $kind === 'container'
+                    ? 'azerioid-supervised'
+                    : 'az-vh-' . str_replace('.', '-', $domain),
+                'container' => $container,
                 'port' => 35001,
                 'pid' => 4242,
                 'admin_user_id' => (string) ($stdin['admin_user_id'] ?? ''),
@@ -2598,12 +2617,56 @@ final class FakeBroker
                 'domain' => $domain,
                 'root' => $v['root'] ?? '',
                 'username' => $this->terminalSessions[$id]['username'],
+                'kind' => $kind,
+                'container' => $container,
                 'ws_path' => '/terminal/' . $id,
                 'idle_seconds' => 1200,
                 'started_at' => $this->terminalSessions[$id]['started_at'],
             ];
         }
         throw new BrokerCallException('Vhost not found.', 2);
+    }
+
+    /**
+     * @param  array<string, mixed>  $stdin
+     * @param  list<string>  $args
+     * @return array<string, mixed>
+     */
+    private function dockerImageValidate(array $stdin, array $args): array
+    {
+        $image = DockerManager::validateImage($stdin['image'] ?? ($args[0] ?? ''));
+        $missing = str_contains(strtolower($image), 'missing') || str_ends_with($image, ':notfound');
+
+        return [
+            'ok' => true,
+            'exists' => ! $missing,
+            'image' => $image,
+            'detail' => $missing ? 'Image not found: '.$image : 'manifest inspect ok',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $stdin
+     * @param  list<string>  $args
+     * @return array<string, mixed>
+     */
+    private function dockerImageSearch(array $stdin, array $args): array
+    {
+        $query = trim((string) ($stdin['query'] ?? ($args[0] ?? '')));
+        if (strlen($query) < 2) {
+            throw new BrokerCallException('query must be at least 2 characters.', 2);
+        }
+        $suggestions = [];
+        foreach (['library/'.$query, $query.'/app', 'bitnami/'.$query] as $name) {
+            $suggestions[] = ['repo_name' => $name];
+        }
+
+        return [
+            'ok' => true,
+            'query' => $query,
+            'suggestions' => array_slice($suggestions, 0, 8),
+            'detail' => null,
+        ];
     }
 
     /** @param list<string> $args */

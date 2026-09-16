@@ -38,9 +38,10 @@ class VhostCommand extends Command
         {--compose= : Compose file relative to docroot (docker enable; default docker-compose.yml)}
         {--dockerfile= : Dockerfile relative to docroot (docker enable; default Dockerfile)}
         {--lines= : Log line count (docker logs; default 100)}
+        {--runtime= : Create-time runtime intent: traditional|octane|pm2|docker (add; same as UI createRuntime)}
         {--json : JSON output (list / files list / octane / pm2 / docker)}';
 
-    protected $description = 'Manage virtual hosts via broker vhost.* actions';
+    protected $description = 'Manage virtual hosts via broker vhost.* actions. Create-time runtimes (octane/pm2/docker) use --runtime= on add, or enable afterward via azerioid vhost octane|pm2|docker enable (UI: Add vhost → Runtime intent).';
 
     public function handle(): int
     {
@@ -168,6 +169,19 @@ class VhostCommand extends Command
             }
 
             $engine = $type === 'proxy' ? 'caddy' : Validator::vhostEngine((string) ($this->option('engine') ?: 'caddy'));
+            $runtime = strtolower(trim((string) ($this->option('runtime') ?: 'traditional')));
+            if (! in_array($runtime, ['traditional', 'octane', 'pm2', 'docker'], true)) {
+                throw new \RuntimeException('--runtime= must be traditional, octane, pm2, or docker.');
+            }
+            if ($runtime === 'octane' && $type !== 'php') {
+                throw new \RuntimeException('--runtime=octane requires --type=php.');
+            }
+            if (in_array($runtime, ['pm2', 'docker'], true) && ! in_array($type, ['proxy', 'static'], true)) {
+                throw new \RuntimeException("--runtime={$runtime} requires --type=proxy or static.");
+            }
+            if ($runtime === 'docker') {
+                $engine = 'caddy';
+            }
             $res = $this->brokerCall('vhost.add', $args, ['engine' => $engine]);
             if (! $res->ok) {
                 $this->throwBrokerFailure($res);
@@ -183,7 +197,20 @@ class VhostCommand extends Command
                 }
             }
 
-            $this->line("Created vhost {$domain}.");
+            if ($runtime !== 'traditional') {
+                $enableCode = $this->enableRuntimeAfterAdd($domain, $runtime);
+                if ($enableCode !== self::SUCCESS) {
+                    $this->error(
+                        "Created {$domain}, but {$runtime} enable failed. "
+                        .'The vhost exists — retry with: azerioid vhost '.$runtime.' enable --domain='.$domain
+                    );
+
+                    return $enableCode;
+                }
+                $this->line("Created vhost {$domain} and enabled {$runtime}.");
+            } else {
+                $this->line("Created vhost {$domain}.");
+            }
             if ($this->wantsJson() || is_array($res->data)) {
                 $this->line(json_encode($res->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
             }
@@ -191,6 +218,60 @@ class VhostCommand extends Command
             return self::SUCCESS;
         } catch (\Throwable $e) {
             return $this->failBroker($e);
+        }
+    }
+
+    private function enableRuntimeAfterAdd(string $domain, string $runtime): int
+    {
+        try {
+            if ($runtime === 'octane') {
+                $input = [];
+                if ($this->option('max-requests') !== null && $this->option('max-requests') !== '') {
+                    $input['max_requests'] = (string) $this->option('max-requests');
+                }
+                $res = $this->brokerCall('vhost.octane.enable', [$domain], $input, 900);
+            } elseif ($runtime === 'pm2') {
+                $input = [];
+                if ($this->option('instances') !== null && $this->option('instances') !== '') {
+                    $input['instances'] = (string) $this->option('instances');
+                }
+                if ($this->option('entry')) {
+                    $input['entry'] = (string) $this->option('entry');
+                }
+                $res = $this->brokerCall('vhost.pm2.enable', [$domain], $input, 900);
+            } else {
+                $input = [];
+                if ($this->option('mode')) {
+                    $input['mode'] = (string) $this->option('mode');
+                }
+                if ($this->option('image')) {
+                    $input['image'] = (string) $this->option('image');
+                }
+                if ($this->option('internal-port')) {
+                    $input['internal_port'] = (string) $this->option('internal-port');
+                }
+                if ($this->option('compose')) {
+                    $input['compose'] = (string) $this->option('compose');
+                }
+                if ($this->option('dockerfile')) {
+                    $input['dockerfile'] = (string) $this->option('dockerfile');
+                }
+                if ($this->option('port')) {
+                    $input['port'] = (string) $this->option('port');
+                }
+                $res = $this->brokerCall('vhost.docker.enable', [$domain], $input, 900);
+            }
+            if (! $res->ok) {
+                $this->error((string) $res->error);
+
+                return self::FAILURE;
+            }
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
         }
     }
 

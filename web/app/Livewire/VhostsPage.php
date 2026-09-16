@@ -26,6 +26,7 @@ class VhostsPage extends Component
     public string $dnsToken = '';
     public bool $acmeStaging = false;
     public bool $wildcard = false;
+    public string $createRuntime = 'traditional';
     public ?string $error = null;
     public ?string $flash = null;
     public ?string $confirmDelete = null;
@@ -46,6 +47,9 @@ class VhostsPage extends Component
     public string $dockerInternalPort = '8080';
     public string $dockerCompose = '';
     public string $dockerDockerfile = '';
+    /** @var list<array{repo_name:string}> */
+    public array $dockerImageSuggestions = [];
+    public ?string $dockerImageError = null;
 
     public ?string $editingDomain = null;
     public string $editRoot = '';
@@ -76,6 +80,63 @@ class VhostsPage extends Component
         }
     }
 
+    public function updatedType(): void
+    {
+        if ($this->type === 'php' && in_array($this->createRuntime, ['pm2', 'docker'], true)) {
+            $this->createRuntime = 'traditional';
+        }
+        if ($this->type !== 'php' && $this->createRuntime === 'octane') {
+            $this->createRuntime = 'traditional';
+        }
+        if ($this->createRuntime === 'docker') {
+            $this->engine = 'caddy';
+        }
+    }
+
+    public function updatedCreateRuntime(): void
+    {
+        if ($this->createRuntime === 'docker') {
+            $this->engine = 'caddy';
+            if ($this->type === 'php') {
+                $this->type = 'static';
+            }
+        }
+        if ($this->createRuntime === 'octane' && $this->type !== 'php') {
+            $this->type = 'php';
+        }
+        if ($this->createRuntime === 'pm2' && ! in_array($this->type, ['proxy', 'static'], true)) {
+            $this->type = 'static';
+        }
+    }
+
+    public function updatedDockerImage(BrokerClient $broker): void
+    {
+        $this->dockerImageError = null;
+        $this->dockerImageSuggestions = [];
+        $q = trim($this->dockerImage);
+        if (strlen($q) < 2) {
+            return;
+        }
+        try {
+            $res = $broker->call('vhost.docker.image.search', [], ['query' => $q], 15, false);
+            if ($res->ok && is_array($res->data['suggestions'] ?? null)) {
+                $this->dockerImageSuggestions = array_values(array_filter(
+                    $res->data['suggestions'],
+                    static fn ($row) => is_array($row) && isset($row['repo_name'])
+                ));
+            }
+        } catch (\Throwable) {
+            $this->dockerImageSuggestions = [];
+        }
+    }
+
+    public function pickDockerImage(string $repo): void
+    {
+        $this->dockerImage = $repo;
+        $this->dockerImageSuggestions = [];
+        $this->dockerImageError = null;
+    }
+
     public function create(BrokerClient $broker): void
     {
         $this->error = null;
@@ -83,6 +144,10 @@ class VhostsPage extends Component
             $domain = Validator::domain($this->domain);
             $root = Validator::webRoot($this->root, (string) config('azerioid.www_root'), new \AzerioidPanel\Broker\FakeRuntime());
             $type = Validator::vhostType($this->type);
+            $createRuntime = $this->normalizeCreateRuntime($this->createRuntime, $type);
+            if ($createRuntime === 'docker') {
+                $this->engine = 'caddy';
+            }
             $args = [$domain, $root, $type];
             if ($type === 'php') {
                 $args[] = Validator::phpVersion($this->php_version, $this->phpVersions);
@@ -90,7 +155,9 @@ class VhostsPage extends Component
                 $args[] = Validator::localUpstream($this->upstream);
             }
             $res = $broker->call('vhost.add', $args, [
-                'engine' => $type === 'proxy' ? 'caddy' : Validator::vhostEngine($this->engine),
+                'engine' => ($type === 'proxy' || $createRuntime === 'docker')
+                    ? 'caddy'
+                    : Validator::vhostEngine($this->engine),
             ]);
             if (! $res->ok) {
                 $this->error = $this->operatorMessage((string) $res->error);
@@ -132,12 +199,136 @@ class VhostsPage extends Component
                     return;
                 }
             }
-            $this->flash = "Created {$domain}.";
-            $this->reset('domain', 'root', 'type', 'upstream', 'engine', 'tlsMode', 'dnsProvider', 'dnsToken', 'acmeStaging', 'wildcard', 'showForm');
+            $enableError = $this->enableCreateRuntime($broker, $domain, $createRuntime);
+            if ($enableError !== null) {
+                $this->error = $this->operatorMessage(
+                    "Created {$domain}, but {$createRuntime} enable failed: {$enableError}. "
+                    .'The vhost exists — use the Enable actions on the list to retry.'
+                );
+                $this->resetCreateForm();
+                $this->reload($broker);
+
+                return;
+            }
+            $this->flash = $createRuntime === 'traditional'
+                ? "Created {$domain}."
+                : "Created {$domain} and enabled {$createRuntime}.";
+            $this->resetCreateForm();
             $this->reload($broker);
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
         }
+    }
+
+    private function resetCreateForm(): void
+    {
+        $this->reset(
+            'domain',
+            'root',
+            'type',
+            'upstream',
+            'engine',
+            'tlsMode',
+            'dnsProvider',
+            'dnsToken',
+            'acmeStaging',
+            'wildcard',
+            'showForm',
+            'createRuntime',
+            'octaneMaxRequests',
+            'pm2Instances',
+            'pm2Entry',
+            'dockerMode',
+            'dockerImage',
+            'dockerInternalPort',
+            'dockerCompose',
+            'dockerDockerfile',
+            'dockerImageSuggestions',
+            'dockerImageError'
+        );
+        $this->type = 'php';
+        $this->engine = 'caddy';
+        $this->tlsMode = 'off';
+        $this->createRuntime = 'traditional';
+        $this->octaneMaxRequests = '500';
+        $this->pm2Instances = '1';
+        $this->dockerMode = 'image';
+        $this->dockerInternalPort = '8080';
+    }
+
+    private function normalizeCreateRuntime(string $runtime, string $type): string
+    {
+        $runtime = strtolower(trim($runtime));
+        if (! in_array($runtime, ['traditional', 'octane', 'pm2', 'docker'], true)) {
+            throw new \RuntimeException('createRuntime must be traditional, octane, pm2, or docker.');
+        }
+        if ($runtime === 'octane' && $type !== 'php') {
+            throw new \RuntimeException('Octane create intent requires type=php.');
+        }
+        if ($runtime === 'pm2' && ! in_array($type, ['proxy', 'static'], true)) {
+            throw new \RuntimeException('PM2 create intent requires type=proxy or static.');
+        }
+        if ($runtime === 'docker' && ! in_array($type, ['proxy', 'static'], true)) {
+            throw new \RuntimeException('Docker create intent requires type=proxy or static.');
+        }
+
+        return $runtime;
+    }
+
+    private function enableCreateRuntime(BrokerClient $broker, string $domain, string $createRuntime): ?string
+    {
+        if ($createRuntime === 'traditional') {
+            return null;
+        }
+        if ($createRuntime === 'octane') {
+            $res = $broker->call('vhost.octane.enable', [$domain], [
+                'max_requests' => trim($this->octaneMaxRequests),
+            ], 900);
+
+            return $res->ok ? null : (string) $res->error;
+        }
+        if ($createRuntime === 'pm2') {
+            $input = ['instances' => trim($this->pm2Instances)];
+            $entry = trim($this->pm2Entry);
+            if ($entry !== '') {
+                $input['entry'] = $entry;
+            }
+            $res = $broker->call('vhost.pm2.enable', [$domain], $input, 900);
+
+            return $res->ok ? null : (string) $res->error;
+        }
+        if ($createRuntime === 'docker') {
+            if (trim($this->dockerMode) === 'image') {
+                $image = trim($this->dockerImage);
+                $check = $broker->call('vhost.docker.image.validate', [], ['image' => $image], 60, false);
+                if ($check->ok && empty($check->data['exists'])) {
+                    $this->dockerImageError = 'Image not found: '.$image;
+
+                    return 'Image not found: '.$image;
+                }
+            }
+            $input = [
+                'mode' => trim($this->dockerMode),
+                'internal_port' => trim($this->dockerInternalPort),
+            ];
+            $image = trim($this->dockerImage);
+            if ($image !== '') {
+                $input['image'] = $image;
+            }
+            $compose = trim($this->dockerCompose);
+            if ($compose !== '') {
+                $input['compose'] = $compose;
+            }
+            $dockerfile = trim($this->dockerDockerfile);
+            if ($dockerfile !== '') {
+                $input['dockerfile'] = $dockerfile;
+            }
+            $res = $broker->call('vhost.docker.enable', [$domain], $input, 900);
+
+            return $res->ok ? null : (string) $res->error;
+        }
+
+        return null;
     }
 
     public function startEdit(string $domain): void
@@ -549,7 +740,9 @@ class VhostsPage extends Component
             'dockerImage',
             'dockerInternalPort',
             'dockerCompose',
-            'dockerDockerfile'
+            'dockerDockerfile',
+            'dockerImageSuggestions',
+            'dockerImageError'
         );
         $this->dockerMode = 'image';
         $this->dockerInternalPort = '8080';
@@ -559,10 +752,21 @@ class VhostsPage extends Component
     {
         $domain = (string) $this->dockerTarget;
         $this->error = null;
+        $this->dockerImageError = null;
         try {
             $domain = Validator::domain($domain);
             $this->assertMutableVhost($domain);
             $this->assertDockerCandidate($domain);
+            if (trim($this->dockerMode) === 'image') {
+                $image = trim($this->dockerImage);
+                $check = $broker->call('vhost.docker.image.validate', [], ['image' => $image], 60, false);
+                if ($check->ok && empty($check->data['exists'])) {
+                    $this->dockerImageError = 'Image not found: '.$image;
+                    $this->error = $this->dockerImageError;
+
+                    return;
+                }
+            }
             $input = [
                 'mode' => trim($this->dockerMode),
                 'internal_port' => trim($this->dockerInternalPort),
