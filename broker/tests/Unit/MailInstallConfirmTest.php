@@ -55,7 +55,6 @@ final class MailInstallConfirmTest extends TestCase
         $cfg->registryComponentsPath = $this->registryPath;
         $cfg->stagingDir = sys_get_temp_dir() . '/azerioid-mail-install-' . getmypid();
         $cfg->managedComponentsPath = $cfg->stagingDir . '/managed-components.json';
-        @mkdir($cfg->stagingDir . '/operations', 0750, true);
         $rt->dirs[$cfg->stagingDir] = true;
         $rt->dirs[$cfg->stagingDir . '/operations'] = true;
 

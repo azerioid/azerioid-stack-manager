@@ -80,7 +80,6 @@ final class AdminerToolTest extends TestCase
         $cfg->panelPort = 3169;
         $cfg->adminerCaddyRoutesPath = AdminerTool::CADDY_ROUTE_PATH;
         $cfg->terminalCaddyRoutesPath = '/var/lib/azerioid-panel/caddy-terminal-routes.conf';
-        @mkdir($cfg->stagingDir . '/operations', 0750, true);
         $rt->dirs[$cfg->stagingDir] = true;
         $rt->dirs[$cfg->stagingDir . '/operations'] = true;
 
