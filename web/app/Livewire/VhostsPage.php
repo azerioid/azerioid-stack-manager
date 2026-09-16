@@ -64,6 +64,12 @@ class VhostsPage extends Component
     public string $editEngine = 'caddy';
     public array $dnsProviders = [];
 
+    public string $listSearch = '';
+    public string $filterType = '';
+    public string $filterEngine = '';
+    public string $filterRuntime = '';
+    public string $filterStatus = '';
+
     public function mount(BrokerClient $broker): void
     {
         $this->reload($broker);
@@ -988,9 +994,306 @@ class VhostsPage extends Component
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $vhost
+     * @return array{state: string, label: string, detail: ?string}
+     */
+    public function vhostStatus(array $vhost): array
+    {
+        if (isset($vhost['enabled']) && $vhost['enabled'] === false) {
+            return ['state' => 'disabled', 'label' => 'Disabled', 'detail' => null];
+        }
+
+        $ts = is_array($vhost['tls_status'] ?? null) ? $vhost['tls_status'] : [];
+        if (! empty($ts['failed'])) {
+            $detail = trim((string) ($ts['error'] ?? $ts['label'] ?? 'Failed'));
+            $detail = preg_replace('/^Failed\s*[—\-]\s*/u', '', $detail) ?: $detail;
+
+            return ['state' => 'failed', 'label' => 'Failed', 'detail' => $detail !== '' ? $detail : null];
+        }
+        if (! empty($ts['pending'])) {
+            $detail = trim((string) ($ts['error'] ?? 'Certificate pending'));
+            $detail = preg_replace('/^Pending\s*[—\-]\s*/u', '', $detail) ?: $detail;
+
+            return ['state' => 'pending', 'label' => 'Pending', 'detail' => $detail !== '' ? $detail : null];
+        }
+
+        return ['state' => 'healthy', 'label' => 'Healthy', 'detail' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $vhost
+     * @return array{label: string, tone: string, detail: ?string}
+     */
+    public function vhostRuntimeBadge(array $vhost): array
+    {
+        $runtime = strtolower((string) ($vhost['runtime'] ?? 'fpm'));
+        $type = (string) ($vhost['type'] ?? '');
+
+        return match ($runtime) {
+            'octane' => [
+                'label' => 'Octane',
+                'tone' => 'accent',
+                'detail' => 'FrankenPHP · 127.0.0.1:'.($vhost['octane_port'] ?? '?')
+                    .' · max-req '.($vhost['octane_max_requests'] ?? '?'),
+            ],
+            'pm2' => [
+                'label' => 'PM2',
+                'tone' => 'accent',
+                'detail' => 'Node · 127.0.0.1:'.($vhost['pm2_port'] ?? '?')
+                    .' · '.($vhost['pm2_instances'] ?? '?').' worker(s)'
+                    .(! empty($vhost['pm2_entry']) ? ' · '.$vhost['pm2_entry'] : ''),
+            ],
+            'docker' => [
+                'label' => 'Docker',
+                'tone' => 'accent',
+                'detail' => 'Rootless · 127.0.0.1:'.($vhost['docker_port'] ?? '?')
+                    .'→:'.($vhost['docker_internal_port'] ?? '?')
+                    .' · '.($vhost['docker_mode'] ?? '?')
+                    .(! empty($vhost['docker_image']) ? ' · '.$vhost['docker_image'] : ''),
+            ],
+            default => match ($type) {
+                'php' => [
+                    'label' => 'PHP-FPM',
+                    'tone' => 'neutral',
+                    'detail' => empty($vhost['readonly']) && empty($vhost['laravel_app'])
+                        ? (string) ($vhost['laravel_app_detail'] ?? 'Octane unavailable — not a Laravel app')
+                        : (empty($vhost['readonly']) && in_array($vhost['engine'] ?? 'caddy', ['apache', 'nginx'], true)
+                            ? 'Octane unavailable — needs the Caddy engine'
+                            : null),
+                ],
+                'static' => [
+                    'label' => 'Static',
+                    'tone' => 'neutral',
+                    'detail' => $this->nodeRuntimeHint($vhost),
+                ],
+                'proxy' => [
+                    'label' => 'Proxy',
+                    'tone' => 'neutral',
+                    'detail' => $this->nodeRuntimeHint($vhost),
+                ],
+                default => ['label' => '—', 'tone' => 'neutral', 'detail' => null],
+            },
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $vhost
+     * @return list<array{label: string, items: list<array{label: string, href?: string, wireClick?: string, danger?: bool}>}>
+     */
+    public function vhostActionGroups(array $vhost): array
+    {
+        $domain = (string) ($vhost['domain'] ?? '');
+        if ($domain === '') {
+            return [];
+        }
+
+        $readonly = ! empty($vhost['readonly']);
+        $runtime = strtolower((string) ($vhost['runtime'] ?? 'fpm'));
+        $type = (string) ($vhost['type'] ?? '');
+        $engine = (string) ($vhost['engine'] ?? 'caddy');
+        $groups = [];
+
+        $access = [];
+        if (! empty($this->supervisorByVhost[$domain])) {
+            $n = count($this->supervisorByVhost[$domain]);
+            $access[] = [
+                'label' => $n.' proc'.($n === 1 ? '' : 's'),
+                'href' => '/processes',
+            ];
+        }
+        if (! $readonly) {
+            $access[] = ['label' => 'Files', 'href' => '/vhosts/'.$domain.'/files'];
+            $access[] = ['label' => 'Terminal', 'href' => '/vhosts/'.$domain.'/terminal'];
+            if ($runtime === 'docker') {
+                $access[] = ['label' => 'Container shell', 'href' => '/vhosts/'.$domain.'/container-shell'];
+                $access[] = ['label' => 'Container logs', 'href' => '/vhosts/'.$domain.'/container-logs'];
+            }
+        }
+        if ($access !== []) {
+            $groups[] = ['label' => 'Access', 'items' => $access];
+        }
+
+        if (! $readonly) {
+            $runtimeItems = [];
+            if ($runtime === 'octane') {
+                $runtimeItems[] = ['label' => 'Reload application', 'wireClick' => "reloadOctane('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Switch to PHP-FPM', 'wireClick' => "disableOctane('{$domain}')"];
+            } elseif ($runtime === 'pm2') {
+                $runtimeItems[] = ['label' => 'Reload application', 'wireClick' => "reloadPm2('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Scale', 'wireClick' => "askPm2Scale('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Switch off PM2', 'wireClick' => "disablePm2('{$domain}')"];
+            } elseif ($runtime === 'docker') {
+                $runtimeItems[] = ['label' => 'Rebuild', 'wireClick' => "rebuildDocker('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Restart', 'wireClick' => "restartDocker('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Switch off Docker', 'wireClick' => "disableDocker('{$domain}')"];
+            } else {
+                if ($type === 'php' && ! empty($vhost['laravel_app']) && $engine === 'caddy' && $runtime === 'fpm') {
+                    $runtimeItems[] = ['label' => 'Enable Octane', 'wireClick' => "askOctane('{$domain}')"];
+                }
+                if (in_array($type, ['proxy', 'static'], true) && ! empty($vhost['node_app']) && $engine === 'caddy'
+                    && ! in_array($runtime, ['pm2', 'octane', 'docker'], true)) {
+                    $runtimeItems[] = ['label' => 'Enable PM2', 'wireClick' => "askPm2('{$domain}')"];
+                }
+                if (in_array($type, ['proxy', 'static'], true) && $engine === 'caddy'
+                    && ! in_array($runtime, ['pm2', 'octane', 'docker'], true)) {
+                    $runtimeItems[] = ['label' => 'Enable Docker', 'wireClick' => "askDocker('{$domain}')"];
+                }
+            }
+            if ($runtimeItems !== []) {
+                $groups[] = ['label' => 'Runtime', 'items' => $runtimeItems];
+            }
+
+            $groups[] = [
+                'label' => 'Configuration',
+                'items' => [
+                    ['label' => 'Edit', 'wireClick' => "startEdit('{$domain}')"],
+                ],
+            ];
+            $groups[] = [
+                'label' => 'Destructive',
+                'items' => [
+                    ['label' => 'Delete', 'wireClick' => "askDelete('{$domain}')", 'danger' => true],
+                ],
+            ];
+        }
+
+        return $groups;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function filteredVhosts(): array
+    {
+        $search = strtolower(trim($this->listSearch));
+
+        return array_values(array_filter($this->vhosts, function (array $v) use ($search): bool {
+            $domain = (string) ($v['domain'] ?? '');
+            if ($search !== '' && ! str_contains(strtolower($domain), $search)) {
+                return false;
+            }
+            if ($this->filterType !== '' && (string) ($v['type'] ?? '') !== $this->filterType) {
+                return false;
+            }
+            if ($this->filterEngine !== '' && (string) ($v['engine'] ?? 'caddy') !== $this->filterEngine) {
+                return false;
+            }
+            if ($this->filterRuntime !== '') {
+                $runtime = strtolower((string) ($v['runtime'] ?? 'fpm'));
+                $want = $this->filterRuntime;
+                if ($want === 'php-fpm') {
+                    if ($runtime !== 'fpm' || ($v['type'] ?? '') !== 'php') {
+                        return false;
+                    }
+                } elseif ($want === 'static' || $want === 'proxy') {
+                    if ($runtime !== 'fpm' || ($v['type'] ?? '') !== $want) {
+                        return false;
+                    }
+                } elseif ($runtime !== $want) {
+                    return false;
+                }
+            }
+            if ($this->filterStatus !== '') {
+                if ($this->vhostStatus($v)['state'] !== $this->filterStatus) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
+    }
+
+    public function clearListFilters(): void
+    {
+        $this->listSearch = '';
+        $this->filterType = '';
+        $this->filterEngine = '';
+        $this->filterRuntime = '';
+        $this->filterStatus = '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $vhost
+     */
+    private function nodeRuntimeHint(array $vhost): ?string
+    {
+        if (! empty($vhost['readonly'])) {
+            return null;
+        }
+        if (empty($vhost['node_app'])) {
+            return (string) ($vhost['node_app_detail'] ?? 'PM2 unavailable — not a Node app');
+        }
+        if (in_array($vhost['engine'] ?? 'caddy', ['apache', 'nginx'], true)) {
+            return 'PM2 unavailable — needs the Caddy engine';
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $vhost
+     */
+    public function vhostRootLabel(array $vhost): string
+    {
+        $engine = (string) ($vhost['engine'] ?? 'caddy');
+        if (in_array($engine, ['apache', 'nginx'], true)) {
+            return (string) ($vhost['root'] ?? $vhost['reverse_proxy'] ?? '—');
+        }
+
+        return (string) ($vhost['reverse_proxy'] ?? $vhost['root'] ?? '—');
+    }
+
+    /**
+     * TLS column: certificate details only (no failure narrative — that lives in Status).
+     *
+     * @param  array<string, mixed>  $vhost
+     * @return array{primary: string, secondary: ?string}
+     */
+    public function vhostTlsDisplay(array $vhost): array
+    {
+        $ts = is_array($vhost['tls_status'] ?? null) ? $vhost['tls_status'] : null;
+        $mode = (string) ($vhost['tls_mode'] ?? (! empty($vhost['tls']) ? 'auto' : 'off'));
+
+        if ($ts === null) {
+            return [
+                'primary' => ! empty($vhost['tls']) ? $mode : 'No TLS',
+                'secondary' => null,
+            ];
+        }
+
+        if (empty($ts['enabled']) || $mode === 'off') {
+            return ['primary' => 'No TLS', 'secondary' => null];
+        }
+
+        $issuerType = (string) ($ts['issuer_type'] ?? '');
+        $primary = match ($issuerType) {
+            'lets_encrypt' => "Let's Encrypt (HTTP-01)",
+            'dns01' => "Let's Encrypt (DNS-01)",
+            'self_signed' => 'Self-signed',
+            'pending', 'failed' => strtoupper($mode),
+            default => strtoupper($mode),
+        };
+
+        $bits = [];
+        if (! empty($ts['issuer']) && ! in_array($issuerType, ['pending', 'failed'], true)) {
+            $bits[] = (string) $ts['issuer'];
+        }
+        if (! empty($ts['valid_to']) && ! empty($ts['ok'])) {
+            $bits[] = 'exp '.substr((string) $ts['valid_to'], 0, 16);
+        }
+
+        return [
+            'primary' => $primary,
+            'secondary' => $bits !== [] ? implode(' · ', $bits) : null,
+        ];
+    }
+
     public function render()
     {
-        return view('livewire.vhosts')->layoutData([
+        return view('livewire.vhosts', [
+            'filteredVhosts' => $this->filteredVhosts(),
+        ])->layoutData([
             'heading' => 'Virtual hosts',
             'sub' => 'Caddy is the front door on :80/:443. Each vhost chooses Caddy, Apache, or Nginx as its engine. Reverse-proxy and protected vhosts are read-only.',
         ]);

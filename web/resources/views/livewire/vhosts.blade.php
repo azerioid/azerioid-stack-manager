@@ -341,155 +341,121 @@
         </div>
     @endif
 
+    <div class="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end">
+        <label class="min-w-[12rem] flex-1 text-xs uppercase tracking-wide text-zinc-500">Search
+            <input class="field mt-1" type="search" wire:model.live.debounce.250ms="listSearch" placeholder="Filter by domain…">
+        </label>
+        <label class="text-xs uppercase tracking-wide text-zinc-500 lg:w-36">Type
+            <select class="field mt-1" wire:model.live="filterType">
+                <option value="">All</option>
+                <option value="php">PHP</option>
+                <option value="static">Static</option>
+                <option value="proxy">Proxy</option>
+            </select>
+        </label>
+        <label class="text-xs uppercase tracking-wide text-zinc-500 lg:w-36">Engine
+            <select class="field mt-1" wire:model.live="filterEngine">
+                <option value="">All</option>
+                <option value="caddy">Caddy</option>
+                <option value="apache">Apache</option>
+                <option value="nginx">Nginx</option>
+            </select>
+        </label>
+        <label class="text-xs uppercase tracking-wide text-zinc-500 lg:w-40">Runtime
+            <select class="field mt-1" wire:model.live="filterRuntime">
+                <option value="">All</option>
+                <option value="php-fpm">PHP-FPM</option>
+                <option value="static">Static</option>
+                <option value="proxy">Proxy</option>
+                <option value="octane">Octane</option>
+                <option value="pm2">PM2</option>
+                <option value="docker">Docker</option>
+            </select>
+        </label>
+        <label class="text-xs uppercase tracking-wide text-zinc-500 lg:w-36">Status
+            <select class="field mt-1" wire:model.live="filterStatus">
+                <option value="">All</option>
+                <option value="healthy">Healthy</option>
+                <option value="failed">Failed</option>
+                <option value="pending">Pending</option>
+                <option value="disabled">Disabled</option>
+            </select>
+        </label>
+        @if ($listSearch !== '' || $filterType !== '' || $filterEngine !== '' || $filterRuntime !== '' || $filterStatus !== '')
+            <button type="button" class="btn-ghost text-xs" wire:click="clearListFilters">Clear filters</button>
+        @endif
+    </div>
+
     <div class="panel overflow-x-auto">
-        <table class="w-full text-left text-sm">
+        <table class="w-full min-w-[56rem] text-left text-sm">
             <thead class="font-mono text-[11px] uppercase tracking-wide text-zinc-500">
                 <tr>
-                    <th class="px-4 py-3">Domain</th>
-                    <th class="px-4 py-3">Type</th>
-                    <th class="px-4 py-3">Engine</th>
-                    <th class="px-4 py-3">Root / upstream</th>
-                    <th class="px-4 py-3">PHP</th>
-                    <th class="px-4 py-3">Runtime</th>
-                    <th class="px-4 py-3">TLS</th>
-                    <th class="px-4 py-3"></th>
+                    <th class="px-3 py-3">Domain</th>
+                    <th class="px-3 py-3">Type</th>
+                    <th class="px-3 py-3">Engine</th>
+                    <th class="px-3 py-3">Root / upstream</th>
+                    <th class="px-3 py-3">PHP</th>
+                    <th class="px-3 py-3">Runtime</th>
+                    <th class="px-3 py-3">Status</th>
+                    <th class="px-3 py-3">TLS</th>
+                    <th class="w-12 px-3 py-3 text-right"><span class="sr-only">Actions</span></th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-white/5">
-                @forelse ($vhosts as $v)
-                    <tr>
-                        <td class="px-4 py-3 font-mono">{{ $v['domain'] }}</td>
-                        <td class="px-4 py-3">
-                            {{ $v['type'] }}
-                            @if (!empty($v['readonly']))
-                                <span class="ml-1 rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-400">read-only</span>
-                            @endif
-                            @if (isset($v['enabled']) && $v['enabled'] === false)
-                                <span class="ml-1 rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-500">disabled</span>
+                @forelse ($filteredVhosts as $v)
+                    @php
+                        $status = $this->vhostStatus($v);
+                        $runtimeBadge = $this->vhostRuntimeBadge($v);
+                        $tls = $this->vhostTlsDisplay($v);
+                        $rootLabel = $this->vhostRootLabel($v);
+                        $actionGroups = $this->vhostActionGroups($v);
+                    @endphp
+                    <tr wire:key="vhost-{{ $v['domain'] }}">
+                        <td class="max-w-[11rem] px-3 py-3 font-mono text-xs">
+                            <span class="block truncate" title="{{ $v['domain'] }}">{{ $v['domain'] }}</span>
+                        </td>
+                        <td class="px-3 py-3">
+                            <span class="inline-flex flex-wrap items-center gap-1">
+                                {{ $v['type'] }}
+                                @if (!empty($v['readonly']))
+                                    <x-badge>read-only</x-badge>
+                                @endif
+                            </span>
+                        </td>
+                        <td class="px-3 py-3 font-mono text-xs uppercase text-zinc-300">{{ $v['engine'] ?? 'caddy' }}</td>
+                        <td class="max-w-[10rem] px-3 py-3 font-mono text-xs text-zinc-400">
+                            <span class="block truncate" title="{{ $rootLabel }}">{{ $rootLabel }}</span>
+                        </td>
+                        <td class="px-3 py-3 font-mono text-xs">{{ $v['php_version'] ?? '—' }}</td>
+                        <td class="px-3 py-3 text-xs">
+                            <div class="flex max-w-[9rem] flex-col items-start gap-0.5">
+                                <x-badge :tone="$runtimeBadge['tone']">{{ $runtimeBadge['label'] }}</x-badge>
+                                @if (!empty($runtimeBadge['detail']))
+                                    <span class="max-w-full truncate font-mono text-[10px] text-zinc-500" title="{{ $runtimeBadge['detail'] }}">{{ $runtimeBadge['detail'] }}</span>
+                                @endif
+                            </div>
+                        </td>
+                        <td class="px-3 py-3">
+                            <x-status-badge :state="$status['state']" :label="$status['label']" :detail="$status['detail']" />
+                        </td>
+                        <td class="max-w-[9rem] px-3 py-3 text-xs">
+                            <div class="truncate font-mono text-zinc-200" title="{{ $tls['primary'] }}">{{ $tls['primary'] }}</div>
+                            @if (!empty($tls['secondary']))
+                                <div class="mt-0.5 truncate font-mono text-[10px] text-zinc-500" title="{{ $tls['secondary'] }}">{{ $tls['secondary'] }}</div>
                             @endif
                         </td>
-                        <td class="px-4 py-3 font-mono text-xs uppercase text-zinc-300">{{ $v['engine'] ?? 'caddy' }}</td>
-                        <td class="px-4 py-3 font-mono text-xs text-zinc-400">{{ in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true) ? ($v['root'] ?? $v['reverse_proxy']) : ($v['reverse_proxy'] ?? $v['root']) }}</td>
-                        <td class="px-4 py-3 font-mono">{{ $v['php_version'] ?? '—' }}</td>
-                        <td class="px-4 py-3 text-xs">
-                            @if (($v['runtime'] ?? 'fpm') === 'octane')
-                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">Octane</span>
-                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
-                                    FrankenPHP · 127.0.0.1:{{ $v['octane_port'] ?? '?' }} · max-req {{ $v['octane_max_requests'] ?? '?' }}
-                                </div>
-                            @elseif (($v['runtime'] ?? 'fpm') === 'pm2')
-                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">PM2</span>
-                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
-                                    Node · 127.0.0.1:{{ $v['pm2_port'] ?? '?' }} · {{ $v['pm2_instances'] ?? '?' }} worker(s)
-                                    @if (!empty($v['pm2_entry']))
-                                        · {{ $v['pm2_entry'] }}
-                                    @endif
-                                </div>
-                            @elseif (($v['runtime'] ?? 'fpm') === 'docker')
-                                <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">Docker</span>
-                                <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
-                                    Rootless · 127.0.0.1:{{ $v['docker_port'] ?? '?' }}→:{{ $v['docker_internal_port'] ?? '?' }}
-                                    · {{ $v['docker_mode'] ?? '?' }}
-                                    @if (!empty($v['docker_image']))
-                                        · {{ $v['docker_image'] }}
-                                    @endif
-                                </div>
-                            @elseif (($v['type'] ?? '') === 'php')
-                                <span class="font-mono text-[11px] uppercase text-zinc-400">PHP-FPM</span>
-                                @if (empty($v['readonly']) && empty($v['laravel_app']))
-                                    <div class="mt-0.5 text-[10px] text-zinc-500" title="{{ $v['laravel_app_detail'] ?? '' }}">
-                                        Octane unavailable — not a Laravel app
-                                    </div>
-                                @elseif (empty($v['readonly']) && in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true))
-                                    <div class="mt-0.5 text-[10px] text-zinc-500">
-                                        Octane unavailable — needs the Caddy engine
-                                    </div>
-                                @endif
-                            @elseif (in_array($v['type'] ?? '', ['proxy', 'static'], true))
-                                <span class="font-mono text-[11px] uppercase text-zinc-400">{{ $v['type'] }}</span>
-                                @if (empty($v['readonly']) && empty($v['node_app']))
-                                    <div class="mt-0.5 text-[10px] text-zinc-500" title="{{ $v['node_app_detail'] ?? '' }}">
-                                        PM2 unavailable — not a Node app
-                                    </div>
-                                @elseif (empty($v['readonly']) && in_array($v['engine'] ?? 'caddy', ['apache', 'nginx'], true))
-                                    <div class="mt-0.5 text-[10px] text-zinc-500">
-                                        PM2 unavailable — needs the Caddy engine
-                                    </div>
-                                @endif
-                            @else
-                                <span class="text-zinc-600">—</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-3 text-xs">
-                            @php
-                                $ts = $v['tls_status'] ?? null;
-                                $label = is_array($ts) ? ($ts['label'] ?? null) : null;
-                                $pending = is_array($ts) && !empty($ts['pending']);
-                                $failed = is_array($ts) && !empty($ts['failed']);
-                                $ok = is_array($ts) && !empty($ts['ok']);
-                            @endphp
-                            @if ($label)
-                                <span @class([
-                                    'font-mono',
-                                    'text-good' => $ok && !$pending && !$failed,
-                                    'text-warn' => $pending,
-                                    'text-bad' => $failed,
-                                    'text-zinc-200' => !$ok && !$pending && !$failed,
-                                ])>{{ $label }}</span>
-                                @if (!empty($ts['issuer_type']))
-                                    <div class="mt-0.5 font-mono text-[10px] uppercase text-zinc-500">{{ $ts['issuer_type'] }} · {{ $v['tls_mode'] ?? '' }}</div>
-                                @endif
-                                @if (!empty($ts['issuer']) || !empty($ts['valid_to']))
-                                    <div class="mt-0.5 font-mono text-[10px] text-zinc-500">
-                                        @if (!empty($ts['issuer'])){{ $ts['issuer'] }}@endif
-                                        @if (!empty($ts['issuer']) && !empty($ts['valid_to'])) · @endif
-                                        @if (!empty($ts['valid_to']))exp {{ $ts['valid_to'] }}@endif
-                                    </div>
-                                @endif
-                            @else
-                                {{ !empty($v['tls']) ? (($v['tls_mode'] ?? 'auto')) : 'No TLS' }}
-                            @endif
-                        </td>
-                        <td class="px-4 py-3 text-right space-x-3">
-                            @if (!empty($supervisorByVhost[$v['domain'] ?? '']))
-                                <a href="/processes" class="text-xs text-accent" title="Supervisor processes">{{ count($supervisorByVhost[$v['domain']]) }} proc</a>
-                            @endif
-                            @if (empty($v['readonly']))
-                                @if (($v['runtime'] ?? 'fpm') === 'octane')
-                                    <button type="button" class="text-xs text-accent" wire:click="reloadOctane('{{ $v['domain'] }}')">Reload application</button>
-                                    <button type="button" class="text-xs text-warn" wire:click="disableOctane('{{ $v['domain'] }}')">Switch to PHP-FPM</button>
-                                @elseif (($v['runtime'] ?? 'fpm') === 'pm2')
-                                    <button type="button" class="text-xs text-accent" wire:click="reloadPm2('{{ $v['domain'] }}')">Reload application</button>
-                                    <button type="button" class="text-xs text-accent" wire:click="askPm2Scale('{{ $v['domain'] }}')">Scale</button>
-                                    <button type="button" class="text-xs text-warn" wire:click="disablePm2('{{ $v['domain'] }}')">Switch off PM2</button>
-                                @elseif (($v['runtime'] ?? 'fpm') === 'docker')
-                                    <button type="button" class="text-xs text-accent" wire:click="rebuildDocker('{{ $v['domain'] }}')">Rebuild</button>
-                                    <button type="button" class="text-xs text-accent" wire:click="restartDocker('{{ $v['domain'] }}')">Restart</button>
-                                    <button type="button" class="text-xs text-warn" wire:click="disableDocker('{{ $v['domain'] }}')">Switch off Docker</button>
-                                @else
-                                    @if (($v['type'] ?? '') === 'php' && !empty($v['laravel_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && ($v['runtime'] ?? 'fpm') === 'fpm')
-                                        <button type="button" class="text-xs text-accent" wire:click="askOctane('{{ $v['domain'] }}')">Enable Octane</button>
-                                    @endif
-                                    @if (in_array($v['type'] ?? '', ['proxy', 'static'], true) && !empty($v['node_app']) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane', 'docker'], true))
-                                        <button type="button" class="text-xs text-accent" wire:click="askPm2('{{ $v['domain'] }}')">Enable PM2</button>
-                                    @endif
-                                    @if (in_array($v['type'] ?? '', ['proxy', 'static'], true) && ($v['engine'] ?? 'caddy') === 'caddy' && !in_array($v['runtime'] ?? 'fpm', ['pm2', 'octane', 'docker'], true))
-                                        <button type="button" class="text-xs text-accent" wire:click="askDocker('{{ $v['domain'] }}')">Enable Docker</button>
-                                    @endif
-                                @endif
-                                <a href="/vhosts/{{ $v['domain'] }}/files" class="text-xs text-accent">Files</a>
-                                <a href="/vhosts/{{ $v['domain'] }}/terminal" class="text-xs text-accent">Terminal</a>
-                                @if (($v['runtime'] ?? 'fpm') === 'docker')
-                                    <a href="/vhosts/{{ $v['domain'] }}/container-shell" class="text-xs text-accent">Container shell</a>
-                                    <a href="/vhosts/{{ $v['domain'] }}/container-logs" class="text-xs text-accent">Container logs</a>
-                                @endif
-                                <button type="button" class="text-xs text-accent" wire:click="startEdit('{{ $v['domain'] }}')">Edit</button>
-                                <button type="button" class="text-xs text-bad" wire:click="askDelete('{{ $v['domain'] }}')">Delete</button>
-                            @endif
+                        <td class="px-3 py-3 text-right">
+                            <x-row-actions-menu :groups="$actionGroups" :label="'Actions for '.$v['domain']" />
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="8" class="px-4 py-8 text-center text-zinc-500">No virtual hosts found.</td></tr>
+                    <tr><td colspan="9" class="px-4 py-8 text-center text-zinc-500">
+                        @if ($vhosts === [])
+                            No virtual hosts found.
+                        @else
+                            No virtual hosts match the current filters.
+                        @endif
+                    </td></tr>
                 @endforelse
             </tbody>
         </table>
