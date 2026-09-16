@@ -36,22 +36,31 @@
                 const t = this.$refs.trigger?.getBoundingClientRect();
                 if (! t) return;
                 const width = 216;
+                const estimatedHeight = Math.max(this.$refs.menu?.offsetHeight || 0, 220);
                 let left = t.right - width;
                 if (left < 8) left = 8;
                 if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
                 let top = t.bottom + 4;
+                if (top + estimatedHeight > window.innerHeight - 8) {
+                    top = Math.max(8, t.top - estimatedHeight - 4);
+                }
+                // ink-800 (#171b22) — same solid surface as the Files context menu / panel chrome.
+                // Set inline so opacity cannot depend on a Vite rebuild picking up a new utility class.
                 this.menuStyle = {
                     position: 'fixed',
                     top: top + 'px',
                     left: left + 'px',
                     width: width + 'px',
-                    zIndex: 80,
+                    zIndex: 100,
+                    backgroundColor: '#171b22',
+                    boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 16px 40px rgba(0,0,0,0.55)',
                 };
             },
             openMenu() {
                 this.placeMenu();
                 this.open = true;
                 this.$nextTick(() => {
+                    this.placeMenu();
                     this.refreshItems();
                     this.focusIndex = 0;
                     this.items[0]?.focus();
@@ -137,7 +146,7 @@
             :style="menuStyle"
             role="menu"
             aria-label="{{ $label }}"
-            class="rounded-md border border-white/10 bg-ink-900 py-1 shadow-panel"
+            class="rounded-md border border-white/15 bg-ink-800 py-1 shadow-panel"
             @keydown.escape.stop.prevent="closeMenu()"
         >
             @foreach ($groups as $gi => $group)
