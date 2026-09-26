@@ -719,6 +719,18 @@ final class FakeBroker
     /** Next run-now exit code, so a test can exercise a failing job. */
     public int $cronNextExitCode = 0;
 
+    /** @return array{at:?string, exit_code:?int, ok:?bool} */
+    private function fakeLastRun(string $id): array
+    {
+        foreach (array_reverse($this->cronLogs[$id] ?? []) as $line) {
+            if (preg_match('/^(\S+) EXIT (\d+)$/', trim((string) $line), $m) === 1) {
+                return ['at' => $m[1], 'exit_code' => (int) $m[2], 'ok' => (int) $m[2] === 0];
+            }
+        }
+
+        return ['at' => null, 'exit_code' => null, 'ok' => null];
+    }
+
     /**
      * @param  list<string>  $args
      * @param  array<string,mixed>  $stdin
@@ -732,7 +744,7 @@ final class FakeBroker
             : array_values(array_filter($this->cronJobs, static fn (array $j): bool => $j['owner'] === $owner));
 
         return [
-            'jobs' => $jobs,
+            'jobs' => array_map(fn (array $j): array => $j + ['last_run' => $this->fakeLastRun((string) $j['id'])], $jobs),
             'log_dir' => CronRenderer::LOG_DIR,
             'unmanaged_root_lines' => $this->unmanagedRootLines,
         ];

@@ -19,6 +19,8 @@ class AlertsPage extends Component
     public bool $reboot_required = true;
     public bool $tls = true;
     public bool $backup_stale = true;
+
+    public bool $cron_failed = true;
     public bool $ssh = true;
     public int $disk_percent = 85;
     public int $ram_percent = 90;
@@ -42,6 +44,7 @@ class AlertsPage extends Component
             $this->reboot_required = (bool) ($rules['reboot_required'] ?? true);
             $this->tls = (bool) ($rules['tls'] ?? true);
             $this->backup_stale = (bool) ($rules['backup_stale'] ?? true);
+            $this->cron_failed = (bool) ($rules['cron_failed'] ?? true);
             $this->ssh = (bool) ($rules['ssh'] ?? true);
             $this->disk_percent = (int) ($rules['disk_percent'] ?? 85);
             $this->ram_percent = (int) ($rules['ram_percent'] ?? 90);
@@ -69,6 +72,7 @@ class AlertsPage extends Component
             'reboot_required' => $this->reboot_required,
             'tls' => $this->tls,
             'backup_stale' => $this->backup_stale,
+            'cron_failed' => $this->cron_failed,
             'ssh' => $this->ssh,
             'disk_percent' => $this->disk_percent,
             'ram_percent' => $this->ram_percent,

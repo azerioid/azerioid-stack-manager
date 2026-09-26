@@ -53,7 +53,7 @@ final class CronManager
         }
 
         return [
-            'jobs' => array_map(static fn (CronJob $j): array => $j->toArray(), $jobs),
+            'jobs' => array_map(fn (CronJob $j): array => $j->toArray() + ['last_run' => $this->lastRun($j)], $jobs),
             'log_dir' => CronRenderer::LOG_DIR,
             // What the host had before the panel touched it, so an operator can see
             // the panel is not hiding anything it chose not to manage.
@@ -156,6 +156,36 @@ final class CronManager
             'missing' => false,
             'lines' => array_slice($body, -max(1, min($lines, 2000))),
         ];
+    }
+
+    /**
+     * The last run the wrapper recorded, so something other than a human reading a log
+     * can tell whether a job is working — the alert rule needs a status, not a file.
+     *
+     * Only the tail is read: these files are rotated daily but a chatty job can still
+     * make one large, and this runs on every listing.
+     *
+     * @return array{at:?string, exit_code:?int, ok:?bool}
+     */
+    private function lastRun(CronJob $job): array
+    {
+        $path = CronRenderer::logPathFor($job->runsAs(), $job->id);
+        if (!$this->runtime->fileExists($path)) {
+            return ['at' => null, 'exit_code' => null, 'ok' => null];
+        }
+        $body = $this->runtime->readFile($path);
+        $tail = strlen($body) > 8192 ? substr($body, -8192) : $body;
+        $at = null;
+        $code = null;
+        foreach (array_reverse(explode("\n", trim($tail))) as $line) {
+            if (preg_match('/^(\S+) EXIT (\d+)$/', trim($line), $m) === 1) {
+                $at = $m[1];
+                $code = (int) $m[2];
+                break;
+            }
+        }
+
+        return ['at' => $at, 'exit_code' => $code, 'ok' => $code === null ? null : $code === 0];
     }
 
     /**

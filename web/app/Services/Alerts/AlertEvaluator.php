@@ -92,6 +92,9 @@ final class AlertEvaluator
         $reboot = (bool) ($rules['reboot_required'] ?? true);
         $tlsOn = (bool) ($rules['tls'] ?? true);
         $backupOn = (bool) ($rules['backup_stale'] ?? true);
+        // On by default: a scheduled job that fails silently is the whole reason its
+        // exit code is recorded (A47).
+        $cronOn = (bool) ($rules['cron_failed'] ?? true);
 
         $out = [];
         $status = $this->broker->call('status.all', [], [], null, false);
@@ -192,6 +195,12 @@ final class AlertEvaluator
             }
         }
 
+        if ($cronOn) {
+            foreach ($this->cronFailures() as $issue) {
+                $out[] = $issue;
+            }
+        }
+
         if ($backupOn) {
             $last = BackupJob::query()->where('status', 'ok')->latest()->first();
             $stale = $last === null || $last->created_at->lt(Carbon::now()->subHours($backupHours));
@@ -257,6 +266,55 @@ final class AlertEvaluator
      *
      * @return list<array{rule_key:string, subject:string, message:string, severity:string}>
      */
+    /**
+     * A scheduled job whose last recorded run exited non-zero (B2 / A47).
+     *
+     * Reads the exit code the wrapper records, not the job's output: "did it work" is a
+     * status, and grepping output for the word error is how you get alerts that fire on
+     * a log line containing the word error.
+     *
+     * A job that has never run raises nothing. That is the normal state of a job added a
+     * minute ago, and a schedule the panel cannot evaluate — @monthly on the 1st — must
+     * not be reported as broken for a month.
+     *
+     * Disabled jobs are skipped: the operator turned it off, and its last failure is
+     * probably why.
+     *
+     * @return list<array<string,string>>
+     */
+    private function cronFailures(): array
+    {
+        $res = $this->broker->call('cron.jobs', [], [], null, false);
+        if (! $res->ok) {
+            return [];
+        }
+
+        $out = [];
+        foreach ((array) ($res->data['jobs'] ?? []) as $job) {
+            if (! is_array($job) || ($job['enabled'] ?? true) !== true) {
+                continue;
+            }
+            $last = is_array($job['last_run'] ?? null) ? $job['last_run'] : [];
+            if (($last['ok'] ?? null) !== false) {
+                continue;
+            }
+            $id = (string) ($job['id'] ?? '');
+            $out[] = [
+                // Keyed per job, so two failing jobs are two incidents and fixing one
+                // resolves one — and a job that starts working again resolves itself.
+                'rule_key' => 'cron.failed',
+                'subject' => $id,
+                'message' => 'Scheduled job ' . $id . ' (' . (string) ($job['owner'] ?? '') . ': '
+                    . (string) ($job['command'] ?? '') . ') last exited '
+                    . (string) ($last['exit_code'] ?? '?') . ' at ' . (string) ($last['at'] ?? 'an unknown time')
+                    . '. Output is on the Scheduled jobs page.',
+                'severity' => 'medium',
+            ];
+        }
+
+        return $out;
+    }
+
     private function tlsIssuanceFailures(int $graceHours): array
     {
         $res = $this->broker->call('vhost.list', [], [], null, false);

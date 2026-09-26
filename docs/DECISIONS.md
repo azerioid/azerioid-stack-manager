@@ -767,8 +767,17 @@ Three defects, one shape:
 | Run now | Uses the **same wrapper and identity** as the schedule, so "it works when I run it" and "it works at 3am" are the same statement |
 | Legacy actions | `cron.list` / `cron.set` are **kept**: released UI and CLI call them, and an operator's scripts may too. The Security page now points at the new page and says why |
 
+**Alerting (added in the same phase, after the above was written):** `cron.failed`, on by
+default, one incident **per job** so two failing jobs are two problems and fixing one
+resolves one. It reads the **exit code** the wrapper recorded, not the job's output —
+"did it work" is a status, and grepping output for the word *error* is how you get alerts
+that fire on a log line mentioning errors. A job that has **never run** raises nothing: a
+job added a minute ago has not run, and a `@monthly` job must not be reported as broken
+for a month. Disabled jobs are skipped, because the operator turned it off and its last
+failure is probably why.
+
 **Deliberately not in this phase:** per-job schedules expressed in the panel's own
-vocabulary ("every 5 minutes") on top of cron syntax, catch-up runs for a job missed
-while the host was down, and alerting on a failed scheduled run. The last one is worth
-doing and is the obvious next step: the exit code is already recorded per job, so the
-alert rule has something real to read.
+vocabulary ("every 5 minutes") on top of cron syntax, catch-up runs for a job missed while
+the host was down, and alerting on a job that *should* have run and did not — which needs
+the panel to evaluate cron expressions against wall-clock time, a different and much
+easier thing to get subtly wrong than reading an exit code.
