@@ -8,10 +8,38 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 
+/**
+ * Cron actions.
+ *
+ * `cron.list` / `cron.set` are the original whole-file root crontab pair, kept because
+ * released CLI and UI code call them and an operator's existing scripts may too. B2
+ * adds the structured jobs alongside them (Cron\CronManager): those run as the vhost's
+ * own identity, are rendered from state rather than edited as text, and can be
+ * disabled, run now and read back with their output.
+ */
 final class CronManage
 {
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
+        $manager = new \AzerioidPanel\Broker\Cron\CronManager($runtime, $config);
+
+        switch ($action) {
+            case 'cron.jobs':
+                return $manager->list(isset($args[0]) ? (string) $args[0] : (string) ($input['owner'] ?? ''));
+            case 'cron.job.add':
+                return $manager->add($input);
+            case 'cron.job.del':
+                return $manager->delete($this->jobId($args, $input));
+            case 'cron.job.enable':
+                return $manager->setEnabled($this->jobId($args, $input), true, $input);
+            case 'cron.job.disable':
+                return $manager->setEnabled($this->jobId($args, $input), false, $input);
+            case 'cron.job.run':
+                return $manager->runNow($this->jobId($args, $input));
+            case 'cron.job.log':
+                return $manager->log($this->jobId($args, $input), (int) ($input['lines'] ?? 200));
+        }
+
         if ($action === 'cron.list') {
             $result = $runtime->exec(['/usr/bin/crontab', '-l'], null, 10);
             $body = $result->ok() ? $result->stdout : '';
@@ -47,5 +75,19 @@ final class CronManage
             throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'crontab install failed.', 1);
         }
         return ['updated' => true, 'count' => count($validated)];
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string,mixed>  $input
+     */
+    private function jobId(array $args, array $input): string
+    {
+        $id = trim((string) ($args[0] ?? $input['id'] ?? ''));
+        if ($id === '' || preg_match('/^job-[a-f0-9]{10}$/', $id) !== 1) {
+            throw new BrokerException('Provide a job id (job-xxxxxxxxxx).', 2);
+        }
+
+        return $id;
     }
 }

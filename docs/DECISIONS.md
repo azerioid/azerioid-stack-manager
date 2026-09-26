@@ -692,3 +692,92 @@ audited broker call and that trace should not be lost.
 deliberately, per call site. There is no blanket hook in `BrokerClient` — one would recurse
 (the job calls the same action) and would silently change the contract of every existing
 caller that uses the returned data.
+
+## A46 — Firewall management: additive rules, broker-side guards, self-closing revert window
+
+**Status:** Accepted (2026-09-26, B2).
+**Relates to:** A1/G2 (firewalld reporting parity), A23 (per-DB remote access rules),
+A36 (mail ports), A22 (panel port), request #2.
+
+**Problem:** A1 fixed firewall *reporting* — the Security page had claimed no firewall
+existed on EL hosts while the broker was writing firewalld rules through
+`DbAccessFirewall`, `MailFirewall` and `SiteHttpFirewall`. It did not add
+*management*: an operator could see rules and not change them, so every real firewall
+change still happened over SSH, outside the panel, with no audit trail.
+
+Managing a firewall from a web interface is the most lockout-prone feature in the
+roadmap after SFTP. The dangerous change is not exotic — it is `deny 22/tcp` typed by
+someone who meant to close something else, on a host whose only access is that port.
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Rule model | **Additive**, never declarative. The panel adds and removes individual rules and leaves every other rule alone. A declarative "make the host match this list" model would delete the operator's own rules, the provider's, and any other tool's, the first time someone pressed Save |
+| Expressiveness | Only the **intersection of both backends**: allow/deny, one port, optional single source. A model that can express everything either backend can do is a model whose two drivers cannot be kept equivalent, and B2 exists so a rule means the same thing on Debian and on Rocky. Anything more complex stays the operator's own, shown as unmanaged and never rewritten |
+| Guards | **In the broker, not the UI.** The same action is reachable from the CLI, a second session, and anything that can call the broker. A hidden button is not a guard |
+| Protected ports | SSH (**read from `sshd_config` and its drop-ins**, not assumed to be 22 — an operator who moved SSH to 2222 is exactly who a hardcoded 22 would lock out), the panel port, and 80/443. Denying them is refused, and so is *deleting the rule that allows them*, which closes the port just as effectively under default-deny |
+| Deny with a source | **Also refused** on protected ports. "Deny SSH from that one address" reads as narrow, but the panel cannot know the operator is not behind it, and that is the case where the mistake cannot be undone |
+| Hostname sources | **Refused.** They resolve at write time; a rule that silently means something else after a DNS change is not a rule an operator can reason about |
+| Unsafe-but-legal changes | **Self-closing revert window.** The rule set is snapshotted, the change applied, and a one-shot systemd timer restores the snapshot unless the operator confirms. Verification is *the operator reaching the panel*, because a host cannot meaningfully test its own inbound reachability — it sees loopback and its own interfaces, not the path the operator's packets take |
+| Why systemd, not PHP | The window must survive PHP-FPM restarting, the queue worker dying and the operator's session ending — all of which happen during exactly the network trouble it exists for. All five targets are systemd |
+| No systemd-run | The change is **refused** unless the operator types `I-HAVE-CONSOLE-ACCESS`. Same for explicitly declining the window |
+| Concurrency | **One unconfirmed change at a time.** A second window would snapshot the unconfirmed state as if it were known-good |
+| Rule deletion on ufw | **By specification, never by the printed index.** `ufw delete 3` deletes whatever happens to be third when it runs — a race between listing rules and confirming a deletion, with a firewall rule as the prize |
+| firewalld writes | Always `--permanent` **plus** `--reload`. A runtime-only rule works all week and vanishes during an unrelated restart |
+| firewalld deny | `reject`, not `drop`. A refused connection fails fast and says so; a silent drop looks like a network fault |
+| Ownership marking | ufw: its own **comment** field. firewalld: a **sidecar index**, because rich rules have nowhere to record a comment. Known cost: if the sidecar is lost, panel rules keep working but stop being recognised as panel-written — which is why the index is keyed by rule identity, so it can be rebuilt |
+| Feature-owned rules | Rules written by another part of the panel (database remote access, mail, site serving) are **not editable here**. Deleting one leaves that feature believing it is still reachable, and it would write the rule back anyway |
+
+**Deliberately not in this phase:** changing the default incoming policy, interface- and
+zone-scoped rules, rate limiting, and IPv6-specific rules. Each is a separate lockout
+surface and none is needed for "open a port for my app".
+
+## A47 — Cron: structured jobs, running as the vhost identity
+
+**Status:** Accepted (2026-09-26, B2).
+**Relates to:** A25 (per-vhost `az-vh-*` identity), A9/A44 (config is truth, database is a
+projection), A30 (marker discipline), request #4.
+
+**Problem:** the panel's only cron feature was a textarea holding the whole root crontab.
+Three defects, one shape:
+
+1. **Everything ran as root**, including a site's own queue worker — a job whose command
+   that site's code can often influence.
+2. **Saving replaced the entire file.** Two operators editing at once silently lost one
+   set of changes, and one stray keystroke could delete every job on the host.
+3. There was **no way to disable one job, run one job, or see what a job printed.**
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Run-as | A job belongs to a vhost and runs as **that vhost's identity** (`az-vh-*`). This is the security win of the phase: a privilege *reduction* for the common case |
+| Root jobs | Still possible — host maintenance needs them — but require a typed `RUN-AS-ROOT` **every time, including on re-enable**. The asymmetry is deliberate |
+| State | A **broker-owned file**, not the panel database, for the same reason vhosts use config files (A9, A44): the thing that runs must be the thing that is true. cron reads crontabs, so the crontab is rendered from state and the panel reads state back through the broker |
+| Existing lines | **Preserved byte for byte**, outside a marked block (A30). A host that already had root cron jobs — a provider image's backup script, a certbot hook — keeps them. Not politeness: the difference between a feature and an outage |
+| Truncated block | A block missing its end marker **does not** cause the rest of the crontab to be treated as panel content and deleted |
+| No jobs | **No empty block** left behind for an operator to wonder about |
+| Disabled jobs | Stay in the crontab, commented, so *disabled* and *deleted* are distinguishable on the host itself |
+| `@reboot` | **Refused.** It is a startup hook, not a schedule; accepting one would give a site a way to run code on every boot that appears in no schedule anyone reviews |
+| Commands | Pipes and redirection are fine (cron uses `sh`), but a **line break** (ends the crontab line and starts another) and **`%`** (cron's escape, which turns the rest of the line into stdin) are refused |
+| Output | Captured through a generated wrapper, per job, with the exit code. cron's default is to mail output to a local mailbox nobody opens, which is why a failing cron job is normally discovered by its consequences |
+| Log ownership | **One directory per identity, owned by that identity.** Found the hard way: a single root-owned directory makes every site job fail at its own redirection, before its command runs — a feature that looks like "cron is broken" |
+| Log rotation | `copytruncate`, because rotation must not hand a site's log back to root; a lost line of job output is diagnostics, not an integrity control like the audit log. 14 days, `maxsize 20M` |
+| Run now | Uses the **same wrapper and identity** as the schedule, so "it works when I run it" and "it works at 3am" are the same statement |
+| Legacy actions | `cron.list` / `cron.set` are **kept**: released UI and CLI call them, and an operator's scripts may too. The Security page now points at the new page and says why |
+
+**Alerting (added in the same phase, after the above was written):** `cron.failed`, on by
+default, one incident **per job** so two failing jobs are two problems and fixing one
+resolves one. It reads the **exit code** the wrapper recorded, not the job's output —
+"did it work" is a status, and grepping output for the word *error* is how you get alerts
+that fire on a log line mentioning errors. A job that has **never run** raises nothing: a
+job added a minute ago has not run, and a `@monthly` job must not be reported as broken
+for a month. Disabled jobs are skipped, because the operator turned it off and its last
+failure is probably why.
+
+**Deliberately not in this phase:** per-job schedules expressed in the panel's own
+vocabulary ("every 5 minutes") on top of cron syntax, catch-up runs for a job missed while
+the host was down, and alerting on a job that *should* have run and did not — which needs
+the panel to evaluate cron expressions against wall-clock time, a different and much
+easier thing to get subtly wrong than reading an exit code.
