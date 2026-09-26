@@ -27,9 +27,12 @@
       "enum": [
         "web",
         "runtime",
+        "php",
         "database",
         "cache",
         "process-manager",
+        "mail",
+        "tool",
         "other"
       ]
     },
@@ -54,7 +57,8 @@
         "el": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ports": {
       "type": "array",
@@ -83,7 +87,8 @@
               "udp"
             ]
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "conflicts": {
@@ -114,8 +119,43 @@
         },
         "min_ram_mb": {
           "type": "integer"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "installable": {
+      "type": "boolean",
+      "description": "Offered on the Components page. System components (caddy, panel PHP) omit it."
+    },
+    "install_options": {
+      "type": "object",
+      "description": "Operator-selectable install options, e.g. node_major.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
+    },
+    "artifact": {
+      "type": "object",
+      "description": "Downloaded artifact rather than a distro package (Adminer).",
+      "additionalProperties": true
     }
   },
   "$defs": {
@@ -145,8 +185,18 @@
             },
             "command": {
               "type": "string"
+            },
+            "package_regex": {
+              "type": "string"
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
-          }
+          },
+          "additionalProperties": false
         },
         "repo": {
           "type": "object",
@@ -163,7 +213,8 @@
             "signed_by": {
               "type": "string"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "post_install": {
           "type": "array",
@@ -187,12 +238,42 @@
           "type": "object",
           "additionalProperties": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "string" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           }
+        },
+        "units": {
+          "type": "object",
+          "description": "Role => systemd unit, for components owning several units (mail: postfix/dovecot/opendkim).",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "repos_hint": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra repositories required, e.g. epel for OpenDKIM on EL (A36)."
+        },
+        "foreign_mta_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Conflicting MTAs removed only after typed REPLACE-MTA (A36)."
         }
-      }
+      },
+      "additionalProperties": false
     }
-  }
+  },
+  "additionalProperties": false
 }

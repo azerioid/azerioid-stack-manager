@@ -147,6 +147,11 @@ final class FakeRuntime implements Runtime
         };
     }
 
+    public function appendFile(string $path, string $contents, int $mode = 0640): void
+    {
+        $this->files[$path] = ($this->files[$path] ?? '') . $contents;
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!isset($this->files[$from])) {

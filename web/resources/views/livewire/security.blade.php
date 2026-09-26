@@ -28,10 +28,37 @@
         @endif
     </section>
 
+    {{-- Renders whichever backend the host actually runs. This section used to
+         read $firewall['ufw'] unconditionally, so an EL host showed "not
+         installed" while the broker was writing firewalld rules (A1/G2). --}}
     <section class="panel p-5">
-        <h2 class="text-sm font-medium">UFW</h2>
-        @if (!($firewall['ufw']['installed'] ?? false))
-            <p class="mt-2 text-sm text-zinc-500">UFW is not installed (read-only view).</p>
+        @php($fwBackend = $firewall['backend'] ?? 'none')
+        <div class="flex items-center justify-between gap-3">
+            <h2 class="text-sm font-medium">Firewall</h2>
+            @if ($fwBackend === 'none')
+                <span class="rounded bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400">inactive</span>
+            @else
+                <span class="rounded bg-emerald-900/40 px-2 py-0.5 text-[11px] text-emerald-300">{{ $fwBackend }} active</span>
+            @endif
+        </div>
+
+        @if ($fwBackend === 'none')
+            <p class="mt-2 text-sm text-zinc-500">
+                Neither ufw nor firewalld is active on this host (read-only view).
+                @if (($firewall['ufw']['installed'] ?? false) || ($firewall['firewalld']['installed'] ?? false))
+                    A firewall is installed but not running.
+                @endif
+            </p>
+        @elseif ($fwBackend === 'firewalld')
+            <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-zinc-400">
+                <dt>default zone</dt>
+                <dd class="text-zinc-200">{{ $firewall['firewalld']['default_zone'] ?? '—' }}</dd>
+                <dt>open ports</dt>
+                <dd class="text-zinc-200">{{ implode(', ', $firewall['firewalld']['ports'] ?? []) ?: '—' }}</dd>
+                <dt>services</dt>
+                <dd class="text-zinc-200">{{ implode(', ', $firewall['firewalld']['services'] ?? []) ?: '—' }}</dd>
+            </dl>
+            <pre class="mt-3 max-h-48 overflow-auto font-mono text-[11px] text-zinc-300">{{ $firewall['firewalld']['status'] ?? '' }}</pre>
         @else
             <pre class="mt-3 max-h-48 overflow-auto font-mono text-[11px] text-zinc-300">{{ $firewall['ufw']['status'] ?? '' }}</pre>
         @endif

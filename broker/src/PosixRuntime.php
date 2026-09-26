@@ -256,6 +256,37 @@ final class PosixRuntime implements Runtime
         };
     }
 
+    public function appendFile(string $path, string $contents, int $mode = 0640): void
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            throw new BrokerException("Directory does not exist: {$dir}", 1);
+        }
+        $existed = file_exists($path);
+        $fh = @fopen($path, 'ab');
+        if ($fh === false) {
+            throw new BrokerException(self::describeIoFailure('append', $path, error_get_last()), 1);
+        }
+        try {
+            if (!flock($fh, LOCK_EX)) {
+                throw new BrokerException('Could not lock ' . $path . ' for append.', 1);
+            }
+            try {
+                if (fwrite($fh, $contents) === false) {
+                    throw new BrokerException('Failed appending to ' . $path . '.', 1);
+                }
+                fflush($fh);
+            } finally {
+                flock($fh, LOCK_UN);
+            }
+        } finally {
+            fclose($fh);
+        }
+        if (!$existed) {
+            @chmod($path, $mode);
+        }
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!@rename($from, $to)) {

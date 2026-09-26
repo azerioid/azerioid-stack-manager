@@ -1,6 +1,35 @@
 # AZERIOID Stack Manager — panel-managed logs.
-# Daily rotation, 14 compressed archives kept (~2 weeks).
-/var/log/azerioid-panel/*.log {
+#
+# Two stanzas on purpose, because the two groups have different writers.
+#
+# The broker audit log is opened, appended under an exclusive lock, and closed on
+# every broker call, so no process holds a descriptor across a rotation. It can
+# therefore use `create`, which renames the file and makes a fresh one — the
+# correct, lossless rotation. `copytruncate` would leave a window in which an
+# append landing between the copy and the truncate is lost, and audit integrity is
+# a security control (A1/R6).
+#
+# 90 days retained: audit records are what an incident investigation reads, and
+# A29 keeps this directory precisely so it survives an uninstall. Compressed, a
+# busy day is ~35 KB, so the whole window costs a few megabytes.
+/var/log/azerioid-panel/broker-audit.log {
+	daily
+	rotate 90
+	compress
+	delaycompress
+	missingok
+	notifempty
+	create 0640 root root
+}
+
+# Everything else is written by processes that do hold a descriptor open —
+# php-fpm's error_log, ttyd sessions — so these keep `copytruncate`. Losing a
+# line here is a diagnostic inconvenience, not an integrity problem, whereas
+# `create` would make those writers keep appending to the rotated file forever.
+/var/log/azerioid-panel/php-fpm.log
+/var/log/azerioid-panel/php-fpm-master.log
+/var/log/azerioid-panel/auth-fail.log
+/var/log/azerioid-panel/ttyd-*.log {
 	daily
 	rotate 14
 	compress

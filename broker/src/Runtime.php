@@ -40,6 +40,15 @@ interface Runtime
 
     public function writeFile(string $path, string $contents, int $mode = 0644): void;
 
+    /**
+     * Append atomically under an exclusive lock.
+     *
+     * writeFile() is read-modify-write, which loses records when two callers
+     * interleave — and the audit log is written on every broker call from the UI,
+     * the CLI and the queue worker at once.
+     */
+    public function appendFile(string $path, string $contents, int $mode = 0640): void;
+
     public function rename(string $from, string $to): void;
 
     public function deleteFile(string $path): void;
