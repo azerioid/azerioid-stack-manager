@@ -406,6 +406,49 @@ families. That is what makes items 1 and 2 possible and what finally lets site p
 - `caddy` now holds the broker grant, so a Caddy compromise reaches the broker. Narrower than "any
   hosted site", but not the fully isolated identity Part A delivers.
 
+## A43 — Panel self-update snapshots the panel database before migrating
+
+**Status:** Accepted (2026-09-26).
+**Amends:** the A30-era updater behaviour, which rolled code back but not schema.
+
+**Problem:** `PanelUpdater::apply()` rollback re-checks-out the previous commit and
+then re-runs `runMigrations()`. But `artisan migrate` is **forward-only**: it cannot
+undo what the failed update already applied. So if a migration succeeded and a
+later step failed, rollback left the panel on **old code against a new schema** —
+the one combination nothing exercises. There was no `migrate:rollback` and no
+pre-update snapshot.
+
+**Decision:** the panel database is a single SQLite file, so snapshot it
+immediately before migrations and restore that snapshot on the rollback path
+instead of re-running migrations.
+
+| Aspect | Decision |
+|--------|----------|
+| Mechanism | `sqlite3 .backup`, **not** a file copy |
+| Location | `/var/lib/azerioid-panel/db-snapshots/<stamp>-<operation-id>.sqlite`, mode `0600` |
+| Retention | Newest **5**, pruned after a successful update |
+| Missing `sqlite3` | **Refuse the update.** Do not fall back to a copy |
+| No database yet | Skip with a warning (fresh install mid-bootstrap) |
+| Rollback without a snapshot | Proceed, but warn loudly that the schema could not be rolled back |
+
+**Why `.backup` rather than `cp`:** the panel runs SQLite in WAL mode (a live host
+has `panel.sqlite-wal` and `-shm`). SQLite documents that copying a database file
+while it may be written to is unsafe; with WAL you would have to copy the `-wal`
+too, and the pair can still be caught mid-checkpoint. **Measured caveat, recorded
+honestly:** on fleet host testing, a naive `cp` of the live panel database *did*
+produce a consistent, integrity-ok copy, and a deliberate concurrent-writer test
+also failed to tear it. That is the point — it works until the one time it matters,
+and a rollback point you cannot trust is worse than none. `.backup` is consistent
+by construction, needs no reasoning about sidecar files, and costs nothing extra.
+
+**Restore also deletes `-wal`/`-shm`:** they belong to the database being replaced,
+and leaving them would let SQLite replay a newer log over the restored file,
+silently undoing the rollback.
+
+**Not addressed here:** a downgrade across releases still carries the A30-era
+warning that newer migrations are not automatically reversed. The snapshot protects
+the *failed-update* path, not an intentional downgrade to an older tag.
+
 ## A40 — File Manager archive operations: zip-slip exclusion partially lifted
 
 **Status:** Accepted (operator decision, 2026-09-26). **Conditional — see the gate below.**

@@ -115,6 +115,8 @@ final class PanelUpdater
         $rolledBack = false;
         $targetTag = null;
         $target = null;
+        $snapshot = null;
+        $snapshots = new PanelDbSnapshot($this->runtime, $this->config);
 
         try {
             $log->info('Panel self-update starting (semver tags).');
@@ -212,11 +214,22 @@ final class PanelUpdater
             $log->info('Checked out ' . $targetTag . '.');
 
             $this->deployFromSource($source, $prefix, $log);
+
+            // Snapshot before migrating. `artisan migrate` is forward-only, so
+            // without this the rollback path can only restore code, leaving old
+            // code against a newer schema (A3/R4).
+            $snapshot = $snapshots->create($operationId, $log);
+
             $migrations = $this->runMigrations($prefix, $log);
             $this->rebuildCaches($prefix, $log);
             $this->writeDeployedMarkers($target, $targetTag);
             $this->writeVersionFromSource($source, $prefix);
             $this->reloadRuntime($log, deferQueueRestart: true);
+
+            $pruned = $snapshots->prune();
+            if ($pruned !== []) {
+                $log->info('Pruned ' . count($pruned) . ' old panel database snapshot(s).');
+            }
 
             $log->info('Panel self-update completed successfully → ' . $targetTag);
 
@@ -230,6 +243,7 @@ final class PanelUpdater
                 'downgrade' => $downgrade,
                 'rolled_back' => false,
                 'migrations' => $migrations,
+                'db_snapshot' => $snapshot,
                 'operation_id' => $operationId,
                 'log_path' => $log->path(),
             ];
@@ -240,7 +254,21 @@ final class PanelUpdater
                     $log->info('Rolling back to ' . ($preTag ?? substr($preCommit, 0, 7)) . ' …');
                     $this->git($source, ['checkout', '-f', '--detach', $preCommit], 60);
                     $this->deployFromSource($source, $prefix, $log);
-                    $this->runMigrations($prefix, $log);
+
+                    // Restore the schema rather than running migrations again.
+                    // `artisan migrate` only moves forward, so re-running it here
+                    // would leave the old code facing whatever the failed update
+                    // already applied (A3/R4).
+                    if ($snapshot !== null) {
+                        $snapshots->restore($snapshot, $log);
+                    } else {
+                        $log->warn(
+                            'No pre-update database snapshot was taken, so the schema cannot be rolled back. '
+                            . 'If the failed update had already migrated, this panel is now running older code '
+                            . 'against a newer schema — verify before relying on it.'
+                        );
+                    }
+
                     $this->rebuildCaches($prefix, $log);
                     $this->writeDeployedMarkers($preCommit, $preTag);
                     $this->writeVersionFromSource($source, $prefix);
@@ -263,7 +291,8 @@ final class PanelUpdater
 
             throw new BrokerException(
                 ($rolledBack
-                    ? 'Panel update failed and was rolled back to the previous release. '
+                    ? 'Panel update failed and was rolled back to the previous release'
+                        . ($snapshot !== null ? ' (code and database schema). ' : ' (code only; no database snapshot). ')
                     : 'Panel update failed (no rollback point available). ')
                 . $e->getMessage(),
                 1

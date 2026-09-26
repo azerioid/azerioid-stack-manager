@@ -84,6 +84,11 @@ final class Config
     public string $registryComponentsPath = '/usr/local/lib/azerioid-panel/registry/components';
     public string $managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
 
+    public string $panelDbPath = '/var/lib/azerioid-panel/panel.sqlite';
+
+    /** Pre-update snapshots of the panel database (A3). */
+    public string $panelDbSnapshotDir = '/var/lib/azerioid-panel/db-snapshots';
+
     /** ACME account email for certbot DNS-01 (Caddy uses its own ACME account for HTTP-01). Empty → derived as admin@<domain>. */
     public string $acmeEmail = '';
 
