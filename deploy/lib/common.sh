@@ -73,6 +73,15 @@ php_bin() {
     fi
 }
 
+# Resolve the identity that owns the panel web tree, the panel FPM pool, the
+# queue worker, and the broker sudo grant.
+#
+# CALL ORDER MATTERS (R1, 2026-09-26): `caddy` only exists once the Caddy
+# package is installed. Calling this before bootstrap_packages on a stock
+# Debian/Ubuntu image silently resolves to the pre-existing `www-data`, which is
+# also the distro `www` site-pool user — collapsing the panel identity into the
+# hosted-site identity while holding NOPASSWD root sudo. Always call the
+# authoritative version AFTER packages are installed.
 detect_web_user() {
     if [[ -n "${WEB_USER:-}" ]]; then
         echo "${WEB_USER}"
@@ -87,6 +96,23 @@ detect_web_user() {
     else
         echo www-data
     fi
+}
+
+# True (exit 0) when $1 is the user a site PHP-FPM pool runs as. Used to refuse
+# granting broker sudo to an identity shared with hosted-site PHP (R1).
+site_pool_user_conflict() {
+    local candidate="${1:-}"
+    [[ -n "${candidate}" ]] || return 1
+    local f
+    for f in /etc/php/*/fpm/pool.d/*.conf /etc/php-fpm.d/*.conf; do
+        [[ -f "${f}" ]] || continue
+        # Skip the panel's own pool — only site pools matter here.
+        [[ "$(basename "${f}")" == "azerioid-panel.conf" ]] && continue
+        if grep -Eq "^[[:space:]]*user[[:space:]]*=[[:space:]]*${candidate}[[:space:]]*$" "${f}"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 run_as_web() {
