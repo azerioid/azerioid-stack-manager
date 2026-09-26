@@ -255,6 +255,26 @@
                     </div>
                 </div>
             @endif
+
+            {{-- vhost.files.move existed in the broker since the File Manager
+                 shipped; only the UI was missing, so files could be renamed but
+                 never relocated (B1 / G11). --}}
+            @if ($moveFrom !== null)
+                <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
+                    <p class="text-zinc-300">
+                        Move <span class="font-mono text-brass-400">{{ basename($moveFrom) }}</span> to folder:
+                    </p>
+                    <input class="field mt-2 font-mono text-xs" wire:model="moveTo"
+                           placeholder="relative to the document root; empty means the root"
+                           x-init="$nextTick(() => { $el.focus(); $el.select() })"
+                           @keydown.enter.prevent="$wire.move()"
+                           @keydown.escape.prevent="$wire.cancelMove()">
+                    <div class="mt-3 flex gap-2">
+                        <button type="button" class="btn-primary" wire:click="move">Move</button>
+                        <button type="button" class="btn-ghost" wire:click="cancelMove">Cancel</button>
+                    </div>
+                </div>
+            @endif
         </div>
 
         <div x-show="menu.open" x-cloak
@@ -265,6 +285,7 @@
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" @click="edit(menu.rel); menu.open = false">Edit</button>
             <a class="block px-3 py-1.5 text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" :href="downloadUrl(menu.rel)" @click="menu.open = false">Download</a>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" @click="$wire.startRename(menu.rel); menu.open = false">Rename</button>
+            <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startMove(menu.rel); menu.open = false">Move…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-ink-600" @click="$wire.askDelete(menu.rel, menu.dir); menu.open = false">Delete</button>
         </div>
     @endif

@@ -37,6 +37,10 @@ class VhostFilesPage extends Component
     public ?string $renameFrom = null;
     public string $renameTo = '';
 
+    /** Move keeps the file's name and changes only its directory (B1 / G11). */
+    public ?string $moveFrom = null;
+    public string $moveTo = '';
+
     public ?string $editorPath = null;
     public string $editorContent = '';
     public bool $editorText = true;
@@ -301,6 +305,57 @@ class VhostFilesPage extends Component
             'dest' => $dest,
         ], $broker, 'Renamed to ' . $dest);
         $this->renameFrom = null;
+        $this->reload($broker);
+    }
+
+    public function startMove(string $rel): void
+    {
+        $this->moveFrom = $rel;
+        // Open on the current directory so the dialog starts somewhere sensible.
+        $this->moveTo = $this->path;
+        $this->error = null;
+    }
+
+    public function cancelMove(): void
+    {
+        $this->moveFrom = null;
+        $this->moveTo = '';
+    }
+
+    /**
+     * `vhost.files.move` has existed in the broker since the File Manager shipped —
+     * registered in the Kernel, validating both source and destination through
+     * VhostPath — but was never wired to the UI, so only rename was reachable
+     * (B1 / G11).
+     */
+    public function move(BrokerClient $broker): void
+    {
+        if ($this->moveFrom === null) {
+            return;
+        }
+        $name = basename($this->moveFrom);
+        $dir = trim(trim($this->moveTo), '/');
+
+        try {
+            $dest = $this->join($dir, $name);
+        } catch (BrokerCallException $e) {
+            $this->error = $e->getMessage();
+
+            return;
+        }
+
+        if ($dest === $this->moveFrom) {
+            $this->error = 'That is already the current location.';
+
+            return;
+        }
+
+        $this->mutate('vhost.files.move', [
+            'path' => $this->moveFrom,
+            'dest' => $dest,
+        ], $broker, 'Moved to ' . $dest);
+        $this->moveFrom = null;
+        $this->moveTo = '';
         $this->reload($broker);
     }
 
