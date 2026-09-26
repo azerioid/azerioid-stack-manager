@@ -332,6 +332,207 @@ Port range `34000–34999` is reserved for these workers (see `docs/port-ownersh
 - Port range **`37000–37999`** (see `docs/port-ownership.md`), distinct from Octane / ttyd / PM2.
 - Install from **Docker’s official apt/dnf repos** (`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`, `docker-ce-rootless-extras`) — not distro `docker.io` as the primary path. After package install: **disable and mask** rootful `docker.service` / `docker.socket`, then configure rootless for `azerioid-supervised` only.
 
+## A39 — Panel service identity must never be a site PHP-FPM pool user
+
+**Status:** **Part B landed (hotfix, 2026-09-26). Part A pending — next major.**
+
+**Problem (R1):** `deploy/install.sh` called `detect_web_user()` **before** `bootstrap_packages`
+installed Caddy. `deploy/lib/common.sh` prefers the dedicated `caddy` identity only when that user
+already exists, and on a stock Debian/Ubuntu image it does not — while the distro web user always does,
+so that one won. The corrective re-detect was guarded by `if ! id -u "${WEB_USER}"`, which is never true
+on apt, so it never self-corrected.
+
+Consequence on apt installs: the panel FPM pool could end up running as the **same system user as the
+distro site PHP-FPM pool**, while that identity also held the privileged broker grant. Sharing a service
+identity between the control plane and hosted-tenant code is not an acceptable trust boundary — it
+collapses the isolation the rest of this project's design depends on (**A25** per-vhost identities,
+**A33** refusing to widen Caddy's privileges). EL hosts were already correct: the distro web user does
+not exist on a bare EL image, so the re-detect fired there and selected the dedicated identity.
+
+**Disclosure note:** the precise privilege chain and the exploitation preconditions are deliberately
+**not** recorded here for now. They will be added to this ADR after a release carrying Part B is
+published and operators have had a window to update. Operators should run
+`azerioid panel harden status` — it reports whether a given host is affected and exits non-zero when
+remediation is needed.
+
+**Part B — landed now:**
+
+1. Authoritative `detect_web_user()` moved **after** `bootstrap_packages`; the early call is explicitly
+   provisional (dry-run display / prompts only). Re-detection is unconditional unless `--web-user=` was
+   passed.
+2. New `site_pool_user_conflict()` guard: the installer **refuses to proceed** if the resolved web user
+   is also a site FPM pool user, rather than installing a root escalation.
+3. New idempotent, transactional in-place remediation for already-installed hosts:
+   `panel.harden.status` / `panel.harden.apply` broker actions and `azerioid panel harden status|apply`
+   (`--dry-run`, `--lockdown-site-pools`). Migration order keeps a working broker path at every
+   intermediate step — additive sudoers (both identities) → ownership → pool → units → **verify broker
+   call as the new identity** → drop the old grant. Any failure reverts the whole journal.
+4. Target identity is **`caddy`**, deliberately: it is what `detect_web_user()` already intends, what EL
+   hosts already run, and what the fixed installer produces — so hardened apt hosts converge on one
+   state instead of forming a third variant.
+
+**Part A — NOT done here (next major). Operator decisions locked 2026-09-26:**
+
+1. **Dedicated account (revises A1).** The panel pool user becomes a new, separate `azerioid-panel`
+   system account — **not** `caddy`, **not** `www-data`. **A1**'s "Pool user: `caddy`" is hereby
+   **revised**. Rationale (operator-agreed): **A33** already established the principle "do not grant
+   Caddy broader sudo just to make the panel work"; leaving the panel pool on Caddy's uid while that uid
+   holds the broker grant contradicts the spirit of that decision. A separate account isolates both
+   sides. Part B's use of `caddy` is an explicitly temporary convergence step, not the end state.
+2. **Independent panel PHP version.** With its own php-fpm master and its own `php.ini`, the panel's
+   PHP pin (**A1**: 8.4) becomes genuinely independent of the distro php-fpm version on every family,
+   not only EL. Accepted tradeoff: panel PHP upgrades become a separate operational step rather than
+   arriving with a distro update — which is the point, because a distro PHP upgrade can then no longer
+   break the panel unexpectedly.
+3. **Migration model: hybrid.** Part A's migration runs **automatically during self-update** (matching
+   the "in place, at upgrade" decision), but with a **full rollback guarantee**: create the new identity
+   → chown → write **additive** sudoers covering both old and new identity → switch the pool → verify a
+   real broker call as the new identity → only on success remove the old sudoers entry. On any failure,
+   revert every step and fail loudly. A host must never be left with neither identity authorised.
+
+Mechanically Part A also generalises the EL-only dedicated panel php-fpm master
+(`azerioid-panel-php-fpm.service` + `--fpm-config /etc/azerioid-panel/php-fpm.conf`, see **A3**) to all
+families. That is what makes items 1 and 2 possible and what finally lets site pools keep
+`proc_open` disabled.
+
+**Known residual risk until Part A ships (do not treat as closed):**
+
+- On apt hosts the panel pool still shares one php-fpm master — and therefore one `php.ini` — with the
+  site `www` pool. `deploy/lib/fpm.sh` removes `proc_open`/`proc_get_status` from that shared `php.ini`
+  so the panel can spawn `sudo`. Per-pool `disable_functions` can only **append** to the global list,
+  never remove from it (stock `www.conf` comment states this), so site pools keep process-spawning
+  unless the operator opts into `--lockdown-site-pools` (behaviour-changing for hosted apps).
+  **This is no longer a root path** — the sudo grant is gone — but it is weaker than SPEC intends.
+- `caddy` now holds the broker grant, so a Caddy compromise reaches the broker. Narrower than "any
+  hosted site", but not the fully isolated identity Part A delivers.
+
+## A40 — File Manager archive operations: zip-slip exclusion partially lifted
+
+**Status:** Accepted (operator decision, 2026-09-26). **Conditional — see the gate below.**
+**Amends:** `docs/SPEC.md` §"Per-vhost Terminal and File Manager", which stated *"Archive extract is
+**not** implemented (zip-slip scoped out of v1)."*
+
+**What changes:** archive **extract** (ZIP / TAR / TAR.GZ) and archive **creation in place** become
+in-scope for the File Manager. The original v1 exclusion was made because the containment primitives
+needed to do extraction safely did not exist yet. They now do, and are tested:
+
+- `VhostPath::lexicalJoin` rejects NUL, absolute paths, and `..` segments climbing above the vhost root.
+- `realpath()` confinement of the target (or of the parent, on create) must stay under the vhost root.
+- Rename/move already validates **both** source and destination.
+- Symlinks resolving outside the root are rejected; the helper never creates symlinks.
+- All file ops execute as the vhost's `az-vh-*` identity (**A25**) via a setuid-dropping helper, never
+  from the panel FPM process.
+
+**Note on scope:** archive **creation** was never covered by the zip-slip exclusion — creation carries
+none of extraction's path risks. It is unblocked unconditionally. Only **extraction** is gated.
+
+**Hard gate (operator condition — not optional):** extraction is not considered complete, and must not
+ship, until a dedicated adversarial test suite passes covering **all** of:
+
+| Case | Must |
+|------|------|
+| Entry with `../` escaping the root | reject |
+| Entry with an absolute path | reject |
+| Symlink entry pointing outside the root | reject |
+| **Hardlink entry** | reject |
+| Nested archive | not auto-extracted |
+| Zip bomb | refuse via uncompressed-size **and** entry-count caps |
+| Entry with setuid/setgid bits | reject |
+| Device-node entry | reject |
+
+**Additional constraints:** extraction runs as `az-vh-*`, never root; total uncompressed output is
+capped; a conflict policy (skip / overwrite / rename) is explicit rather than implied.
+
+**Do not** treat `SPEC.md`'s original exclusion as still binding for extraction — but equally, do not
+treat extraction as done until the table above is green.
+
+## A41 — Git deploy accepted (narrow); full CI/CD pipeline permanently rejected
+
+**Status:** Accepted (operator decision, 2026-09-26). **This ADR exists specifically so the CI/CD
+question is not reopened again.**
+
+This supersedes the earlier informal planning decision that excluded git-based deployment wholesale.
+Two clearly separated propositions were evaluated; they get opposite verdicts.
+
+### REJECTED — permanently: full CI/CD platform ("Proposition A")
+
+Build pipelines, build environments and matrices, artifact storage, build caching, secret injection into
+builds, **inbound webhook receivers**, provider OAuth token management, concurrent build isolation.
+
+**Rejected for good, not deferred.** Reasons:
+
+1. It is a separate product domain, not an extension of anything this panel owns — the same reasoning
+   that keeps Octane/PM2/Docker on Supervisor + Caddy instead of new process managers (**A35/A37/A38**).
+2. A webhook receiver is a **new public inbound attack surface** on a product whose security posture is
+   localhost-first with an SSH tunnel by default (`SPEC.md` §Security model). **R1/A39** — where a single
+   identity mistake turned every hosted site into a root path — is a direct argument for adding fewer
+   public entry points, not more.
+3. It duplicates Caddy's existing front-router/TLS role at the edges.
+
+**Do not reopen without a new ADR that explicitly supersedes this one.**
+
+### ACCEPTED — narrow: git deploy ("Proposition B")
+
+`git pull` plus one post-deploy command in an existing vhost docroot, then the runtime reload that
+**already exists**. Locked parameters:
+
+| Parameter | Decision |
+|-----------|----------|
+| Providers | **Provider-agnostic over SSH**. Panel-generated deploy key; operator registers the public half. **No OAuth, no provider APIs.** |
+| Triggers | **Manual + schedule only. No webhooks.** (Webhooks are the line where B becomes A.) |
+| Deploy strategy | **In-place `git pull` for v1.** No release-directory + symlink swap — that would change the docroot contract and collide with the SFTP chroot question. |
+| Rollback | **Code only** (`git checkout <previous-sha>` + re-run). **Not** code+DB. |
+| Identity | Runs as the vhost's `az-vh-*` user (**A25**) — **never** root, never `azerioid-supervised`. |
+| Reload | Reuses existing `vhost.octane.reload` / `vhost.pm2.reload` / `vhost.docker.restart`. |
+| History | Uses the generalised operations model, not a bespoke tracker. |
+
+**Why B is consistent with the discipline:** it adds one broker action plus state and reuses per-vhost
+identity, Supervisor-based runtimes, the existing reload actions, and the queue. No new public endpoint,
+no new process manager, no build system.
+
+**Known accepted limitation:** in-place `git pull` is **not atomic** — a partially-updated tree is served
+mid-pull. This is accepted for v1 and must be documented in the UI, not silently ignored.
+
+**Security note:** the post-deploy command is arbitrary code execution as the vhost user. That is
+acceptable **only** because the vhost's own PHP already runs as that user, so the blast radius does not
+widen. Deploy keys must be read-only at the provider and root-owned on disk (not readable by the vhost
+user).
+
+## A42 — `php-sodium` is a panel runtime dependency on EL
+
+**Status:** Accepted (operator decision, 2026-09-26).
+**Driver:** encrypted-backup KDF (Argon2id via `sodium_crypto_pwhash`) for the planned LACMP2 archive
+format. Investigated before implementation, per the project's "verify across the whole OS matrix first"
+discipline.
+
+**Finding (measured, not assumed):**
+
+| Family | PHP source | `sodium` | Evidence |
+|--------|-----------|----------|----------|
+| Debian / Ubuntu | Sury | **Statically compiled into the PHP binary** | No `sodium.so` in `extension_dir`; `apt-cache policy php8.4-sodium` returns nothing — **no such package exists**. `SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13` present. Verified on a fleet host (Ubuntu 24.04, PHP 8.4.25). |
+| EL (Alma / Rocky / CentOS Stream) | Remi | **Separate subpackage, and it was NOT installed** | `php-sodium-8.4.25-1.module_php.8.4.el9.remi.x86_64.rpm` exists in Remi's `php84` module repo; neither `deploy/lib/packages.sh` nor `registry/components/php-8.4.json` listed it. |
+
+**Decision:** add `php-sodium` to the EL panel-runtime package set — `deploy/lib/packages.sh` (dnf
+bootstrap) and `registry/components/php-8.4.json` (`distros.el.packages`). It comes from the **already
+configured, GPG-pinned Remi repo** (**A10**), so this adds no new repository or trust root.
+
+**Scope:** panel runtime (PHP 8.4) only. Site PHP versions (`php-8.1/8.2/8.3`) are **not** changed —
+backup crypto runs in the broker under the panel runtime, so they have no such requirement. Adding
+sodium to site versions for hosted-app convenience is a separate question, not decided here.
+
+**Important consequence — the KDF must still degrade gracefully:** adding a package to the install list
+does **not** retroactively install it. Existing EL hosts will keep running without `sodium` until they
+are reinstalled. Therefore the archive format **must**:
+
+1. Keep **PBKDF2-SHA256** (`hash_pbkdf2`, PHP core, present everywhere) as a guaranteed floor.
+2. Record the **KDF identifier and its parameters in the archive header**, so restore is unambiguous and
+   never silently falls back to a weaker derivation for an archive that was written with a stronger one.
+
+**Also established — AEAD has no sodium dependency.** AES-256-GCM is reachable through
+`openssl_encrypt` on all five targets (hardware-accelerated on the verified host:
+`sodium_crypto_aead_aes256gcm_is_available()` → true, and OpenSSL uses AES-NI likewise). Only the KDF
+choice ever depended on `sodium`, so the encryption half of LACMP2 required no new dependency at all.
+
 ## A36 — Mail server component
 
 **Status:** Implemented and released in **v1.3.0** (2026-09-15). Spec: [`docs/mail-server-design.md`](./mail-server-design.md).  
