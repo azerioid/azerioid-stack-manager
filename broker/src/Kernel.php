@@ -15,6 +15,7 @@ use AzerioidPanel\Broker\Actions\CaddyApplyConfig;
 use AzerioidPanel\Broker\Actions\BackupList;
 use AzerioidPanel\Broker\Actions\BackupPrune;
 use AzerioidPanel\Broker\Actions\BackupRestore;
+use AzerioidPanel\Broker\Actions\BackupRestoreCheck;
 use AzerioidPanel\Broker\Actions\BackupRun;
 use AzerioidPanel\Broker\Actions\BackupVerify;
 use AzerioidPanel\Broker\Actions\CronManage;
@@ -201,6 +202,8 @@ final class Kernel
         'backup.verify' => BackupVerify::class,
         'backup.restore.db' => BackupRestore::class,
         'backup.restore.files' => BackupRestore::class,
+        // Read-only preflight for the two restore guards; see BackupRestoreCheck.
+        'backup.restore.check' => BackupRestoreCheck::class,
         'spaces.test' => SpacesTest::class,
         'auth.audit' => AuthAudit::class,
         'firewall.status' => FirewallStatus::class,

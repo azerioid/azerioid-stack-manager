@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use App\Services\Broker\BrokerCallException;
 use App\Services\Broker\BrokerClient;
+use App\Services\OperationDispatcher;
 use AzerioidPanel\Broker\Validator;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -754,7 +755,7 @@ class VhostsPage extends Component
         $this->dockerInternalPort = '8080';
     }
 
-    public function enableDocker(BrokerClient $broker): void
+    public function enableDocker(BrokerClient $broker, OperationDispatcher $operations): void
     {
         $domain = (string) $this->dockerTarget;
         $this->error = null;
@@ -789,13 +790,15 @@ class VhostsPage extends Component
             if ($dockerfile !== '') {
                 $input['dockerfile'] = $dockerfile;
             }
-            $res = $broker->call('vhost.docker.enable', [$domain], $input, 900);
-            if (! $res->ok) {
-                $this->error = $this->operatorMessage((string) $res->error);
-            } else {
-                $port = is_array($res->data) ? ($res->data['docker_port'] ?? '?') : '?';
-                $this->flash = "Docker is now serving {$domain} from 127.0.0.1:{$port} (rootless).";
-            }
+            // Queued (B5) in every mode: compose and Dockerfile build an image, and
+            // image mode pulls one that is validated against the registry but not
+            // necessarily present locally — a first run can spend minutes on layers.
+            // The create-time enable elsewhere in this class stays inline, because
+            // A35/A38 make enable transactional with the vhost's serving mode —
+            // split across a queue boundary the vhost would be reported created
+            // while its runtime was still unresolved.
+            $operations->dispatch('vhost.docker.enable', [$domain], $input);
+            $this->flash = "Docker enable queued for {$domain}. The port it binds appears here once it finishes; progress is on the Operations page.";
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
         }
@@ -821,18 +824,24 @@ class VhostsPage extends Component
         $this->reload($broker);
     }
 
-    public function rebuildDocker(BrokerClient $broker, string $domain): void
+    /**
+     * Queued rather than run inline (B5 / request #13).
+     *
+     * A rebuild pulls base layers and can run for minutes. It used to block the
+     * HTTP request behind a 900-second broker timeout with no output, no record
+     * and nothing to look at afterwards; the operator watched a spinner and, if it
+     * failed late, got a bare error. It now becomes an Operation with a log and a
+     * history entry, and a second rebuild of the same vhost waits on that vhost's
+     * lock instead of fighting the first over the Docker daemon.
+     */
+    public function rebuildDocker(BrokerClient $broker, string $domain, OperationDispatcher $operations): void
     {
         $this->error = null;
         try {
             $domain = Validator::domain($domain);
             $this->assertMutableVhost($domain);
-            $res = $broker->call('vhost.docker.build', [$domain], [], 900);
-            if (! $res->ok) {
-                $this->error = $this->operatorMessage((string) $res->error);
-            } else {
-                $this->flash = "Rebuilt Docker workload for {$domain}.";
-            }
+            $operations->dispatch('vhost.docker.build', [$domain], []);
+            $this->flash = "Rebuild queued for {$domain}. Follow it on the Operations page.";
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
         }

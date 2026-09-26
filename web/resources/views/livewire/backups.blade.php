@@ -102,7 +102,7 @@
 
     <div class="panel grid gap-4 p-5 md:grid-cols-2">
         <h2 class="md:col-span-2 text-sm font-medium">Restore</h2>
-        <p class="md:col-span-2 text-sm text-zinc-400">DB restore defaults to a <strong>new</strong> database name. File restore stages first, then moves. Restoring over a read-only (reverse-proxy) vhost requires force plus typing the domain in uppercase. Overwriting an existing database requires typing <span class="font-mono">OVERWRITE</span>.</p>
+        <p class="md:col-span-2 text-sm text-zinc-400">DB restore defaults to a <strong>new</strong> database name. File restore stages first, then moves. Restoring over a read-only (reverse-proxy) vhost requires force plus typing the domain in uppercase. Overwriting an existing database requires typing <span class="font-mono">OVERWRITE</span>. Both refusals arrive immediately; an accepted restore is queued and reported on the <a class="text-brass-400 hover:underline" href="/operations">Operations</a> page, since a real archive takes minutes to put back.</p>
         <label class="text-xs uppercase tracking-wide text-zinc-500">Source
             <select class="field mt-1" wire:model="restore_destination">
                 <option value="local">Local disk</option>

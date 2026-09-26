@@ -6,6 +6,7 @@ use App\Console\Commands\RunScheduledBackup;
 use App\Models\BackupJob;
 use App\Models\Setting;
 use App\Services\Broker\BrokerClient;
+use App\Services\OperationDispatcher;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -157,7 +158,7 @@ class BackupsPage extends Component
         $this->run($broker, 'backup.caddy', [], 'caddy', 'caddy', 'spaces', ['include_fpm' => $this->include_fpm]);
     }
 
-    public function restoreDb(BrokerClient $broker): void
+    public function restoreDb(BrokerClient $broker, OperationDispatcher $operations): void
     {
         $stdin = $this->restoreStdin();
         if ($stdin === null) {
@@ -169,9 +170,24 @@ class BackupsPage extends Component
         $stdin['overwrite'] = $this->restore_overwrite;
         $stdin['confirm'] = $this->restore_confirm;
         $stdin['destination'] = $this->restore_destination === 'local' ? 'local' : 'spaces';
-        $res = $broker->call('backup.restore.db', [$this->restore_key], $stdin, 900);
-        $this->flash = $res->ok ? 'Restored into '.$this->restore_target : null;
-        $this->error = $res->ok ? null : $res->error;
+        // Ask for the refusal before queueing, not after: a restore into an
+        // existing database is exactly the mistake the operator needs told about
+        // while they are still looking at the screen. Audited like the restore it
+        // stands in for, so a refused attempt still leaves a trace.
+        $check = $broker->call('backup.restore.check', ['db'], $stdin, 60);
+        if (! $check->ok) {
+            $this->error = $check->error;
+            $this->flash = null;
+
+            return;
+        }
+        // Queued (B5): a restore streams a whole archive through decryption and
+        // into the database engine, which for a real site runs for minutes behind
+        // an otherwise blocking request. The preview path below stays inline
+        // because it only reads a listing.
+        $operations->dispatch('backup.restore.db', [$this->restore_key], $stdin);
+        $this->flash = 'Restore into '.$this->restore_target.' queued. Progress and output are on the Operations page.';
+        $this->error = null;
     }
 
     public function previewFiles(BrokerClient $broker): void
@@ -191,7 +207,7 @@ class BackupsPage extends Component
         $this->flash = $res->ok ? 'Staged. Review the listing, then apply.' : null;
     }
 
-    public function applyFiles(BrokerClient $broker): void
+    public function applyFiles(BrokerClient $broker, OperationDispatcher $operations): void
     {
         $stdin = $this->restoreStdin();
         if ($stdin === null) {
@@ -202,9 +218,20 @@ class BackupsPage extends Component
         $stdin['force'] = $this->restore_force;
         $stdin['confirm'] = $this->restore_confirm;
         $stdin['destination'] = $this->restore_destination === 'local' ? 'local' : 'spaces';
-        $res = $broker->call('backup.restore.files', [$this->restore_key], $stdin, 900);
-        $this->flash = $res->ok ? 'Files applied.' : null;
-        $this->error = $res->ok ? null : $res->error;
+        // Same reason as restoreDb: the read-only vhost guard protects a live site,
+        // so its refusal has to arrive now rather than on the Operations page.
+        $check = $broker->call('backup.restore.check', ['files'], $stdin, 60);
+        if (! $check->ok) {
+            $this->error = $check->error;
+            $this->flash = null;
+
+            return;
+        }
+        // Queued (B5): unpacking a site tree is minutes of work, and until now it
+        // ran behind a blocking request with no record of whether it finished.
+        $operations->dispatch('backup.restore.files', [$this->restore_key], $stdin);
+        $this->flash = 'File restore queued. Progress and output are on the Operations page.';
+        $this->error = null;
     }
 
     /** @param array<int,string> $args */

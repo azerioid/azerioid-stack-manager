@@ -630,3 +630,65 @@ choice ever depended on `sodium`, so the encryption half of LACMP2 required no n
 **Spec:** [`docs/mail-server-design.md`](./mail-server-design.md) — all former open questions resolved; ready for implementation.
 
 
+
+## A45 — What gets queued as an operation, and what stays inline
+
+**Status:** Accepted (2026-09-26, B5).
+**Relates to:** A43 (panel DB snapshots), A44 (`operations` named as a later child table),
+request #13.
+
+**Problem:** B5 added an `operations` table, a queued job and an Operations page, and the
+commit that landed it listed the remaining synchronous call sites — backups, Octane/PM2/Docker
+enables, mail domain enable — as "mechanical follow-ups". Working through them showed that
+framing was wrong: several of those calls should *not* be queued at all, and converting them
+because they were on a list would have made the panel worse.
+
+**Decision — queue only work that routinely takes minutes and returns nothing the operator
+is waiting to read.** The current set is exactly:
+
+| Action | Why queued |
+|--------|-----------|
+| `vhost.docker.build` | Builds an image; pulls base layers |
+| `vhost.docker.enable` (standalone) | Compose and Dockerfile modes build; image mode pulls layers that are validated against the registry but may not be on the host yet |
+| `backup.restore.db` | Streams a whole archive through decryption into the database engine |
+| `backup.restore.files` | Unpacks a site tree, then moves it into place |
+
+**Deliberately left inline, with reasons:**
+
+- **`vhost.octane.enable` / `vhost.pm2.enable` / `mail.domain.enable`.** A 900-second broker
+  timeout is a ceiling, not a duration: these wait for a worker to listen and normally finish
+  in seconds. They also *return something the operator needs now* — the port the runtime is
+  serving from. Behind a queue boundary that answer arrives on a different page, later.
+  (The Docker enable gives up the same answer, and is queued anyway: it is the one of the four
+  that can spend minutes fetching or building an image before anything listens.)
+- **`backup.db` / `backup.files` / `backup.caddy`.** Genuinely slow, but they already maintain
+  a `BackupJob` row that both the Backups page and the backup-staleness alert rule read.
+  Queueing them means either duplicating that bookkeeping or leaving `BackupJob` at `running`
+  — which the alert rule would read as a missed backup. They wait for the BackupJob/operations
+  unification rather than being half-converted.
+- **The create-time Docker enable.** A35/A38 make enable transactional with the vhost's
+  serving mode. Split across a queue boundary the vhost would be reported created while its
+  runtime was still unresolved.
+- **`backup.restore.files` with `apply=false`.** A preview only reads a listing, and the
+  operator is sitting in front of it waiting for the listing.
+- **`backup.verify`.** Has no panel call site at all; it is a CLI command whose whole purpose
+  is printing a verdict to the person who typed it.
+
+**Consequence that required new code — a queued destructive action must still refuse
+immediately.** Two guards stand between an operator and a destroyed production site: *target
+database already exists* and *that vhost is read-only*. Both used to be enforced inside the
+restore, which was fine while the restore ran inside the request. Queued, a refusal would have
+surfaced on the Operations page minutes later, after the operator had walked away believing
+the guard let them through.
+
+So the guards moved into `Backup\RestorePolicy`, and a read-only preflight action
+`backup.restore.check` evaluates them before anything is queued. It fetches nothing, decrypts
+nothing, needs no passphrase, and writes only its audit entry; `BackupRestore` still enforces
+the same policy through the same class, so the preflight is advisory and nothing depends on it
+having run. It is **audited**, because before this change a refused restore attempt was an
+audited broker call and that trace should not be lost.
+
+**Rule for the future:** a new slow action is added to `OperationDispatcher::ASYNC_ACTIONS`
+deliberately, per call site. There is no blanket hook in `BrokerClient` — one would recurse
+(the job calls the same action) and would silently change the contract of every existing
+caller that uses the returned data.

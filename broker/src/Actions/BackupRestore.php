@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Actions;
 use AzerioidPanel\Broker\Backup\ArchiveCipher;
 use AzerioidPanel\Broker\Backup\BackupEngines;
 use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
+use AzerioidPanel\Broker\Backup\RestorePolicy;
 use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
@@ -70,14 +71,10 @@ final class BackupRestore
             isset($input['engine']) ? (string) $input['engine'] : null
         );
 
-        if ($overwrite) {
-            Validator::typedConfirm((string) ($input['confirm'] ?? ''), 'OVERWRITE');
-        } elseif ($driver->targetExists($target)) {
-            throw new BrokerException(
-                'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.',
-                3
-            );
-        }
+        // Enforced here even though the panel preflights the same rule through
+        // `backup.restore.check`: the preflight is for the operator's benefit, not
+        // a substitute for the guard (RestorePolicy).
+        RestorePolicy::assertDb($driver, $target, $overwrite, (string) ($input['confirm'] ?? ''));
 
         $driver->prepareTarget($target);
 
@@ -118,16 +115,7 @@ final class BackupRestore
         $force = (bool) ($input['force'] ?? false);
         $apply = (bool) ($input['apply'] ?? false);
         $protected = in_array($site, $config->readonlyVhosts, true);
-        $confirmToken = strtoupper($site);
-        if ($protected && $apply && !$force) {
-            throw new BrokerException(
-                'Refusing to restore over a read-only vhost without force + confirm ' . $confirmToken . '.',
-                3
-            );
-        }
-        if ($protected && $apply && $force) {
-            Validator::typedConfirm((string) ($input['confirm'] ?? ''), $confirmToken);
-        }
+        RestorePolicy::assertFiles($config, $site, $apply, $force, (string) ($input['confirm'] ?? ''));
 
         $staging = rtrim($config->stagingDir, '/') . '/restore-' . $site;
         $runtime->mkdir($staging, 0750);

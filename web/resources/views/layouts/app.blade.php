@@ -33,6 +33,7 @@
                         ['services', 'Services', '/services'],
                         ['processes', 'Processes', '/processes'],
                         ['components', 'Components', '/components'],
+                        ['operations', 'Operations', '/operations'],
                         ['logs', 'Logs', '/logs'],
                         ['security', 'Security', '/security'],
                         ['audit', 'Audit', '/audit'],
