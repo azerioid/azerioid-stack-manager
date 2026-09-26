@@ -560,9 +560,13 @@ final class MemorySpacesTransport
 
     public int $multipartAborted = 0;
 
+    /** @var list<array{method:string,url:string}> every call that reached the wire */
+    public array $requests = [];
+
     public function handler(): \Closure
     {
         return function (string $method, string $url, array $headers, string $body): array {
+            $this->requests[] = ['method' => $method, 'url' => $url];
             $path = parse_url($url, PHP_URL_PATH) ?: '/';
             $query = [];
             parse_str((string) (parse_url($url, PHP_URL_QUERY) ?? ''), $query);

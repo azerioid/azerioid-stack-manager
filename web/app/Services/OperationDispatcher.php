@@ -9,40 +9,56 @@ use Illuminate\Support\Facades\Auth;
 /**
  * Decides which broker calls are too slow to run inline, and queues them (B5).
  *
- * The rule is simply "can this plausibly exceed about ten seconds". A docker build
- * pulling base layers, a package install adding a repository, a multi-gigabyte
- * backup, an Octane enable waiting for a worker to listen — all of these were
- * running behind a blocking HTTP request with a 900-second broker timeout, which
- * meant the operator watched a spinner with no output and no record afterwards.
+ * The rule is "does this routinely take minutes" — not "does it have a generous
+ * timeout". A docker build pulling base layers, a restore streaming a whole
+ * archive back onto disk: those ran behind a blocking HTTP request with a
+ * 900-second broker timeout, so the operator watched a spinner with no output,
+ * no cancel, and no record of what happened afterwards.
  *
- * Read-only calls and quick writes stay inline; queueing them would add latency
- * and a database row for nothing.
+ * Everything else stays inline. Read-only calls and quick writes would gain a
+ * database row and a round trip through the queue for nothing, and an action
+ * whose result the operator needs *now* (the port a runtime just bound) is worse
+ * off behind a queue boundary.
  */
 class OperationDispatcher
 {
     /**
-     * broker action => [kind, subject type, how to derive the subject id].
+     * broker action => [kind, subject type, stdin keys naming the subject].
      *
-     * Explicit rather than pattern-matched: a new slow action should be a
-     * deliberate addition here, and anything not listed keeps working exactly as
-     * it does today.
+     * Only actions that are *genuinely* slow, not merely ones with a generous
+     * timeout. The 900-second ceiling on most vhost runtime calls is a maximum,
+     * not a typical duration: an Octane or PM2 enable waits for a worker to
+     * listen and normally finishes in seconds, and it returns something the
+     * operator wants immediately — the port it is now serving from. Queueing
+     * those would lose that for no gain.
+     *
+     * What is actually slow: anything that builds a container image, and anything
+     * that unpacks an archive.
+     *
+     * The third element exists because the subject of an operation is not always
+     * the first argument. A restore is called with the *archive* key, but what the
+     * operator is watching is the database or the site being restored into, and
+     * that only appears in stdin.
+     *
+     * Not here, deliberately:
+     *  - backup.db / backup.files / backup.caddy are slow, but they already
+     *    maintain a BackupJob row that the Backups page and the backup-staleness
+     *    alert rule both read. Converting them means either duplicating that
+     *    bookkeeping or leaving BackupJob stuck at `running`, which the alert rule
+     *    would read as a missed backup — so they wait for the BackupJob/operations
+     *    unification rather than being half-converted here.
+     *  - backup.verify has no panel call site at all; it is a CLI command that
+     *    prints its verdict, where running inline is the point.
+     *
+     * @var array<string, array{0:string, 1:string, 2:list<string>}>
      */
     public const ASYNC_ACTIONS = [
-        'vhost.docker.build' => ['docker.build', 'vhost'],
-        'vhost.docker.enable' => ['docker.enable', 'vhost'],
-        'vhost.docker.disable' => ['docker.disable', 'vhost'],
-        'vhost.octane.enable' => ['octane.enable', 'vhost'],
-        'vhost.octane.disable' => ['octane.disable', 'vhost'],
-        'vhost.pm2.enable' => ['pm2.enable', 'vhost'],
-        'vhost.pm2.disable' => ['pm2.disable', 'vhost'],
-        'backup.db' => ['backup.db', 'database'],
-        'backup.files' => ['backup.files', 'vhost'],
-        'backup.caddy' => ['backup.caddy', 'panel'],
-        'backup.restore.db' => ['backup.restore.db', 'database'],
-        'backup.restore.files' => ['backup.restore.files', 'vhost'],
-        'backup.verify' => ['backup.verify', 'backup'],
-        'mail.domain.enable' => ['mail.domain.enable', 'vhost'],
-        'mail.domain.disable' => ['mail.domain.disable', 'vhost'],
+        // Builds an image whenever the vhost supplies a Dockerfile or compose file.
+        'vhost.docker.build' => ['docker.build', 'vhost', []],
+        // Only the standalone enable; the one during vhost creation stays inline.
+        'vhost.docker.enable' => ['docker.enable', 'vhost', []],
+        'backup.restore.db' => ['backup.restore.db', 'database', ['target', 'database']],
+        'backup.restore.files' => ['backup.restore.files', 'vhost', ['site', 'domain']],
     ];
 
     /** Inputs that must never be written to the operations table. */
@@ -64,14 +80,14 @@ class OperationDispatcher
      */
     public function dispatch(string $action, array $args, array $stdin): Operation
     {
-        [$kind, $subjectType] = self::ASYNC_ACTIONS[$action]
+        [$kind, $subjectType, $subjectKeys] = self::ASYNC_ACTIONS[$action]
             ?? throw new \InvalidArgumentException('Not an async action: ' . $action);
 
         $operation = Operation::query()->create([
             'user_id' => Auth::id(),
             'kind' => $kind,
             'subject_type' => $subjectType,
-            'subject_id' => self::subjectId($args, $stdin),
+            'subject_id' => self::subjectId($subjectKeys, $args, $stdin),
             'broker_action' => $action,
             'args' => array_values($args),
             // Secrets are stripped, not redacted in place: the operations table is
@@ -85,10 +101,23 @@ class OperationDispatcher
         return $operation;
     }
 
-    /** @param list<string> $args */
-    private static function subjectId(array $args, array $stdin): string
+    /**
+     * Named stdin keys win over the first argument; host-wide work gets a stable
+     * subject so its lock (see Operation::lockKeyFor) serialises against itself.
+     *
+     * @param  list<string>  $subjectKeys
+     * @param  list<string>  $args
+     * @param  array<string,mixed>  $stdin
+     */
+    private static function subjectId(array $subjectKeys, array $args, array $stdin): string
     {
-        foreach ([$args[0] ?? null, $stdin['domain'] ?? null, $stdin['database'] ?? null, $stdin['site'] ?? null] as $candidate) {
+        $candidates = [];
+        foreach ($subjectKeys as $key) {
+            $candidates[] = $stdin[$key] ?? null;
+        }
+        $candidates[] = $args[0] ?? null;
+
+        foreach ($candidates as $candidate) {
             if (is_string($candidate) && trim($candidate) !== '') {
                 return substr(trim($candidate), 0, 253);
             }

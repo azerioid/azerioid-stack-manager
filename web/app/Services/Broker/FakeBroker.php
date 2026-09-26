@@ -108,6 +108,7 @@ final class FakeBroker
 
     public function reset(): void
     {
+        $this->callLog = [];
         $this->failNextCall = false;
         $this->failNextValidate = false;
         $this->failNextDbAdd = false;
@@ -305,8 +306,19 @@ final class FakeBroker
      */
     public bool $failNextCall = false;
 
+    /**
+     * Every action that reached the fake, in order. Lets a test assert that work
+     * was *not* performed inline — which is the whole claim B5 makes about queued
+     * operations.
+     *
+     * @var list<string>
+     */
+    public array $callLog = [];
+
     public function handle(string $action, array $args, array $stdin): BrokerResponse
     {
+        $this->callLog[] = $action;
+
         if ($this->failNextCall) {
             $this->failNextCall = false;
 
@@ -461,6 +473,7 @@ final class FakeBroker
                 'backup.prune' => ['deleted' => [], 'keep' => 14],
                 'backup.restore.db' => $this->restoreDb($stdin),
                 'backup.restore.files' => $this->restoreFiles($stdin),
+                'backup.restore.check' => $this->restoreCheck($args, $stdin),
                 'spaces.test' => ['ok' => true, 'bucket' => 'azerioid', 'region' => 'fra1'],
                 'auth.audit' => ['path' => '/var/log/auth.log', 'missing' => false, 'success' => [['user' => 'root', 'ip' => '127.0.0.1', 'method' => 'publickey', 'line' => 'Accepted publickey for root from 127.0.0.1']], 'failed' => [], 'failed_count' => 0, 'new_root_ips' => []],
                 'firewall.status' => ['ufw' => ['installed' => true, 'status' => "Status: active\nTo 22 ALLOW  Anywhere"], 'fail2ban' => ['installed' => false]],
@@ -1182,6 +1195,32 @@ final class FakeBroker
             'applied' => $apply,
             'forced_readonly' => $protected && $force && $apply,
         ];
+    }
+
+    /**
+     * The preflight the panel runs before queueing a restore. Mirrors the broker:
+     * it asks the same two questions through the same code as the restore itself
+     * (restoreDb / restoreFiles here), so a test cannot pass the check and then
+     * fail the restore.
+     *
+     * @param  list<string>  $args
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function restoreCheck(array $args, array $stdin): array
+    {
+        $kind = strtolower(trim((string) ($args[0] ?? $stdin['kind'] ?? '')));
+        if ($kind === 'db') {
+            $this->restoreDb($stdin);
+
+            return ['kind' => 'db', 'allowed' => true, 'engine' => 'mariadb'];
+        }
+        if ($kind === 'files') {
+            $this->restoreFiles($stdin);
+
+            return ['kind' => 'files', 'allowed' => true];
+        }
+        throw new BrokerCallException('backup.restore.check needs kind=db or kind=files.', 2);
     }
 
     /** @return list<array{id:string,display_name:string,credentials_present:bool}> */

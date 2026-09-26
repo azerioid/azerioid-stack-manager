@@ -69,13 +69,28 @@ class OperationsTest extends TestCase
 
     public function test_a_slow_action_is_recognised_and_a_quick_one_is_not(): void
     {
-        foreach (['vhost.docker.build', 'backup.db', 'vhost.octane.enable', 'mail.domain.enable'] as $slow) {
+        foreach (['vhost.docker.build', 'vhost.docker.enable', 'backup.restore.db', 'backup.restore.files'] as $slow) {
             $this->assertTrue(OperationDispatcher::isAsync($slow), $slow);
         }
         // Read-only and quick writes must keep running inline; queueing them would
         // add latency and a row for nothing.
         foreach (['vhost.list', 'status.all', 'db.list', 'vhost.files.read', 'firewall.status'] as $quick) {
             $this->assertFalse(OperationDispatcher::isAsync($quick), $quick);
+        }
+    }
+
+    /**
+     * A runtime enable returns the port it is now serving from, and normally
+     * finishes in seconds. Queueing it would take that answer away from the
+     * operator to solve a problem it does not have. Backups are slow, but they
+     * keep a BackupJob row that the staleness alert reads, so they wait for the
+     * unification rather than being half-converted.
+     */
+    public function test_actions_deliberately_left_inline_stay_inline(): void
+    {
+        foreach (['vhost.octane.enable', 'vhost.pm2.enable', 'mail.domain.enable',
+            'backup.db', 'backup.files', 'backup.caddy'] as $inline) {
+            $this->assertFalse(OperationDispatcher::isAsync($inline), $inline);
         }
     }
 
@@ -93,20 +108,45 @@ class OperationsTest extends TestCase
         Queue::assertPushed(RunOperationJob::class);
     }
 
-    public function test_subject_is_taken_from_stdin_when_there_is_no_argument(): void
+    /**
+     * A restore is called with the *archive* key as its argument, but the subject
+     * the operator is watching — and the subject the per-subject lock has to
+     * serialise on — is the database being restored into.
+     */
+    public function test_the_subject_of_a_restore_is_the_target_not_the_archive(): void
     {
         Queue::fake();
 
-        $op = $this->dispatcher()->dispatch('mail.domain.enable', [], ['domain' => 'shop.example.com']);
+        $op = $this->dispatcher()->dispatch('backup.restore.db', ['db/all-20260926.lacmp'], [
+            'target' => 'shop_production',
+            'key' => 'db/all-20260926.lacmp',
+        ]);
+
+        $this->assertSame('shop_production', $op->subject_id);
+        $this->assertSame('database', $op->subject_type);
+        // The archive is still recorded, just not as the subject.
+        $this->assertSame(['db/all-20260926.lacmp'], $op->args);
+    }
+
+    public function test_a_file_restore_is_subject_to_the_site_it_unpacks_into(): void
+    {
+        Queue::fake();
+
+        $op = $this->dispatcher()->dispatch('backup.restore.files', ['files/shop-20260926.lacmp'], [
+            'site' => 'shop.example.com',
+            'apply' => true,
+        ]);
 
         $this->assertSame('shop.example.com', $op->subject_id);
     }
 
-    public function test_host_wide_work_gets_a_stable_subject(): void
+    public function test_work_with_no_identifiable_subject_gets_a_stable_one(): void
     {
         Queue::fake();
 
-        $this->assertSame('host', $this->dispatcher()->dispatch('backup.caddy', [], [])->subject_id);
+        // Nothing currently dispatched is host-wide, but the fallback has to be
+        // stable rather than empty: the lock key is derived from it.
+        $this->assertSame('host', $this->dispatcher()->dispatch('backup.restore.files', [], [])->subject_id);
     }
 
     /**
@@ -117,11 +157,11 @@ class OperationsTest extends TestCase
     {
         Queue::fake();
 
-        $op = $this->dispatcher()->dispatch('backup.db', ['all'], [
+        $op = $this->dispatcher()->dispatch('backup.restore.db', ['db/all.lacmp'], [
             'passphrase' => 'correct-horse-battery-staple',
             'spaces' => ['secret' => 'supersecretkeyvalue'],
             'destination' => 'local',
-            'keep' => 7,
+            'target' => 'shop_restore',
         ]);
 
         $serialised = json_encode($op->fresh()->toArray());
@@ -129,7 +169,7 @@ class OperationsTest extends TestCase
         $this->assertStringNotContainsString('supersecretkeyvalue', (string) $serialised);
         // Non-secret context is kept, because that is what makes the record useful.
         $this->assertSame('local', $op->options['destination'] ?? null);
-        $this->assertSame(7, $op->options['keep'] ?? null);
+        $this->assertSame('shop_restore', $op->options['target'] ?? null);
     }
 
     public function test_dispatching_an_unlisted_action_is_refused(): void
@@ -298,6 +338,112 @@ class OperationsTest extends TestCase
             ->assertSet('error', 'Only a queued operation can be cancelled; this one has already started.');
 
         $this->assertSame(Operation::STATUS_RUNNING, $op->refresh()->status);
+    }
+
+    // -------------------------------------------------------------- call sites
+
+    private function seedBackupSecrets(): void
+    {
+        \App\Models\Setting::put('spaces.endpoint', 'https://fra1.digitaloceanspaces.com');
+        \App\Models\Setting::put('spaces.region', 'fra1');
+        \App\Models\Setting::put('spaces.bucket', 'azerioid-backups');
+        \App\Models\Setting::putSecret('spaces.access_key', 'DO00TESTKEY');
+        \App\Models\Setting::putSecret('spaces.secret', 'supersecretkeyvalue');
+        \App\Models\Setting::putSecret('backup.passphrase', 'abcdefghijklmnopqrst');
+    }
+
+    public function test_a_database_restore_is_queued_rather_than_run_inline(): void
+    {
+        Queue::fake();
+        $this->seedBackupSecrets();
+        $fake = app(FakeBroker::class);
+
+        Livewire::actingAs($this->admin())->test(\App\Livewire\BackupsPage::class)
+            ->set('restore_key', 'azerioid/db/all/fixture.bin')
+            ->set('restore_target', 'shop_restore')
+            ->call('restoreDb')
+            ->assertSet('error', null);
+
+        $op = Operation::query()->sole();
+        $this->assertSame('backup.restore.db', $op->broker_action);
+        $this->assertSame('shop_restore', $op->subject_id);
+        $this->assertSame(Operation::STATUS_QUEUED, $op->status);
+        // The preflight ran; the restore itself did not.
+        $this->assertContains('backup.restore.check', $fake->callLog);
+        $this->assertNotContains('backup.restore.db', $fake->callLog);
+    }
+
+    public function test_a_file_restore_is_queued_but_its_preview_still_runs_inline(): void
+    {
+        Queue::fake();
+        $this->seedBackupSecrets();
+        $fake = app(FakeBroker::class);
+
+        $page = Livewire::actingAs($this->admin())->test(\App\Livewire\BackupsPage::class)
+            ->set('restore_key', 'azerioid/files/shop.example.com/fixture.bin')
+            ->set('restore_site', 'shop.example.com')
+            ->call('previewFiles');
+
+        // A preview only reads a listing, and the operator is waiting for it.
+        $this->assertContains('backup.restore.files', $fake->callLog);
+        $this->assertSame(0, Operation::query()->count());
+
+        $page->call('applyFiles');
+
+        $this->assertSame('shop.example.com', Operation::query()->sole()->subject_id);
+    }
+
+    /**
+     * The guards that stop an operator overwriting a live database or a read-only
+     * vhost have to refuse *before* anything is queued. A refusal that produced a
+     * queued row would either run anyway or leave a failed operation the operator
+     * only reads later — both worse than the inline refusal this replaced.
+     */
+    public function test_a_refused_restore_queues_nothing(): void
+    {
+        Queue::fake();
+        $this->seedBackupSecrets();
+
+        Livewire::actingAs($this->admin())->test(\App\Livewire\BackupsPage::class)
+            ->set('restore_key', 'azerioid/db/projob/fixture.bin')
+            ->set('restore_target', 'projob')
+            ->set('restore_overwrite', false)
+            ->call('restoreDb')
+            ->assertSet('error', 'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.');
+
+        $this->assertSame(0, Operation::query()->count(), 'a refusal must not leave queued work behind');
+        Queue::assertNothingPushed();
+    }
+
+    public function test_a_standalone_docker_enable_is_queued(): void
+    {
+        Queue::fake();
+        $fake = app(FakeBroker::class);
+        $fake->vhosts[] = [
+            'domain' => 'static.example.com',
+            'domains' => ['static.example.com'],
+            'root' => '/data/www/static.example.com',
+            'type' => 'static',
+            'engine' => 'caddy',
+            'runtime' => 'static',
+            'readonly' => false,
+            'enabled' => true,
+            'tls' => true,
+            'tls_mode' => 'auto',
+        ];
+
+        Livewire::actingAs($this->admin())->test(\App\Livewire\VhostsPage::class)
+            ->call('askDocker', 'static.example.com')
+            ->set('dockerMode', 'image')
+            ->set('dockerImage', 'nginx:alpine')
+            ->set('dockerInternalPort', '8080')
+            ->call('enableDocker')
+            ->assertSet('error', null);
+
+        $op = Operation::query()->sole();
+        $this->assertSame('vhost.docker.enable', $op->broker_action);
+        $this->assertSame('static.example.com', $op->subject_id);
+        $this->assertNotContains('vhost.docker.enable', $fake->callLog);
     }
 
     public function test_the_page_requires_authentication(): void

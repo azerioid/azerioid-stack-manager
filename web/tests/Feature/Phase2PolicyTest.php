@@ -50,7 +50,8 @@ class Phase2PolicyTest extends TestCase
             ->set('restore_target', 'projob_restore_1')
             ->call('restoreDb')
             ->assertSet('error', null)
-            ->assertSet('flash', 'Restored into projob_restore_1');
+            // B5: the restore is queued now; the guards above still refuse inline.
+            ->assertSet('flash', 'Restore into projob_restore_1 queued. Progress and output are on the Operations page.');
     }
 
     public function test_reboot_without_confirm_is_rejected(): void
