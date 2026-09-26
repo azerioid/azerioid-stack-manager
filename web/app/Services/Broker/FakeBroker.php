@@ -523,6 +523,7 @@ final class FakeBroker
                 'vhost.files.mkdir' => $this->vhostFilesOp('mkdir', $args, $stdin),
                 'vhost.files.rename' => $this->vhostFilesOp('rename', $args, $stdin),
                 'vhost.files.move' => $this->vhostFilesOp('move', $args, $stdin),
+                'vhost.files.copy' => $this->vhostFilesOp('copy', $args, $stdin),
                 'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
                 'mail.status' => $this->mailStatus(),
                 'mail.probe.outbound25' => $this->mailProbe(),
@@ -3190,6 +3191,12 @@ final class FakeBroker
                 $path,
                 $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
             ),
+            'copy' => $this->filesCopy(
+                $domain,
+                $root,
+                $path,
+                $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
+            ),
             'delete' => $this->filesDelete($domain, $path, (bool) ($stdin['recursive'] ?? false)),
             default => throw new BrokerCallException('Unknown file operation.', 2),
         };
@@ -3407,6 +3414,39 @@ final class FakeBroker
     /**
      * @return array<string, mixed>
      */
+    /**
+     * Mirrors the broker's copy, including its refusals: files only, never over an
+     * existing path, never the root. A fake that copied a directory would let a UI test
+     * pass for something the broker declines.
+     *
+     * @return array<string,mixed>
+     */
+    private function filesCopy(string $domain, string $root, string $from, string $to): array
+    {
+        if ($to === '') {
+            throw new BrokerCallException('Destination path is required.', 2);
+        }
+        if ($from === '') {
+            throw new BrokerCallException('Refusing to copy the vhost root.', 3);
+        }
+        if (! isset($this->vhostFiles[$domain][$from])) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        if (($this->vhostFiles[$domain][$from]['type'] ?? '') === 'dir') {
+            throw new BrokerCallException('Copying a directory is not supported yet; copy files individually.', 3);
+        }
+        if (isset($this->vhostFiles[$domain][$to])) {
+            throw new BrokerCallException('Destination already exists.', 3);
+        }
+        $parent = dirname($to) === '.' ? '' : dirname($to);
+        if (($this->filesNode($domain, $parent)['type'] ?? '') !== 'dir') {
+            throw new BrokerCallException('Parent directory not found.', 3);
+        }
+        $this->vhostFiles[$domain][$to] = $this->vhostFiles[$domain][$from];
+
+        return ['from' => $from, 'path' => $to, 'copied' => true];
+    }
+
     private function filesRename(string $domain, string $root, string $from, string $to): array
     {
         if ($from === '' || $to === '') {

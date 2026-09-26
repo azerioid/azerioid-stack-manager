@@ -41,6 +41,10 @@ class VhostFilesPage extends Component
     public ?string $moveFrom = null;
     public string $moveTo = '';
 
+    public ?string $copyFrom = null;
+
+    public string $copyTo = '';
+
     public ?string $editorPath = null;
     public string $editorContent = '';
     public bool $editorText = true;
@@ -357,6 +361,67 @@ class VhostFilesPage extends Component
         $this->moveFrom = null;
         $this->moveTo = '';
         $this->reload($broker);
+    }
+
+    public function startCopy(string $rel): void
+    {
+        $this->copyFrom = $rel;
+        $this->copyTo = $this->path;
+        $this->error = null;
+    }
+
+    public function cancelCopy(): void
+    {
+        $this->copyFrom = null;
+        $this->copyTo = '';
+    }
+
+    /**
+     * Copy keeps the filename and changes the directory, like move — but into a
+     * directory that may be the one it is already in, which is the common case
+     * ("give me a second copy of this config to edit"). So a same-directory copy is
+     * allowed and gets a suffix, where move refuses it as a no-op.
+     */
+    public function copy(BrokerClient $broker): void
+    {
+        if ($this->copyFrom === null) {
+            return;
+        }
+        $name = basename($this->copyFrom);
+        $dir = trim(trim($this->copyTo), '/');
+
+        try {
+            $dest = $this->join($dir, $name);
+            if ($dest === $this->copyFrom) {
+                $dest = $this->join($dir, $this->suffixed($name));
+            }
+        } catch (BrokerCallException $e) {
+            $this->error = $e->getMessage();
+
+            return;
+        }
+
+        $this->mutate('vhost.files.copy', [
+            'path' => $this->copyFrom,
+            'dest' => $dest,
+        ], $broker, 'Copied to ' . $dest);
+        $this->copyFrom = null;
+        $this->copyTo = '';
+        $this->reload($broker);
+    }
+
+    /**
+     * `app.css` becomes `app-copy.css`, not `app.css-copy`: the extension is what decides
+     * how the file is served, and a copy that stops being a stylesheet is a surprise.
+     */
+    private function suffixed(string $name): string
+    {
+        $dot = strrpos($name, '.');
+        if ($dot === false || $dot === 0) {
+            return $name . '-copy';
+        }
+
+        return substr($name, 0, $dot) . '-copy' . substr($name, $dot);
     }
 
     public function render()

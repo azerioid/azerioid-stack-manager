@@ -259,6 +259,26 @@
             {{-- vhost.files.move existed in the broker since the File Manager
                  shipped; only the UI was missing, so files could be renamed but
                  never relocated (B1 / G11). --}}
+            {{-- B3: copy sits next to move because it is the same question — which folder —
+                 with one difference: the folder may be the one the file is already in, so a
+                 same-folder copy is given a -copy suffix rather than refused. --}}
+            @if ($copyFrom !== null)
+                <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
+                    <p class="text-zinc-300">
+                        Copy <span class="font-mono text-brass-400">{{ basename($copyFrom) }}</span> to folder:
+                    </p>
+                    <input class="field mt-2 font-mono text-xs" wire:model="copyTo"
+                           placeholder="relative to the document root; the same folder gives a -copy suffix"
+                           x-init="$nextTick(() => { $el.focus(); $el.select() })"
+                           @keydown.enter.prevent="$wire.copy()"
+                           @keydown.escape.prevent="$wire.cancelCopy()">
+                    <div class="mt-3 flex gap-2">
+                        <button type="button" class="btn-primary" wire:click="copy">Copy</button>
+                        <button type="button" class="btn-ghost" wire:click="cancelCopy">Cancel</button>
+                    </div>
+                </div>
+            @endif
+
             @if ($moveFrom !== null)
                 <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
                     <p class="text-zinc-300">
@@ -286,6 +306,7 @@
             <a class="block px-3 py-1.5 text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" :href="downloadUrl(menu.rel)" @click="menu.open = false">Download</a>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" @click="$wire.startRename(menu.rel); menu.open = false">Rename</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startMove(menu.rel); menu.open = false">Move…</button>
+            <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" @click="$wire.startCopy(menu.rel); menu.open = false">Copy…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-ink-600" @click="$wire.askDelete(menu.rel, menu.dir); menu.open = false">Delete</button>
         </div>
     @endif
