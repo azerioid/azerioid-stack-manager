@@ -61,7 +61,13 @@ jobs:
       # which deploy/lib/broker-setup.sh rsyncs at install time. Without this
       # the suite silently tests a stale or missing copy.
       - name: Sync the broker copy the panel autoloads
-        run: rsync -a --delete broker/src/ web/lib/azerioid-broker/
+        # web/lib is gitignored on purpose — it is a build artifact that
+        # deploy/lib/broker-setup.sh creates with install -d before rsyncing, so a
+        # fresh checkout has no such directory and rsync will not create nested
+        # parents itself.
+        run: |
+          mkdir -p web/lib/azerioid-broker
+          rsync -a --delete broker/src/ web/lib/azerioid-broker/
 
       - name: PHPUnit
         working-directory: web
