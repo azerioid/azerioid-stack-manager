@@ -14,7 +14,7 @@ final class VhostFileOp
      * No archive extract/unzip in v1 — zip-slip is out of scope rather than
      * a naive ZipArchive loop.
      */
-    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'delete'];
+    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'delete'];
 
     /**
      * @param  array<string, mixed>  $req
@@ -40,6 +40,7 @@ final class VhostFileOp
             'mkdir' => self::mkdir($root, $path),
             'rename', 'move' => self::rename($root, $path, (string) ($req['dest'] ?? '')),
             'copy' => self::copy($root, $path, (string) ($req['dest'] ?? '')),
+            'chmod' => self::chmod($root, $path, (string) ($req['mode'] ?? '')),
             'delete' => self::delete($root, $path, (bool) ($req['recursive'] ?? false)),
             default => throw new VhostFileException('Unknown file operation.', 2),
         };
@@ -243,6 +244,107 @@ final class VhostFileOp
             'path' => VhostPath::relativeToRoot($rootReal, $real),
             'renamed' => true,
         ];
+    }
+
+    /**
+     * Permissions, by preset (B3 / request #10).
+     *
+     * Presets rather than a free-text mode field, because the numbers operators reach for
+     * when something does not work are 777 and 666, and both hand every other identity on
+     * the host write access to this site's files — which is the separation A25 exists to
+     * provide. A numeric mode is still accepted for the cases presets do not cover, but it
+     * goes through the same refusals.
+     *
+     * Refused in every form:
+     *  - **setuid, setgid and sticky bits.** Nothing the File Manager does should be able
+     *    to create a setuid file, and an operator who genuinely needs one is not reaching
+     *    for a web panel to do it.
+     *  - **group- or world-writable.** Files here are owned by the site's own identity
+     *    (A25); making them writable by others is how one site ends up able to edit
+     *    another's code, and PHP-FPM will refuse to run a world-writable script anyway.
+     *  - **owner without read.** A mode that locks the site out of its own file is never
+     *    what was meant, and the operator then cannot fix it from here either.
+     *  - **symlinks**, since chmod follows them and would change the target's mode.
+     *
+     * @return array<string, mixed>
+     */
+    private static function chmod(string $root, string $rel, string $mode): array
+    {
+        $target = VhostPath::resolveExisting($root, trim($rel));
+        $rootReal = (string) realpath(VhostPath::normalizeRoot($root));
+        $out = VhostPath::relativeToRoot($rootReal, $target);
+        if ($out === '') {
+            throw new VhostFileException('Refusing to change permissions on the vhost root.', 3);
+        }
+        // Checked at the *unresolved* path on purpose. resolveExisting() returns the
+        // realpath, so by the time we have $target the link has already been followed and
+        // is_link($target) is always false — the guard would be dead code that reads as if
+        // it worked. chmod follows the link too, so without this the operator clicks a
+        // link and changes the mode of whatever it points at.
+        $raw = rtrim($rootReal, '/') . '/' . trim(trim($rel), '/');
+        if (is_link($raw)) {
+            throw new VhostFileException('Refusing to change permissions on a symlink; chmod follows it to the target.', 3);
+        }
+        $isDir = is_dir($target);
+        $octal = self::resolveMode($mode, $isDir);
+
+        if (!@chmod($target, $octal)) {
+            throw new VhostFileException('Unable to change permissions.', 1);
+        }
+
+        return [
+            'path' => $out,
+            'mode' => sprintf('%04o', $octal),
+            'type' => $isDir ? 'dir' : 'file',
+            'chmod' => true,
+        ];
+    }
+
+    /**
+     * Presets name an intent; the numbers behind them differ for directories, because a
+     * directory without its execute bit cannot be entered and 644 on a folder is the
+     * classic way to make a site's whole tree unreadable.
+     */
+    private static function resolveMode(string $mode, bool $isDir): int
+    {
+        $mode = strtolower(trim($mode));
+        $presets = [
+            'default' => $isDir ? 0755 : 0644,
+            'private' => $isDir ? 0700 : 0600,
+            'executable' => $isDir ? 0755 : 0755,
+        ];
+        if ($mode === '') {
+            throw new VhostFileException(
+                'A mode is required: one of ' . implode(', ', array_keys($presets)) . ', or an octal mode.',
+                2
+            );
+        }
+        if (isset($presets[$mode])) {
+            return $presets[$mode];
+        }
+        if (preg_match('/^0?[0-7]{3}$/', $mode) !== 1) {
+            throw new VhostFileException(
+                'Mode must be one of ' . implode(', ', array_keys($presets))
+                . ', or three octal digits (no setuid, setgid or sticky bit).',
+                2
+            );
+        }
+        $octal = (int) octdec($mode);
+        if (($octal & 0022) !== 0) {
+            throw new VhostFileException(
+                'Refusing a group- or world-writable mode: files here belong to this site\'s own identity, '
+                . 'and making them writable by others lets another site edit this one\'s code.',
+                3
+            );
+        }
+        if (($octal & 0400) === 0) {
+            throw new VhostFileException('Refusing a mode the owner cannot read: the site could not use its own file.', 3);
+        }
+        if ($isDir && ($octal & 0100) === 0) {
+            throw new VhostFileException('Refusing a directory mode without the owner execute bit: the directory could not be entered.', 3);
+        }
+
+        return $octal;
     }
 
     /**
