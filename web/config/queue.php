@@ -39,7 +39,13 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+            // Must outlive the longest job, or its reservation expires while it is
+            // still working and a second worker picks the same job up. The panel's
+            // longest is RunOperationJob at 1800s (a docker build or a restore);
+            // component installs and panel updates are 900s. The framework default
+            // of 90 predates all three. The per-subject Cache::lock stops a
+            // duplicate from actually running, but it should not have to.
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 1860),
             'after_commit' => false,
         ],
 
