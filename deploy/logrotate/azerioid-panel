@@ -40,3 +40,29 @@
 	create 0640 root root
 	sharedscripts
 }
+
+# Cron job output (B2). One directory per identity — /cron/root, /cron/az-vh-* — each
+# owned by the identity whose jobs write there, because a site's job runs as the site
+# and has to be able to create and append to its own log.
+#
+# `copytruncate`, not `create`: rotation keeps the same inode and therefore the same
+# ownership, so the vhost identity can keep appending afterwards. `create 0640 root
+# root` would hand every site's log back to root and every job would then fail at its
+# redirection — a working feature that breaks on the day of the first rotation. The
+# tradeoff is the usual one: a line written during the copy can be lost. That is
+# acceptable for job output, which is diagnostics, and not for the audit log above,
+# which is an integrity control.
+#
+# 14 days: long enough to answer "why did last night's job fail", short enough that a
+# chatty job cannot fill the disk.
+/var/log/azerioid-panel/cron/*/*.log {
+	daily
+	rotate 14
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+	# A single runaway job must not be able to fill the disk before the daily rotation.
+	maxsize 20M
+}

@@ -23,6 +23,9 @@ final class FakeRuntime implements Runtime
     /** @var array<string,int> chmod() calls, so tests can assert file modes */
     public array $modes = [];
 
+    /** @var array<string,array{0:string,1:string}> chown() calls, path => [user, group] */
+    public array $owners = [];
+
     /**
      * Side-effect hook for commands whose real effect this fake cannot reproduce
      * (e.g. `sqlite3 .backup` writing a file).
@@ -247,6 +250,7 @@ final class FakeRuntime implements Runtime
 
     public function chown(string $path, string $user, string $group): void
     {
+        $this->owners[$path] = [$user, $group];
     }
 
     public function resolveUnderBase(string $path, string $base): ?string

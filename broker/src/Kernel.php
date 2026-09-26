@@ -219,6 +219,15 @@ final class Kernel
         'firewall.fail2ban.install' => Fail2banInstall::class,
         'cron.list' => CronManage::class,
         'cron.set' => CronManage::class,
+        // B2: structured jobs that run as the vhost's own identity, rendered from
+        // state rather than edited as one file (Cron\CronManager).
+        'cron.jobs' => CronManage::class,
+        'cron.job.add' => CronManage::class,
+        'cron.job.del' => CronManage::class,
+        'cron.job.enable' => CronManage::class,
+        'cron.job.disable' => CronManage::class,
+        'cron.job.run' => CronManage::class,
+        'cron.job.log' => CronManage::class,
         'supervisor.program.list' => SupervisorProgram::class,
         'supervisor.program.create' => SupervisorProgram::class,
         'supervisor.program.update' => SupervisorProgram::class,
