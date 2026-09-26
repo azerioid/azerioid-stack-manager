@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use App\Services\Broker\BrokerCallException;
 use App\Services\Broker\BrokerClient;
+use App\Services\OperationDispatcher;
 use AzerioidPanel\Broker\Validator;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -821,18 +822,24 @@ class VhostsPage extends Component
         $this->reload($broker);
     }
 
-    public function rebuildDocker(BrokerClient $broker, string $domain): void
+    /**
+     * Queued rather than run inline (B5 / request #13).
+     *
+     * A rebuild pulls base layers and can run for minutes. It used to block the
+     * HTTP request behind a 900-second broker timeout with no output, no record
+     * and nothing to look at afterwards; the operator watched a spinner and, if it
+     * failed late, got a bare error. It now becomes an Operation with a log and a
+     * history entry, and a second rebuild of the same vhost waits on that vhost's
+     * lock instead of fighting the first over the Docker daemon.
+     */
+    public function rebuildDocker(BrokerClient $broker, string $domain, OperationDispatcher $operations): void
     {
         $this->error = null;
         try {
             $domain = Validator::domain($domain);
             $this->assertMutableVhost($domain);
-            $res = $broker->call('vhost.docker.build', [$domain], [], 900);
-            if (! $res->ok) {
-                $this->error = $this->operatorMessage((string) $res->error);
-            } else {
-                $this->flash = "Rebuilt Docker workload for {$domain}.";
-            }
+            $operations->dispatch('vhost.docker.build', [$domain], []);
+            $this->flash = "Rebuild queued for {$domain}. Follow it on the Operations page.";
         } catch (\Throwable $e) {
             $this->error = $this->operatorMessage($e->getMessage());
         }

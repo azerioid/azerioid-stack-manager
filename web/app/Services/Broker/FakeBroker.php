@@ -108,6 +108,7 @@ final class FakeBroker
 
     public function reset(): void
     {
+        $this->failNextCall = false;
         $this->failNextValidate = false;
         $this->failNextDbAdd = false;
         $this->php82Failed = true;
@@ -298,8 +299,20 @@ final class FakeBroker
         ];
     }
 
+    /**
+     * Force the next call to fail, whatever the action. Complements the targeted
+     * failNextValidate / failNextDbAdd flags for tests that only need *a* failure.
+     */
+    public bool $failNextCall = false;
+
     public function handle(string $action, array $args, array $stdin): BrokerResponse
     {
+        if ($this->failNextCall) {
+            $this->failNextCall = false;
+
+            return new BrokerResponse(false, null, 'Simulated broker failure for ' . $action . '.', 1);
+        }
+
         try {
             $data = match ($action) {
                 'status.all' => $this->statusAll(),
