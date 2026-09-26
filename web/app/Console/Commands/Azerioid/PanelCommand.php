@@ -12,7 +12,7 @@ class PanelCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:panel
-        {action : domain|update|harden}
+        {action : domain|update|harden|default-site}
         {op? : show|set|clear|check|apply|status}
         {--domain= : Panel hostname (set)}
         {--tls= : auto|internal|dns01}
@@ -23,6 +23,7 @@ class PanelCommand extends Command
         {--confirm : Required for panel update apply / harden apply}
         {--lockdown-site-pools : (harden apply) also disable process spawning in SITE FPM pools}
         {--dry-run : (harden apply) show the plan without changing anything}
+        {--mode= : (default-site set) page|404|421}
         {--json : JSON output}';
 
     protected $description = 'Panel access (custom domain), panel self-update, and R1 identity hardening';
@@ -35,13 +36,14 @@ class PanelCommand extends Command
             'domain' => $this->handleDomain(),
             'update' => $this->handleUpdate(),
             'harden' => $this->handleHarden(),
+            'default-site', 'defaultsite' => $this->handleDefaultSite(),
             default => $this->badAction(),
         };
     }
 
     private function badAction(): int
     {
-        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply | azerioid panel harden status|apply');
+        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply | azerioid panel harden status|apply | azerioid panel default-site show|set|clear');
 
         return self::INVALID;
     }
@@ -56,6 +58,90 @@ class PanelCommand extends Command
             'clear' => $this->clear(),
             default => $this->badDomainOp(),
         };
+    }
+
+    /**
+     * Catch-all for hostnames no vhost claims (B1 / request #14).
+     *
+     * Without it, an unknown Host on :80 gets a 308 to HTTPS and the HTTPS
+     * connection then fails the TLS handshake, because no site block matches the
+     * SNI — so a visitor whose DNS points here sees a broken connection instead of
+     * an answer.
+     */
+    private function handleDefaultSite(): int
+    {
+        $op = strtolower((string) ($this->argument('op') ?: 'show'));
+
+        return match ($op) {
+            'show', 'status' => $this->defaultSiteShow(),
+            'set', 'enable' => $this->defaultSiteSet(),
+            'clear', 'disable' => $this->defaultSiteClear(),
+            default => $this->badDefaultSiteOp(),
+        };
+    }
+
+    private function badDefaultSiteOp(): int
+    {
+        $this->error('Usage: azerioid panel default-site show|set --mode=page|404|421|clear');
+
+        return self::INVALID;
+    }
+
+    private function defaultSiteShow(): int
+    {
+        try {
+            $data = $this->brokerData('panel.default-site.show', [], [], 60, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+        if (($data['enabled'] ?? false) !== true) {
+            $this->warn('No default site. Hostnames that match no vhost currently fail the TLS handshake.');
+            $this->line('Enable with: azerioid panel default-site set --mode=page');
+
+            return self::SUCCESS;
+        }
+        $this->info('Default site enabled (mode: ' . (string) ($data['mode'] ?? '?') . ')');
+        $this->line('snippet: ' . (string) ($data['snippet'] ?? ''));
+        $this->line('root   : ' . (string) ($data['root'] ?? ''));
+
+        return self::SUCCESS;
+    }
+
+    private function defaultSiteSet(): int
+    {
+        $mode = strtolower(trim((string) ($this->option('mode') ?: 'page')));
+        try {
+            $data = $this->brokerData('panel.default-site.set', [$mode], [], 120);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+        $this->info('Default site set to ' . (string) ($data['mode'] ?? $mode) . '.');
+        $this->line('Named vhosts are unaffected — Caddy matches them ahead of this block.');
+
+        return self::SUCCESS;
+    }
+
+    private function defaultSiteClear(): int
+    {
+        try {
+            $this->brokerData('panel.default-site.clear', [], [], 120);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+        $this->info('Default site removed.');
+        $this->warn('Hostnames matching no vhost will fail the TLS handshake again.');
+
+        return self::SUCCESS;
     }
 
     private function handleHarden(): int
