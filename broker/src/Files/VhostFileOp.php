@@ -14,7 +14,7 @@ final class VhostFileOp
      * No archive extract/unzip in v1 — zip-slip is out of scope rather than
      * a naive ZipArchive loop.
      */
-    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'delete'];
+    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'search', 'delete'];
 
     /**
      * @param  array<string, mixed>  $req
@@ -41,6 +41,12 @@ final class VhostFileOp
             'rename', 'move' => self::rename($root, $path, (string) ($req['dest'] ?? '')),
             'copy' => self::copy($root, $path, (string) ($req['dest'] ?? '')),
             'chmod' => self::chmod($root, $path, (string) ($req['mode'] ?? '')),
+            'search' => self::search(
+                $root,
+                $path,
+                (string) ($req['query'] ?? ''),
+                (string) ($req['contains'] ?? '')
+            ),
             'delete' => self::delete($root, $path, (bool) ($req['recursive'] ?? false)),
             default => throw new VhostFileException('Unknown file operation.', 2),
         };
@@ -244,6 +250,130 @@ final class VhostFileOp
             'path' => VhostPath::relativeToRoot($rootReal, $real),
             'renamed' => true,
         ];
+    }
+
+    /** A search must answer, or refuse, inside one request — never wander a whole disk. */
+    private const SEARCH_MAX_RESULTS = 200;
+
+    private const SEARCH_MAX_ENTRIES = 50000;
+
+    private const SEARCH_MAX_DEPTH = 12;
+
+    private const SEARCH_GREP_MAX_BYTES = 262144;
+
+    /**
+     * Recursive search under a directory (B3 / request #10).
+     *
+     * Every limit here exists because this runs inside a request an operator is waiting on,
+     * against a tree whose size nobody controls — `node_modules` and `vendor` are normal.
+     * Unbounded, this is a way to make the panel appear broken by typing one letter.
+     *
+     * Symlinked directories are **not followed**. Following them would leave the vhost root
+     * through a link the site itself can create, and would loop forever on a link pointing
+     * at its own parent.
+     *
+     * `contains` greps file content, and only of files small enough to read: the point is
+     * finding a setting in a config file, not scanning uploaded video.
+     *
+     * @return array<string, mixed>
+     */
+    private static function search(string $root, string $rel, string $query, string $contains): array
+    {
+        $query = trim($query);
+        $contains = trim($contains);
+        if ($query === '' && $contains === '') {
+            throw new VhostFileException('Provide something to search for.', 2);
+        }
+        if (strlen($query) > 255 || strlen($contains) > 255) {
+            throw new VhostFileException('Search terms are limited to 255 characters.', 2);
+        }
+
+        $base = VhostPath::resolveExisting($root, trim($rel));
+        if (!is_dir($base)) {
+            throw new VhostFileException('Search needs a directory to start from.', 2);
+        }
+        $rootReal = (string) realpath(VhostPath::normalizeRoot($root));
+
+        $results = [];
+        $scanned = 0;
+        $truncated = false;
+        $queue = [[$base, 0]];
+
+        while ($queue !== []) {
+            [$dir, $depth] = array_shift($queue);
+            $entries = @scandir($dir);
+            if ($entries === false) {
+                continue;
+            }
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+                if (++$scanned > self::SEARCH_MAX_ENTRIES) {
+                    $truncated = true;
+                    break 2;
+                }
+                $full = $dir . '/' . $entry;
+                // Never follow a link: it can leave the root, and a link to its own parent
+                // would loop until the request timed out.
+                if (is_link($full)) {
+                    continue;
+                }
+                $isDir = is_dir($full);
+                $real = realpath($full);
+                if ($real === false || !VhostPath::isUnder($rootReal, $real)) {
+                    continue;
+                }
+
+                if (self::matches($entry, $real, $isDir, $query, $contains)) {
+                    $results[] = [
+                        'path' => VhostPath::relativeToRoot($rootReal, $real),
+                        'type' => $isDir ? 'dir' : 'file',
+                        'size' => $isDir ? null : (int) @filesize($real),
+                    ];
+                    if (count($results) >= self::SEARCH_MAX_RESULTS) {
+                        $truncated = true;
+                        break 2;
+                    }
+                }
+
+                if ($isDir && $depth < self::SEARCH_MAX_DEPTH) {
+                    $queue[] = [$full, $depth + 1];
+                }
+            }
+        }
+
+        return [
+            'path' => VhostPath::relativeToRoot($rootReal, $base),
+            'query' => $query,
+            'contains' => $contains,
+            'results' => $results,
+            'count' => count($results),
+            // Said out loud, because a silently capped result list reads as "not there".
+            'truncated' => $truncated,
+            'limit' => self::SEARCH_MAX_RESULTS,
+        ];
+    }
+
+    private static function matches(string $name, string $real, bool $isDir, string $query, string $contains): bool
+    {
+        if ($query !== '' && stripos($name, $query) === false) {
+            return false;
+        }
+        if ($contains === '') {
+            return true;
+        }
+        // A content search is about files; a directory has no content to match.
+        if ($isDir) {
+            return false;
+        }
+        $size = @filesize($real);
+        if ($size === false || $size > self::SEARCH_GREP_MAX_BYTES) {
+            return false;
+        }
+        $body = @file_get_contents($real);
+
+        return is_string($body) && stripos($body, $contains) !== false;
     }
 
     /**

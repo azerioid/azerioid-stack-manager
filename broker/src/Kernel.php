@@ -251,6 +251,7 @@ final class Kernel
         'vhost.files.move' => VhostFilesAction::class,
         'vhost.files.copy' => VhostFilesAction::class,
         'vhost.files.chmod' => VhostFilesAction::class,
+        'vhost.files.search' => VhostFilesAction::class,
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 
