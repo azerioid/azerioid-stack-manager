@@ -14,7 +14,7 @@ final class VhostFileOp
      * No archive extract/unzip in v1 — zip-slip is out of scope rather than
      * a naive ZipArchive loop.
      */
-    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'search', 'delete'];
+    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'search', 'zip', 'delete'];
 
     /**
      * @param  array<string, mixed>  $req
@@ -41,6 +41,11 @@ final class VhostFileOp
             'rename', 'move' => self::rename($root, $path, (string) ($req['dest'] ?? '')),
             'copy' => self::copy($root, $path, (string) ($req['dest'] ?? '')),
             'chmod' => self::chmod($root, $path, (string) ($req['mode'] ?? '')),
+            'zip' => self::zip(
+                $root,
+                is_array($req['paths'] ?? null) ? $req['paths'] : [],
+                (string) ($req['out'] ?? '')
+            ),
             'search' => self::search(
                 $root,
                 $path,
@@ -250,6 +255,165 @@ final class VhostFileOp
             'path' => VhostPath::relativeToRoot($rootReal, $real),
             'renamed' => true,
         ];
+    }
+
+    private const ZIP_MAX_BYTES = 52428800;
+
+    private const ZIP_MAX_ENTRIES = 5000;
+
+    /**
+     * Assemble a zip of the selected paths, as the vhost identity (B3 / G12).
+     *
+     * Replaces assembly inside panel PHP, which had two problems. A selected **directory
+     * produced nothing**, because the panel could only ask for one file's contents at a
+     * time — so "download zip" on a folder silently returned an archive without it. And the
+     * panel process buffered the site's file contents in its own memory, which is precisely
+     * what the per-vhost identity (A25) exists to prevent.
+     *
+     * Here the walk and the bytes stay on this side of that boundary. The output path is
+     * supplied by the caller rather than chosen here, because it has to live somewhere the
+     * panel can stream it from afterwards, and deciding that is the broker's business, not
+     * this process's — but it is still verified to be **outside** the vhost root, so a
+     * crafted request cannot drop an archive into the site it is reading.
+     *
+     * Symlinks are skipped, not followed: the same reason as search, plus an archive is a
+     * thing an operator later unpacks somewhere else.
+     *
+     * @param  list<string>  $rels
+     * @return array<string, mixed>
+     */
+    private static function zip(string $root, array $rels, string $out): array
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            throw new VhostFileException('The zip extension is not available in this runtime.', 3);
+        }
+        if (trim($out) === '' || $out[0] !== '/') {
+            throw new VhostFileException('An absolute output path is required.', 2);
+        }
+        $rootReal = (string) realpath(VhostPath::normalizeRoot($root));
+        // isUnder() alone is not enough: the archive does not exist yet, so there is no
+        // realpath to compare and the check silently passed. Compare the literal path, and
+        // the parent directory's real path when it exists, so a symlinked parent cannot be
+        // used to land the archive inside the site it is reading.
+        $outParent = realpath(dirname($out));
+        if (str_starts_with($out . '/', rtrim($rootReal, '/') . '/')
+            || ($outParent !== false && VhostPath::isUnder($rootReal, $outParent))) {
+            throw new VhostFileException('Refusing to write the archive inside the vhost.', 3);
+        }
+        if ($rels === []) {
+            throw new VhostFileException('Nothing selected.', 2);
+        }
+
+        $zip = new \ZipArchive();
+        if ($zip->open($out, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            throw new VhostFileException('Unable to create the archive.', 1);
+        }
+
+        $entries = 0;
+        $bytes = 0;
+        $skipped = [];
+        $truncated = false;
+
+        try {
+            foreach ($rels as $rel) {
+                if (!is_string($rel) || trim($rel) === '') {
+                    continue;
+                }
+                $target = VhostPath::resolveExisting($root, trim($rel));
+                $base = VhostPath::relativeToRoot($rootReal, $target);
+                if ($base === '') {
+                    throw new VhostFileException('Refusing to archive the vhost root itself.', 3);
+                }
+                foreach (self::walkForZip($rootReal, $target, $base) as [$real, $entry, $isDir]) {
+                    if ($entries >= self::ZIP_MAX_ENTRIES) {
+                        $truncated = true;
+                        break 2;
+                    }
+                    if ($isDir) {
+                        $zip->addEmptyDir($entry);
+                        $entries++;
+
+                        continue;
+                    }
+                    $size = (int) @filesize($real);
+                    if ($bytes + $size > self::ZIP_MAX_BYTES) {
+                        $truncated = true;
+                        break 2;
+                    }
+                    if (!$zip->addFile($real, $entry)) {
+                        $skipped[] = $entry;
+
+                        continue;
+                    }
+                    $bytes += $size;
+                    $entries++;
+                }
+            }
+        } catch (\Throwable $e) {
+            $zip->close();
+            @unlink($out);
+            throw $e;
+        }
+
+        $zip->close();
+        if ($entries === 0) {
+            @unlink($out);
+            throw new VhostFileException('Nothing in the selection could be archived.', 3);
+        }
+
+        return [
+            'path' => $out,
+            'entries' => $entries,
+            'bytes' => $bytes,
+            'skipped' => $skipped,
+            // Said out loud: an archive quietly missing half a site is worse than a refusal.
+            'truncated' => $truncated,
+        ];
+    }
+
+    /**
+     * @return list<array{0:string,1:string,2:bool}> real path, archive entry name, is-dir
+     */
+    private static function walkForZip(string $rootReal, string $target, string $entryBase): array
+    {
+        if (is_link($target)) {
+            return [];
+        }
+        if (!is_dir($target)) {
+            return [[$target, $entryBase, false]];
+        }
+
+        $out = [[$target, $entryBase . '/', true]];
+        $queue = [[$target, $entryBase, 0]];
+        while ($queue !== []) {
+            [$dir, $prefix, $depth] = array_shift($queue);
+            if ($depth >= self::SEARCH_MAX_DEPTH) {
+                continue;
+            }
+            foreach (@scandir($dir) ?: [] as $name) {
+                if ($name === '.' || $name === '..') {
+                    continue;
+                }
+                $full = $dir . '/' . $name;
+                if (is_link($full)) {
+                    continue;
+                }
+                $real = realpath($full);
+                if ($real === false || !VhostPath::isUnder($rootReal, $real)) {
+                    continue;
+                }
+                $entry = $prefix . '/' . $name;
+                if (is_dir($full)) {
+                    $out[] = [$real, $entry . '/', true];
+                    $queue[] = [$full, $entry, $depth + 1];
+
+                    continue;
+                }
+                $out[] = [$real, $entry, false];
+            }
+        }
+
+        return $out;
     }
 
     /** A search must answer, or refuse, inside one request — never wander a whole disk. */
