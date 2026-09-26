@@ -406,6 +406,84 @@ families. That is what makes items 1 and 2 possible and what finally lets site p
 - `caddy` now holds the broker grant, so a Caddy compromise reaches the broker. Narrower than "any
   hosted site", but not the fully isolated identity Part A delivers.
 
+## A43 — Panel self-update snapshots the panel database before migrating
+
+**Status:** Accepted (2026-09-26).
+**Amends:** the A30-era updater behaviour, which rolled code back but not schema.
+
+**Problem:** `PanelUpdater::apply()` rollback re-checks-out the previous commit and
+then re-runs `runMigrations()`. But `artisan migrate` is **forward-only**: it cannot
+undo what the failed update already applied. So if a migration succeeded and a
+later step failed, rollback left the panel on **old code against a new schema** —
+the one combination nothing exercises. There was no `migrate:rollback` and no
+pre-update snapshot.
+
+**Decision:** the panel database is a single SQLite file, so snapshot it
+immediately before migrations and restore that snapshot on the rollback path
+instead of re-running migrations.
+
+| Aspect | Decision |
+|--------|----------|
+| Mechanism | `sqlite3 .backup`, **not** a file copy |
+| Location | `/var/lib/azerioid-panel/db-snapshots/<stamp>-<operation-id>.sqlite`, mode `0600` |
+| Retention | Newest **5**, pruned after a successful update |
+| Missing `sqlite3` | **Refuse the update.** Do not fall back to a copy |
+| No database yet | Skip with a warning (fresh install mid-bootstrap) |
+| Rollback without a snapshot | Proceed, but warn loudly that the schema could not be rolled back |
+
+**Why `.backup` rather than `cp`:** the panel runs SQLite in WAL mode (a live host
+has `panel.sqlite-wal` and `-shm`). SQLite documents that copying a database file
+while it may be written to is unsafe; with WAL you would have to copy the `-wal`
+too, and the pair can still be caught mid-checkpoint. **Measured caveat, recorded
+honestly:** on fleet host testing, a naive `cp` of the live panel database *did*
+produce a consistent, integrity-ok copy, and a deliberate concurrent-writer test
+also failed to tear it. That is the point — it works until the one time it matters,
+and a rollback point you cannot trust is worse than none. `.backup` is consistent
+by construction, needs no reasoning about sidecar files, and costs nothing extra.
+
+**Restore also deletes `-wal`/`-shm`:** they belong to the database being replaced,
+and leaving them would let SQLite replay a newer log over the restored file,
+silently undoing the rollback.
+
+**Not addressed here:** a downgrade across releases still carries the A30-era
+warning that newer migrations are not automatically reversed. The snapshot protects
+the *failed-update* path, not an intentional downgrade to an older tag.
+
+## A44 — Per-vhost state projection in the panel database
+
+**Status:** Accepted (operator decision 2026-09-26, "Variant C").
+**Relates to:** A9 (config files own serving), A35/A37/A38 (runtime markers in the
+managed comment).
+
+**Problem:** per-vhost state lives in the web-server config as
+`# azerioid-managed key=value`, parsed by regex (`CaddyParser`). That line already
+carries a dozen keys, is flat, supports no nesting, and cannot hold history — so
+features needing structured per-vhost state (container env, per-vhost cron, Node
+version, backup schedules, deployment history) had nowhere to put it. Each one that
+tried invented its own JSON sidecar under `/var/lib/azerioid-panel`.
+
+**Decision:** add a `vhosts` table to `panel.sqlite` as a **projection**, never a
+source of truth.
+
+| Aspect | Decision |
+|--------|----------|
+| Authority | **Config files stay authoritative** for how traffic is served. The broker keeps validating against them; a projection row must never influence a privileged decision |
+| Reconcile trigger | **On change only**, not per render. Hooked once in `BrokerClient::call()` against an explicit list of mutating `vhost.*` actions, because a new call site that forgot to reconcile would show up only as silent drift |
+| Drift detection | **Content hash.** `vhost.list` now reports `config_sha256` per vhost; a row storing a different hash means the file was edited outside the panel. Chosen over mtime, which false-positives on a bare `touch` |
+| Full audit | `azerioid vhost reconcile` reports and exits non-zero on drift; `--repair` rebuilds; `--dry-run` changes nothing. **Reporting is the default** — a status command should not silently rewrite panel state |
+| Live probe data | **Never stored.** `tls_status` (issuer, expiry, reachability) comes from `CertProbe` at read time and would be stale the moment it was written |
+| Projection failure | **Never fails the operator's action.** Reconcile errors are logged and swallowed; the config files are authoritative and `--repair` can always rebuild |
+| Empty listing | **Never treated as "all vhosts deleted".** An empty result is far more likely a broker failure, and acting on it would destroy state the panel cannot rebuild until the broker is healthy |
+
+**Deliberately not included:** the typed child tables (`vhost_secrets`,
+`vhost_cron_jobs`, `vhost_databases`, `operations`) that later phases need. This
+lands the foundation only; each child table arrives with the feature that requires
+it, so the schema does not grow ahead of real use.
+
+**Tradeoff accepted:** because reconciliation is change-triggered, an out-of-band
+edit is invisible until something asks. That is the cost of not re-parsing every
+config file on every page load, and it is why drift reporting exists at all.
+
 ## A40 — File Manager archive operations: zip-slip exclusion partially lifted
 
 **Status:** Accepted (operator decision, 2026-09-26). **Conditional — see the gate below.**

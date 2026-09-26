@@ -20,6 +20,7 @@ Usage:
   azerioid version [--json]
 
   azerioid vhost list   [--engine=caddy|apache|nginx] [--json]
+  azerioid vhost reconcile [--repair] [--dry-run] [--json]   # audit the panel vhost projection against the config files
   azerioid vhost add    --domain=<d> --type=php|static|proxy [--php=<v>] [--root=<path>] [--upstream=<host:port>]
                         [--engine=caddy|apache|nginx] [--tls=off|auto|internal|dns01] [--dns-provider=cloudflare|digitalocean] [--wildcard] [--staging]
   azerioid vhost edit   --domain=<d> [--php=<v>] [--root=<path>] [--engine=caddy|apache|nginx]

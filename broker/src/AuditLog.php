@@ -33,15 +33,12 @@ final class AuditLog
         if (!$this->runtime->isDir($dir)) {
             $this->runtime->mkdir($dir, 0750);
         }
-        $existing = '';
-        if ($this->runtime->fileExists($path)) {
-            try {
-                $existing = $this->runtime->readFile($path);
-            } catch (BrokerException) {
-                $existing = '';
-            }
-        }
-        $this->runtime->writeFile($path, $existing . $line, 0640);
+        // Append under a lock. This used to read the whole log and rewrite it on
+        // every broker call: O(n^2) in log size, and because the read was
+        // unlocked, two concurrent callers (UI + CLI + queue worker) could each
+        // write $existing . $line and silently drop the other's record. Audit
+        // integrity is a security control, so losing records is not acceptable.
+        $this->runtime->appendFile($path, $line, 0640);
     }
 
     public static function redact(array $data): array

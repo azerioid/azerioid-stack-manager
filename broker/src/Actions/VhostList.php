@@ -21,6 +21,11 @@ final class VhostList
         $vhosts = WebServers::for($config)->listVhosts($runtime, $config);
         foreach ($vhosts as &$vhost) {
             $vhost = self::withRuntimeFields($runtime, $vhost);
+            // Hash of the config file itself. The panel keeps a projection of these
+            // vhosts in its own database (A44); comparing this hash is how it knows
+            // a config file was edited outside the panel. Done here rather than per
+            // driver so every engine reports it the same way.
+            $vhost['config_sha256'] = self::configHash($runtime, $vhost['source'] ?? null);
         }
         unset($vhost);
 
@@ -227,6 +232,18 @@ final class VhostList
         $vhost['docker_app_detail'] = $docker['detail'];
 
         return $vhost;
+    }
+
+    private static function configHash(Runtime $runtime, mixed $path): ?string
+    {
+        if (!is_string($path) || $path === '' || !$runtime->fileExists($path)) {
+            return null;
+        }
+        try {
+            return hash('sha256', $runtime->readFile($path));
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

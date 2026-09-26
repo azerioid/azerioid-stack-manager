@@ -3,7 +3,9 @@
 namespace App\Services\Broker;
 
 use App\Models\AuditLog;
+use App\Services\VhostProjection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use AzerioidPanel\Broker\AuditLog as BrokerAudit;
 use AzerioidPanel\Broker\Validator;
 use Symfony\Component\Process\Process;
@@ -51,6 +53,22 @@ final class BrokerClient
                 'error' => $response->error,
                 'ip' => request()?->ip(),
             ]);
+        }
+
+        // Keep the vhost projection in step with the config files (A44). Done here,
+        // once, because a mutating action added at a call site without a matching
+        // reconcile would show up only as silent drift. Reconciliation must never
+        // be able to fail the operation that triggered it: the config files remain
+        // authoritative and `azerioid vhost reconcile` can always repair the
+        // projection.
+        if ($response->ok && VhostProjection::invalidatedBy($action)) {
+            try {
+                app(VhostProjection::class)->reconcile();
+            } catch (\Throwable $e) {
+                Log::warning('Vhost projection reconcile failed after ' . $action, [
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         return $response;

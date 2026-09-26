@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\EvaluateAlerts;
+use App\Console\Commands\PanelMaintenance;
 use App\Console\Commands\RunScheduledBackup;
 use App\Console\Commands\SampleMetrics;
 use Illuminate\Foundation\Inspiring;
@@ -14,6 +15,11 @@ Artisan::command('inspire', function () {
 Schedule::command(SampleMetrics::class)->everyMinute()->withoutOverlapping();
 Schedule::command(EvaluateAlerts::class)->everyMinute()->withoutOverlapping();
 Schedule::command(RunScheduledBackup::class)->hourly()->withoutOverlapping();
+
+// Reap operations whose worker died mid-run (they would otherwise wedge the
+// Components page forever) and prune historical records. Every ten minutes keeps
+// the wedge window short without adding meaningful load.
+Schedule::command(PanelMaintenance::class)->everyTenMinutes()->withoutOverlapping();
 
 Schedule::call(function () {
     app(\App\Services\Broker\BrokerClient::class)->call('terminal.session.cleanup', [], [], null, false);

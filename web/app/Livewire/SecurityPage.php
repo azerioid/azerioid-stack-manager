@@ -84,7 +84,7 @@ class SecurityPage extends Component
     {
         return view('livewire.security')->layoutData([
             'heading' => 'Security',
-            'sub' => 'SSH audit · UFW · fail2ban · root cron',
+            'sub' => 'SSH audit · firewall (ufw/firewalld) · fail2ban · root cron',
         ]);
     }
 }

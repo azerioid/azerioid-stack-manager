@@ -85,6 +85,27 @@ final class FakeBroker
         $this->reset();
     }
 
+    /**
+     * Real vhost.list reports the sha256 of each config file so the panel can spot
+     * drift (A44). Derive a stable stand-in per domain unless a test set one.
+     *
+     * @param  array<int,array<string,mixed>>  $vhosts
+     * @return array<int,array<string,mixed>>
+     */
+    private function withConfigHashes(array $vhosts): array
+    {
+        foreach ($vhosts as $i => $v) {
+            if (! isset($v['config_sha256'])) {
+                $vhosts[$i]['config_sha256'] = hash('sha256', 'fake-config:' . ($v['domain'] ?? $i));
+            }
+            if (! isset($v['source'])) {
+                $vhosts[$i]['source'] = '/etc/caddy/conf.d/' . ($v['domain'] ?? 'unknown') . '.conf';
+            }
+        }
+
+        return $vhosts;
+    }
+
     public function reset(): void
     {
         $this->failNextValidate = false;
@@ -337,7 +358,7 @@ final class FakeBroker
                     'journal' => 'fake journalctl -xeu '.$args[0],
                 ],
                 'service.start', 'service.stop', 'service.restart' => ['unit' => $args[0] ?? '', 'action' => explode('.', $action)[1], 'status' => $this->svc($args[0] ?? 'caddy')],
-                'vhost.list' => ['vhosts' => $this->vhosts],
+                'vhost.list' => ['vhosts' => $this->withConfigHashes($this->vhosts)],
                 'vhost.add' => $this->vhostAdd($args, $stdin),
                 'vhost.edit' => $this->vhostEdit($args, $stdin),
                 'vhost.del' => $this->vhostDel($args, $stdin),

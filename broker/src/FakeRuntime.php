@@ -20,6 +20,17 @@ final class FakeRuntime implements Runtime
     /** @var array<string, ExecResult> keyed by implode("\0", $command) */
     public array $execResponses = [];
 
+    /** @var array<string,int> chmod() calls, so tests can assert file modes */
+    public array $modes = [];
+
+    /**
+     * Side-effect hook for commands whose real effect this fake cannot reproduce
+     * (e.g. `sqlite3 .backup` writing a file).
+     *
+     * @var (callable(list<string>, ?string):void)|null
+     */
+    public $execHook = null;
+
     public ExecResult $defaultExec;
 
     /** @var list<array<string,mixed>> */
@@ -69,6 +80,9 @@ final class FakeRuntime implements Runtime
     public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30): ExecResult
     {
         $this->execLog[] = ['command' => $command, 'stdin' => $stdin];
+        if ($this->execHook !== null) {
+            ($this->execHook)($command, $stdin);
+        }
         $key = implode("\0", $command);
         return $this->execResponses[$key] ?? $this->defaultExec;
     }
@@ -147,6 +161,11 @@ final class FakeRuntime implements Runtime
         };
     }
 
+    public function appendFile(string $path, string $contents, int $mode = 0640): void
+    {
+        $this->files[$path] = ($this->files[$path] ?? '') . $contents;
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!isset($this->files[$from])) {
@@ -223,6 +242,7 @@ final class FakeRuntime implements Runtime
 
     public function chmod(string $path, int $mode): void
     {
+        $this->modes[$path] = $mode;
     }
 
     public function chown(string $path, string $user, string $group): void

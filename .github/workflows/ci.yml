@@ -1,0 +1,144 @@
+name: CI
+
+# Until now every gate in this project was manual: 679 unit tests and six
+# smoke scripts that only ran when someone remembered. This is the cheap
+# automated floor — it does not replace the cross-OS fleet runs, it stops
+# obviously broken changes from reaching them.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: PHPUnit (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 8.4 is the pinned panel runtime (A1). The suite uses 8.4 syntax, so
+        # older versions cannot even parse it — do not add them here.
+        php: ['8.4']
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # sodium: Argon2id is an opt-in archive KDF (A42).
+          # zlib/openssl: LACMP2 and archive inspection.
+          extensions: sodium, zlib, openssl, sqlite3, pdo_sqlite, mbstring, curl, zip, bcmath
+          coverage: none
+          tools: none
+
+      - name: Confirm required extensions are present
+        run: |
+          php -r 'foreach (["sodium","zlib","openssl","sqlite3","mbstring"] as $e) {
+            if (!extension_loaded($e)) { fwrite(STDERR, "missing extension: $e\n"); exit(1); }
+          } echo "extensions ok\n";'
+
+      - name: Cache Composer packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ matrix.php }}-${{ hashFiles('web/composer.lock') }}
+          restore-keys: composer-${{ matrix.php }}-
+
+      - name: Install dependencies
+        working-directory: web
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # The panel autoloads a copy of the broker from web/lib/azerioid-broker,
+      # which deploy/lib/broker-setup.sh rsyncs at install time. Without this
+      # the suite silently tests a stale or missing copy.
+      - name: Sync the broker copy the panel autoloads
+        # web/lib is gitignored on purpose — it is a build artifact that
+        # deploy/lib/broker-setup.sh creates with install -d before rsyncing, so a
+        # fresh checkout has no such directory and rsync will not create nested
+        # parents itself.
+        run: |
+          mkdir -p web/lib/azerioid-broker
+          rsync -a --delete broker/src/ web/lib/azerioid-broker/
+
+      - name: PHPUnit
+        working-directory: web
+        run: ./vendor/bin/phpunit --no-coverage
+
+  lint:
+    name: Lint and static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: none
+
+      - name: PHP syntax check
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            php -l "$f" >/dev/null || { echo "syntax error: $f"; fail=1; }
+          done < <(find broker deploy web/app web/config web/routes web/database -name '*.php' -not -path '*/vendor/*')
+          exit $fail
+
+      - name: Shell syntax check
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(find . -name '*.sh' -not -path './web/vendor/*' -not -path './.git/*')
+          bash -n stack-manager.sh
+          bash -n deploy/bin/azerioid
+          exit $fail
+
+      # The sudoers file is the panel's entire privilege boundary (A39). A
+      # malformed one either locks the panel out of the broker or, worse, widens
+      # the grant.
+      - name: Validate sudoers template
+        run: |
+          sudo cp deploy/sudoers.d/azerioid-panel /tmp/azerioid-sudoers
+          sudo chmod 0440 /tmp/azerioid-sudoers
+          sudo visudo -c -f /tmp/azerioid-sudoers
+
+      - name: Validate component registry against its schema
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 - <<'PY'
+          import glob, json, sys
+          import jsonschema
+          schema = json.load(open('registry/schema.json'))
+          validator = jsonschema.Draft202012Validator(schema)
+          failed = False
+          for path in sorted(glob.glob('registry/components/*.json')):
+              errors = sorted(validator.iter_errors(json.load(open(path))), key=lambda e: list(e.path))
+              for e in errors:
+                  failed = True
+                  where = '/'.join(map(str, e.path)) or '(root)'
+                  print(f"{path}: {where}: {e.message}")
+          if failed:
+              sys.exit(1)
+          print(f"registry ok ({len(glob.glob('registry/components/*.json'))} components)")
+          PY
+
+      - name: Check the vendored broker copy is not committed
+        run: |
+          # web/lib/ is a build artifact rsynced at install time; committing it
+          # would let a stale copy shadow broker/src at runtime.
+          if git ls-files --error-unmatch web/lib >/dev/null 2>&1; then
+            echo "web/lib must stay gitignored"
+            exit 1
+          fi
+          echo "web/lib correctly untracked"

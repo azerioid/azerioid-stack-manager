@@ -11,9 +11,11 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane|pm2|docker}
+        {action : list|add|edit|del|files|octane|pm2|docker|reconcile}
         {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status (with docker)}
         {--domain= : Vhost domain}
+        {--dry-run : reconcile: report drift without changing the projection}
+        {--repair : reconcile: rebuild the projection from the config files}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
         {--root= : Document root}
@@ -54,8 +56,78 @@ class VhostCommand extends Command
             'octane' => $this->octane(),
             'pm2' => $this->pm2(),
             'docker' => $this->docker(),
+            'reconcile' => $this->reconcile(),
             default => $this->invalidAction(),
         };
+    }
+
+    /**
+     * Full audit of the vhost projection against the config files (A44).
+     *
+     * Reconciliation normally runs on change, so an out-of-band edit to
+     * /etc/caddy/conf.d is invisible until something asks. This asks. Reporting is
+     * the default; repairing requires --repair, because silently rewriting panel
+     * state is not something a status command should do.
+     */
+    private function reconcile(): int
+    {
+        $projection = app(\App\Services\VhostProjection::class);
+
+        try {
+            $drift = $projection->drift();
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        $drifted = $drift['drifted'];
+
+        if (! $this->option('repair')) {
+            if ($this->wantsJson()) {
+                return $this->emitData($drift + ['repaired' => false]);
+            }
+            $this->line('in sync : ' . $drift['in_sync']);
+            $this->line('drifted : ' . count($drifted));
+            foreach ($drifted as $row) {
+                $this->warn('  ' . $row['domain'] . ' — ' . $row['reason']);
+            }
+            $this->newLine();
+            if ($drifted === []) {
+                $this->info('Projection matches the config files.');
+
+                return self::SUCCESS;
+            }
+            $this->line('Run with --repair to rebuild the projection from the config files.');
+
+            // Non-zero so this is usable as a fleet drift check.
+            return self::FAILURE;
+        }
+
+        if ($this->option('dry-run')) {
+            $this->info('Dry run — nothing changed. ' . count($drifted) . ' vhost(s) would be reconciled.');
+
+            return self::SUCCESS;
+        }
+
+        try {
+            $result = $projection->reconcile();
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->wantsJson()) {
+            return $this->emitData($result + ['repaired' => true]);
+        }
+
+        $this->info(sprintf(
+            'Reconciled: %d created, %d updated, %d unchanged, %d removed (%d total).',
+            $result['created'],
+            $result['updated'],
+            $result['unchanged'],
+            $result['removed'],
+            $result['total']
+        ));
+
+        return self::SUCCESS;
     }
 
     private function listVhosts(): int
