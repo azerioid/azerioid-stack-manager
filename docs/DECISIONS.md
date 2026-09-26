@@ -781,3 +781,23 @@ vocabulary ("every 5 minutes") on top of cron syntax, catch-up runs for a job mi
 the host was down, and alerting on a job that *should* have run and did not — which needs
 the panel to evaluate cron expressions against wall-clock time, a different and much
 easier thing to get subtly wrong than reading an exit code.
+
+## A48 — SFTP posture: no chroot, keys only, drop-in configuration
+
+**Status:** Accepted (operator decision 2026-09-26). Implementation pending — this records
+the decisions before the code exists, because both are hard to reverse once operators
+have credentials.
+**Relates to:** A25 (per-vhost `az-vh-*` identity), B3 / request #11.
+
+| Question | Decision | Why |
+|----------|----------|-----|
+| Confinement | **No chroot for v1** | `ChrootDirectory` requires the chroot root to be owned by root and not group-writable, which fights A25's ownership model; getting that wrong silently breaks login for one site while working for another. Confinement comes from the account's home and `internal-sftp` |
+| Authentication | **Key-only by default** | A password for SFTP is also an SSH **shell** credential on these accounts, since `az-vh-*` has `/bin/bash` for the Terminal feature. Keys keep the blast radius of a leaked credential to file transfer |
+| Shell access | **Denied in the `Match` block**, explicitly | See above: the shell exists for Terminal, which the panel brokers. SFTP must not become a second, unbrokered way in |
+| Configuration | **`sshd_config.d` drop-in only**, never edits to `sshd_config` | The distro owns that file; an upgrade that replaces it must not take the panel's changes with it, and the panel must never be the reason a host cannot be upgraded |
+| Validation | **`sshd -t` before every reload**, and **reload, never restart** | A restart with a bad config drops existing sessions *and* fails to come back — locking the operator out of the machine entirely. A reload with a config that fails validation is never applied |
+| Admin SSH | Any change that would affect the administrator's own access is **refused** | This is the single most lockout-prone change in the roadmap; a test asserting admin SSH survives is part of the definition of done |
+
+**Build order for B3 (agreed):** file operations (copy, chmod presets, recursive search,
+multi-upload) → ZIP download moved out of panel PHP into the broker (G12) → archive extract
+behind the mandatory adversarial suite (A40) → SFTP last, on its own.
