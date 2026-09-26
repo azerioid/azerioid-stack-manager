@@ -524,6 +524,8 @@ final class FakeBroker
                 'vhost.files.rename' => $this->vhostFilesOp('rename', $args, $stdin),
                 'vhost.files.move' => $this->vhostFilesOp('move', $args, $stdin),
                 'vhost.files.copy' => $this->vhostFilesOp('copy', $args, $stdin),
+                'vhost.files.chmod' => $this->vhostFilesOp('chmod', $args, $stdin),
+                'vhost.files.search' => $this->vhostFilesOp('search', $args, $stdin),
                 'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
                 'mail.status' => $this->mailStatus(),
                 'mail.probe.outbound25' => $this->mailProbe(),
@@ -3191,6 +3193,13 @@ final class FakeBroker
                 $path,
                 $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
             ),
+            'chmod' => $this->filesChmod($domain, $path, (string) ($stdin['mode'] ?? '')),
+            'search' => $this->filesSearch(
+                $domain,
+                $path,
+                (string) ($stdin['query'] ?? ''),
+                (string) ($stdin['contains'] ?? '')
+            ),
             'copy' => $this->filesCopy(
                 $domain,
                 $root,
@@ -3414,6 +3423,117 @@ final class FakeBroker
     /**
      * @return array<string, mixed>
      */
+    /**
+     * Mirrors VhostFileOp::resolveMode, including every refusal: the modes an operator
+     * reaches for are 777 and 666, and a fake that accepted them would let the UI offer
+     * something the broker declines.
+     *
+     * @return array<string,mixed>
+     */
+    private function filesChmod(string $domain, string $path, string $mode): array
+    {
+        if ($path === '') {
+            throw new BrokerCallException('Refusing to change permissions on the vhost root.', 3);
+        }
+        $node = $this->vhostFiles[$domain][$path] ?? null;
+        if ($node === null) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        $isDir = ($node['type'] ?? '') === 'dir';
+        $presets = [
+            'default' => $isDir ? 0755 : 0644,
+            'private' => $isDir ? 0700 : 0600,
+            'executable' => 0755,
+        ];
+        $mode = strtolower(trim($mode));
+        if ($mode === '') {
+            throw new BrokerCallException(
+                'A mode is required: one of ' . implode(', ', array_keys($presets)) . ', or an octal mode.',
+                2
+            );
+        }
+        if (isset($presets[$mode])) {
+            $octal = $presets[$mode];
+        } else {
+            if (preg_match('/^0?[0-7]{3}$/', $mode) !== 1) {
+                throw new BrokerCallException(
+                    'Mode must be one of ' . implode(', ', array_keys($presets))
+                    . ', or three octal digits (no setuid, setgid or sticky bit).',
+                    2
+                );
+            }
+            $octal = (int) octdec($mode);
+            if (($octal & 0022) !== 0) {
+                throw new BrokerCallException('Refusing a group- or world-writable mode.', 3);
+            }
+            if (($octal & 0400) === 0) {
+                throw new BrokerCallException('Refusing a mode the owner cannot read.', 3);
+            }
+            if ($isDir && ($octal & 0100) === 0) {
+                throw new BrokerCallException('Refusing a directory mode without the owner execute bit.', 3);
+            }
+        }
+        $this->vhostFiles[$domain][$path]['mode'] = sprintf('%04o', $octal);
+
+        return [
+            'path' => $path,
+            'mode' => sprintf('%04o', $octal),
+            'type' => $isDir ? 'dir' : 'file',
+            'chmod' => true,
+        ];
+    }
+
+    /**
+     * Name and content search over the in-memory tree, with the same 200-result cap and the
+     * same `truncated` flag, so the UI's "showing the first 200" path is reachable in a test.
+     *
+     * @return array<string,mixed>
+     */
+    private function filesSearch(string $domain, string $path, string $query, string $contains): array
+    {
+        $query = trim($query);
+        $contains = trim($contains);
+        if ($query === '' && $contains === '') {
+            throw new BrokerCallException('Provide something to search for.', 2);
+        }
+        $prefix = $path === '' ? '' : $path . '/';
+        $results = [];
+        $truncated = false;
+        foreach ($this->vhostFiles[$domain] ?? [] as $rel => $node) {
+            if ($rel === '' || ($prefix !== '' && ! str_starts_with($rel, $prefix))) {
+                continue;
+            }
+            $isDir = ($node['type'] ?? '') === 'dir';
+            if ($query !== '' && stripos(basename($rel), $query) === false) {
+                continue;
+            }
+            if ($contains !== '') {
+                if ($isDir || stripos((string) ($node['content'] ?? ''), $contains) === false) {
+                    continue;
+                }
+            }
+            if (count($results) >= 200) {
+                $truncated = true;
+                break;
+            }
+            $results[] = [
+                'path' => $rel,
+                'type' => $isDir ? 'dir' : 'file',
+                'size' => $isDir ? null : (int) ($node['size'] ?? 0),
+            ];
+        }
+
+        return [
+            'path' => $path,
+            'query' => $query,
+            'contains' => $contains,
+            'results' => $results,
+            'count' => count($results),
+            'truncated' => $truncated,
+            'limit' => 200,
+        ];
+    }
+
     /**
      * Mirrors the broker's copy, including its refusals: files only, never over an
      * existing path, never the root. A fake that copied a directory would let a UI test

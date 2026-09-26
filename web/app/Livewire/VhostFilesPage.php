@@ -41,6 +41,17 @@ class VhostFilesPage extends Component
     public ?string $moveFrom = null;
     public string $moveTo = '';
 
+    public ?string $chmodTarget = null;
+
+    public bool $chmodTargetIsDir = false;
+
+    public string $searchQuery = '';
+
+    public string $searchContains = '';
+
+    /** @var array<string,mixed>|null null = not searching; the listing is shown instead */
+    public ?array $searchResult = null;
+
     public ?string $copyFrom = null;
 
     public string $copyTo = '';
@@ -422,6 +433,69 @@ class VhostFilesPage extends Component
         }
 
         return substr($name, 0, $dot) . '-copy' . substr($name, $dot);
+    }
+
+    // ------------------------------------------------------------------ chmod
+
+    public function startChmod(string $rel, bool $isDir): void
+    {
+        $this->chmodTarget = $rel;
+        $this->chmodTargetIsDir = $isDir;
+        $this->error = null;
+    }
+
+    public function cancelChmod(): void
+    {
+        $this->chmodTarget = null;
+    }
+
+    /**
+     * Presets only from the interface. An operator who needs an unusual mode can still send
+     * one through the broker, but a text field here is an invitation to type 777 — which
+     * would let every other identity on the host write this site's files (A25).
+     */
+    public function applyChmod(BrokerClient $broker, string $preset): void
+    {
+        if ($this->chmodTarget === null) {
+            return;
+        }
+        $this->mutate('vhost.files.chmod', [
+            'path' => $this->chmodTarget,
+            'mode' => $preset,
+        ], $broker, 'Permissions set to ' . $preset . ' on ' . $this->chmodTarget);
+        $this->chmodTarget = null;
+        $this->reload($broker);
+    }
+
+    // ----------------------------------------------------------------- search
+
+    public function search(BrokerClient $broker): void
+    {
+        $this->error = null;
+        if (trim($this->searchQuery) === '' && trim($this->searchContains) === '') {
+            $this->clearSearch();
+
+            return;
+        }
+        $res = $broker->call('vhost.files.search', [$this->domain], [
+            'path' => $this->path,
+            'query' => trim($this->searchQuery),
+            'contains' => trim($this->searchContains),
+        ], 60, false);
+        if (! $res->ok) {
+            $this->error = $res->error;
+            $this->searchResult = null;
+
+            return;
+        }
+        $this->searchResult = is_array($res->data) ? $res->data : null;
+    }
+
+    public function clearSearch(): void
+    {
+        $this->searchQuery = '';
+        $this->searchContains = '';
+        $this->searchResult = null;
     }
 
     public function render()
