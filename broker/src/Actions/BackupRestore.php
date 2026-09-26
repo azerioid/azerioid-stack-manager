@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
-use AzerioidPanel\Broker\ArchiveCrypto;
+use AzerioidPanel\Broker\Backup\ArchiveCipher;
 use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
@@ -30,18 +30,24 @@ final class BackupRestore
             throw new BrokerException('destination must be spaces or local.', 2);
         }
 
-        $plain = ArchiveCrypto::decrypt($cipher, $passphrase);
+        // Reads LACMP2 and, for archives predating it, LACMP1/LCMP1. LACMP2
+        // authenticates every chunk, so a tampered archive fails here rather than
+        // reaching tar or mysql (A2.2).
+        $format = ArchiveCipher::detect($cipher);
+        $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
 
         $storage = $destination === '' ? 'spaces' : $destination;
         if ($action === 'backup.restore.db') {
             return $this->restoreDb($runtime, $config, $plain, $input) + [
                 'key' => $key,
                 'storage' => $storage,
+                'format' => $format,
             ];
         }
         return $this->restoreFiles($runtime, $config, $plain, $input) + [
             'key' => $key,
             'storage' => $storage,
+            'format' => $format,
         ];
     }
 

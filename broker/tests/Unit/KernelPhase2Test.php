@@ -264,6 +264,107 @@ final class KernelPhase2Test extends TestCase
         $this->assertStringContainsString('[redacted]', $audit);
     }
 
+    // ------------------------------- A2.3: new backups are LACMP2, end to end
+
+    public function test_new_backups_are_written_in_the_lacmp2_format(): void
+    {
+        $rt = $this->scriptedDump("-- dump --\n");
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'backup.db', 'all'], $this->stdin());
+
+        $this->assertSame(0, $code);
+        $this->assertSame('lacmp2', $json['data']['format']);
+        $this->assertSame('pbkdf2', $json['data']['kdf'], 'portable default (A2.2)');
+
+        $stored = $this->spaces->objects['/azerioid-backups/' . $json['data']['key']] ?? '';
+        $this->assertStringStartsWith('LACMP2', $stored);
+        $this->assertStringStartsNotWith('LACMP1', $stored);
+    }
+
+    public function test_backup_then_restore_round_trips_through_the_broker(): void
+    {
+        $dump = "CREATE TABLE t (id int);\nINSERT INTO t VALUES (1);\n";
+        $rt = $this->scriptedDump($dump);
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'backup.db', 'all'], $this->stdin());
+        $this->assertSame(0, $code);
+        $key = $json['data']['key'];
+
+        // Restore the object the backup just produced.
+        $rt2 = new FakeRuntime();
+        $rt2->dbRows = [];
+        [$code2, $json2] = $this->capture(
+            $this->kernel($rt2),
+            ['broker', 'backup.restore.db', $key],
+            $this->stdin() + ['target' => 'restored_db']
+        );
+
+        $this->assertSame(0, $code2, (string) ($json2['error'] ?? ''));
+        $this->assertSame('lacmp2', $json2['format']['format'] ?? $json2['data']['format'] ?? null);
+        $mysql = array_values(array_filter(
+            $rt2->execLog,
+            static fn ($row) => ($row['command'][0] ?? '') === '/usr/bin/mysql'
+        ));
+        $this->assertNotSame([], $mysql, 'the dump must reach mysql');
+        $this->assertSame($dump, $mysql[0]['stdin'], 'restored plaintext must match the original dump');
+    }
+
+    public function test_a_tampered_lacmp2_backup_is_refused_on_restore(): void
+    {
+        $rt = $this->scriptedDump("-- dump --\n");
+        [, $json] = $this->capture($this->kernel($rt), ['broker', 'backup.db', 'all'], $this->stdin());
+        $path = '/azerioid-backups/' . $json['data']['key'];
+
+        // Flip a byte inside the ciphertext.
+        $blob = $this->spaces->objects[$path];
+        $at = 60;
+        $blob[$at] = chr(ord($blob[$at]) ^ 0x01);
+        $this->spaces->objects[$path] = $blob;
+
+        $rt2 = new FakeRuntime();
+        $rt2->dbRows = [];
+        [$code2, $json2] = $this->capture(
+            $this->kernel($rt2),
+            ['broker', 'backup.restore.db', $json['data']['key']],
+            $this->stdin() + ['target' => 'restored_db']
+        );
+
+        $this->assertNotSame(0, $code2);
+        $this->assertStringContainsString('authentication', (string) $json2['error']);
+        $mysql = array_filter($rt2->execLog, static fn ($row) => ($row['command'][0] ?? '') === '/usr/bin/mysql');
+        $this->assertSame([], $mysql, 'nothing may reach mysql when authentication fails');
+    }
+
+    public function test_a_failing_dump_aborts_the_upload_instead_of_storing_a_partial(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->defaultExec = new \AzerioidPanel\Broker\ExecResult(['mysqldump'], 2, '', 'mysqldump: connection failed');
+
+        [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'backup.db', 'all'], $this->stdin());
+
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('connection failed', (string) $json['error']);
+        $this->assertSame(1, $this->spaces->multipartAborted, 'the in-flight upload must be abandoned');
+        $this->assertSame(0, $this->spaces->multipartCompleted);
+        $this->assertSame([], $this->spaces->objects, 'no partial object may be left behind');
+    }
+
+    private function scriptedDump(string $dump): FakeRuntime
+    {
+        $rt = new FakeRuntime();
+        $rt->script([
+            '/usr/bin/mysqldump',
+            '--defaults-extra-file=/var/lib/azerioid-panel/staging/mysqldump.cnf',
+            '--protocol=socket',
+            '--socket=/run/mysqld/mysqld.sock',
+            '--single-transaction',
+            '--quick',
+            '--routines',
+            '--skip-comments',
+            '--all-databases',
+        ], 0, $dump);
+
+        return $rt;
+    }
+
     public function test_restore_db_into_new_name(): void
     {
         $plain = "CREATE TABLE t (id int);\n";
@@ -448,10 +549,61 @@ final class MemorySpacesTransport
         $this->objects[$path] = $body;
     }
 
+    /** @var array<string, list<string>> uploadId => ordered parts */
+    public array $multipart = [];
+
+    public int $multipartCompleted = 0;
+
+    public int $multipartAborted = 0;
+
     public function handler(): \Closure
     {
         return function (string $method, string $url, array $headers, string $body): array {
             $path = parse_url($url, PHP_URL_PATH) ?: '/';
+            $query = [];
+            parse_str((string) (parse_url($url, PHP_URL_QUERY) ?? ''), $query);
+
+            // --- S3 multipart upload, as used by SpacesArchiveSink ---
+            if ($method === 'POST' && array_key_exists('uploads', $query)) {
+                $uploadId = 'upload-' . (count($this->multipart) + 1);
+                $this->multipart[$uploadId] = [];
+                return [
+                    'status' => 200,
+                    'body' => '<InitiateMultipartUploadResult><UploadId>' . $uploadId . '</UploadId></InitiateMultipartUploadResult>',
+                    'headers' => [],
+                ];
+            }
+            if ($method === 'PUT' && isset($query['uploadId'], $query['partNumber'])) {
+                $uploadId = (string) $query['uploadId'];
+                if (!isset($this->multipart[$uploadId])) {
+                    return ['status' => 404, 'body' => '<Error><Code>NoSuchUpload</Code></Error>', 'headers' => []];
+                }
+                $this->multipart[$uploadId][(int) $query['partNumber']] = $body;
+                return ['status' => 200, 'body' => '', 'headers' => ['etag' => '"part-' . $query['partNumber'] . '"']];
+            }
+            if ($method === 'POST' && isset($query['uploadId'])) {
+                $uploadId = (string) $query['uploadId'];
+                if (!isset($this->multipart[$uploadId])) {
+                    return ['status' => 404, 'body' => '<Error><Code>NoSuchUpload</Code></Error>', 'headers' => []];
+                }
+                // Assemble in part order, exactly as S3 does.
+                $parts = $this->multipart[$uploadId];
+                ksort($parts);
+                $this->objects[$path] = implode('', $parts);
+                unset($this->multipart[$uploadId]);
+                $this->multipartCompleted++;
+                return [
+                    'status' => 200,
+                    'body' => '<CompleteMultipartUploadResult><ETag>"done"</ETag></CompleteMultipartUploadResult>',
+                    'headers' => [],
+                ];
+            }
+            if ($method === 'DELETE' && isset($query['uploadId'])) {
+                unset($this->multipart[(string) $query['uploadId']]);
+                $this->multipartAborted++;
+                return ['status' => 204, 'body' => '', 'headers' => []];
+            }
+
             if ($method === 'PUT') {
                 $this->objects[$path] = $body;
                 return ['status' => 200, 'body' => '', 'headers' => ['etag' => '"x"']];

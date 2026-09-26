@@ -18,6 +18,26 @@ interface Runtime
      */
     public function gzReader(string $path): callable;
 
+    /**
+     * Spawn a command and read its stdout incrementally.
+     *
+     * exec() buffers the whole output, which is unusable for multi-GB dumps. The
+     * returned reader yields up to n bytes per call and '' at EOF; call the
+     * returned finish() afterwards to reap the child and obtain its exit status.
+     *
+     * @param  list<string>  $command
+     * @return array{read: callable(int):string, finish: callable():ExecResult}
+     */
+    public function execReader(array $command, ?string $cwd = null, int $timeoutSeconds = 3600): array;
+
+    /**
+     * Streaming appender: returns a callable that appends a chunk, and closes the
+     * handle when passed an empty string (mirroring gzReader's '' = EOF).
+     *
+     * @return callable(string):void
+     */
+    public function appendWriter(string $path, int $mode = 0600): callable;
+
     public function writeFile(string $path, string $contents, int $mode = 0644): void;
 
     public function rename(string $from, string $to): void;
