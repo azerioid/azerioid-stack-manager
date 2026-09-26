@@ -12,18 +12,20 @@ class PanelCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:panel
-        {action : domain|update}
-        {op? : show|set|clear|check|apply}
+        {action : domain|update|harden}
+        {op? : show|set|clear|check|apply|status}
         {--domain= : Panel hostname (set)}
         {--tls= : auto|internal|dns01}
         {--tls-mode= : Alias of --tls=}
         {--dns-provider= : cloudflare|digitalocean (dns01)}
         {--staging : Let\'s Encrypt staging}
         {--v= : Target release tag (e.g. v0.2.2); omit to use latest semver tag}
-        {--confirm : Required for panel update apply}
+        {--confirm : Required for panel update apply / harden apply}
+        {--lockdown-site-pools : (harden apply) also disable process spawning in SITE FPM pools}
+        {--dry-run : (harden apply) show the plan without changing anything}
         {--json : JSON output}';
 
-    protected $description = 'Panel access (custom domain) and panel self-update (origin/main)';
+    protected $description = 'Panel access (custom domain), panel self-update, and R1 identity hardening';
 
     public function handle(): int
     {
@@ -32,13 +34,14 @@ class PanelCommand extends Command
         return match ($action) {
             'domain' => $this->handleDomain(),
             'update' => $this->handleUpdate(),
+            'harden' => $this->handleHarden(),
             default => $this->badAction(),
         };
     }
 
     private function badAction(): int
     {
-        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply');
+        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply | azerioid panel harden status|apply');
 
         return self::INVALID;
     }
@@ -53,6 +56,109 @@ class PanelCommand extends Command
             'clear' => $this->clear(),
             default => $this->badDomainOp(),
         };
+    }
+
+    private function handleHarden(): int
+    {
+        $op = strtolower((string) ($this->argument('op') ?: 'status'));
+
+        return match ($op) {
+            'status', 'check' => $this->hardenStatus(),
+            'apply' => $this->hardenApply(),
+            default => $this->badHardenOp(),
+        };
+    }
+
+    private function badHardenOp(): int
+    {
+        $this->error('Unknown harden op. Use: azerioid panel harden status|apply');
+
+        return self::INVALID;
+    }
+
+    private function hardenStatus(): int
+    {
+        try {
+            $data = $this->brokerData('panel.harden.status', [], [], 60, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+
+        $vulnerable = (bool) ($data['vulnerable'] ?? false);
+        $this->line('Panel pool user   : ' . (string) ($data['panel_pool_user'] ?? '(unknown)'));
+        $this->line('Panel pool config : ' . (string) ($data['panel_pool_path'] ?? '(not found)'));
+        $this->line('Sudoers grants to : ' . implode(', ', (array) ($data['sudoers_users'] ?? [])));
+        $this->line('Site pool users   : ' . implode(', ', (array) ($data['site_pool_users'] ?? [])));
+        $this->line('Target identity   : ' . (string) ($data['target_user'] ?? '(none)'));
+        $this->newLine();
+        if ($vulnerable) {
+            $this->error((string) ($data['verdict'] ?? 'VULNERABLE'));
+            $this->warn('Remediate with: azerioid panel harden apply --confirm');
+        } else {
+            $this->info((string) ($data['verdict'] ?? 'OK'));
+        }
+        $this->newLine();
+        $this->line('Residual risk: ' . (string) ($data['residual_risk'] ?? ''));
+
+        // Non-zero when the host is vulnerable, so this is usable as a CI/fleet gate.
+        return $vulnerable ? self::FAILURE : self::SUCCESS;
+    }
+
+    private function hardenApply(): int
+    {
+        $dryRun = (bool) $this->option('dry-run');
+        if (! $dryRun && ! $this->option('confirm')) {
+            $this->error('Refusing to harden without --confirm (this changes the panel service identity).');
+
+            return self::INVALID;
+        }
+
+        try {
+            $data = $this->brokerData('panel.harden.apply', [], [
+                'confirm' => $dryRun ? 'HARDEN-PANEL' : 'HARDEN-PANEL',
+                'lockdown_site_pools' => (bool) $this->option('lockdown-site-pools'),
+                'dry_run' => $dryRun,
+            ], 900);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+
+        if ($dryRun) {
+            $this->info('Dry run — nothing changed.');
+            $this->line('Would migrate: ' . (string) ($data['would_migrate_from'] ?? '?') . ' → ' . (string) ($data['would_migrate_to'] ?? '?'));
+            foreach ((array) ($data['plan'] ?? []) as $i => $step) {
+                $this->line('  ' . ($i + 1) . '. ' . (string) $step);
+            }
+
+            return self::SUCCESS;
+        }
+
+        if (($data['already_hardened'] ?? false) === true) {
+            $this->info('Already hardened — panel runs as ' . (string) ($data['panel_user'] ?? '?') . '.');
+
+            return self::SUCCESS;
+        }
+
+        $this->info('Panel identity migrated: ' . (string) ($data['previous_user'] ?? '?') . ' → ' . (string) ($data['panel_user'] ?? '?'));
+        foreach ((array) ($data['log'] ?? []) as $line) {
+            $this->line('  · ' . (string) $line);
+        }
+        $this->newLine();
+        $this->line('Residual risk: ' . (string) ($data['residual_risk'] ?? ''));
+
+        return self::SUCCESS;
     }
 
     private function handleUpdate(): int

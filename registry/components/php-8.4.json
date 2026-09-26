@@ -96,7 +96,8 @@
         "php-pdo",
         "php-xml",
         "php-mbstring",
-        "php-zip"
+        "php-zip",
+        "php-sodium"
       ],
       "unit_name": "php-fpm",
       "detect": {

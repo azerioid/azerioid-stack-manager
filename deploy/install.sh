@@ -39,6 +39,7 @@ EXPLICIT_PUBLIC_DOMAIN=0
 EXPLICIT_PUBLIC_IP=0
 EXPLICIT_ALLOWLIST=0
 EXPLICIT_CREATE_ADMIN=0
+EXPLICIT_WEB_USER=0
 
 usage() {
     cat <<'EOF'
@@ -83,7 +84,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=1; shift ;;
         --prefix=*) PREFIX="${1#*=}"; shift ;;
         --port=*) PANEL_PORT="${1#*=}"; EXPLICIT_PORT=1; shift ;;
-        --web-user=*) WEB_USER="${1#*=}"; shift ;;
+        --web-user=*) WEB_USER="${1#*=}"; EXPLICIT_WEB_USER=1; shift ;;
         --access=*) ACCESS="${1#*=}"; EXPLICIT_ACCESS=1; shift ;;
         --domain=*) PANEL_PUBLIC_DOMAIN="${1#*=}"; EXPLICIT_PUBLIC_DOMAIN=1; shift ;;
         --public-ip=*) PANEL_PUBLIC_IP="${1#*=}"; EXPLICIT_PUBLIC_IP=1; shift ;;
@@ -111,6 +112,7 @@ export ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME CREATE_ADMIN
 export INSTALL_USED_DEFAULT_ADMIN_PASSWORD INSTALL_USED_DEFAULT_ADMIN_EMAIL
 export EXPLICIT_ACCESS EXPLICIT_PORT EXPLICIT_TOTP EXPLICIT_FIREWALL EXPLICIT_FAIL2BAN
 export EXPLICIT_PUBLIC_DOMAIN EXPLICIT_PUBLIC_IP EXPLICIT_ALLOWLIST EXPLICIT_CREATE_ADMIN
+export EXPLICIT_WEB_USER
 
 [[ ${EUID} -eq 0 ]] || { echo "install.sh must be run as root" >&2; exit 1; }
 
@@ -144,6 +146,11 @@ source "${LIB}/readiness.sh"
 source "${LIB}/post-install.sh"
 
 detect_os
+# PROVISIONAL only — for --dry-run display and interactive prompts. The Caddy
+# package has not been installed yet, so on a stock Debian/Ubuntu image the
+# `caddy` user does not exist and this resolves to the pre-existing `www-data`.
+# The AUTHORITATIVE detection happens after bootstrap_packages (see below).
+# Do not use this value for pool/sudoers/ownership decisions (R1 / ADR A39).
 WEB_USER="$(detect_web_user)"
 export WEB_USER
 
@@ -174,14 +181,39 @@ echo "==> AZERIOID Stack Manager bootstrap into ${PREFIX}"
 
 setup_repos
 bootstrap_packages
-# On a bare EL image, www-data does not exist and the caddy user is created
-# by the Caddy RPM — re-detect after packages so FPM/broker are not owned
-# by a phantom www-data group.
-if ! id -u "${WEB_USER}" >/dev/null 2>&1; then
+
+# AUTHORITATIVE web-user detection — must run AFTER bootstrap_packages.
+#
+# R1 (2026-09-26): this used to be guarded by `if ! id -u "${WEB_USER}"`, which
+# is never true on Debian/Ubuntu because `www-data` (uid 33) ships in
+# base-passwd on every apt image. The guard therefore never fired, the
+# provisional `www-data` was latched, and the panel FPM pool ended up sharing a
+# uid with every hosted site's PHP-FPM pool — while that same uid held
+# passwordless root sudo to the broker. Any code execution in any hosted PHP
+# site was a direct path to root.
+#
+# Detection is now unconditional: the Caddy package has created the `caddy`
+# user by this point, so detect_web_user() can actually prefer it as intended.
+# An explicit --web-user= still wins (operator override).
+if [[ "${EXPLICIT_WEB_USER}" -eq 1 ]]; then
+    echo "==> Web user (operator override): ${WEB_USER}"
+else
     WEB_USER=""
     WEB_USER="$(detect_web_user)"
     export WEB_USER
     echo "==> Web user (after packages): ${WEB_USER}"
+fi
+
+# Refuse to hand the broker sudo grant to a shared site-PHP identity. On apt
+# hosts the distro `www` pool runs as www-data; granting that uid NOPASSWD root
+# is the R1 escalation. If detection still lands there, something is wrong with
+# the environment (Caddy missing?) and we stop rather than install a hole.
+if [[ "${EXPLICIT_WEB_USER}" -ne 1 ]] && site_pool_user_conflict "${WEB_USER}"; then
+    echo "FATAL: detected web user '${WEB_USER}' is also the site PHP-FPM pool user." >&2
+    echo "       Installing would grant every hosted site's PHP passwordless root" >&2
+    echo "       sudo to the broker (R1). Ensure Caddy installed correctly, or pass" >&2
+    echo "       an explicit --web-user=<dedicated-user> if you know what you are doing." >&2
+    exit 1
 fi
 source "${LIB}/ttyd.sh"
 install_ttyd

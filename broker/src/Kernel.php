@@ -43,6 +43,7 @@ use AzerioidPanel\Broker\Actions\MariadbBindRollback;
 use AzerioidPanel\Broker\Actions\MariadbBindStatus;
 use AzerioidPanel\Broker\Actions\MetricsSystem;
 use AzerioidPanel\Broker\Actions\PanelDomainSet;
+use AzerioidPanel\Broker\Actions\PanelHarden;
 use AzerioidPanel\Broker\Actions\PanelRuntime;
 use AzerioidPanel\Broker\Actions\PanelUpdateApply;
 use AzerioidPanel\Broker\Actions\PanelUpdateCheck;
@@ -86,6 +87,8 @@ final class Kernel
         'panel.runtime' => PanelRuntime::class,
         'panel.domain.set' => PanelDomainSet::class,
         'panel.domain.show' => PanelDomainSet::class,
+        'panel.harden.status' => PanelHarden::class,
+        'panel.harden.apply' => PanelHarden::class,
         'panel.update.check' => PanelUpdateCheck::class,
         'panel.update.apply' => PanelUpdateApply::class,
         'panel.update.operation.log' => PanelUpdateOperationLog::class,

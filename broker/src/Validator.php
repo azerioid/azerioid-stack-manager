@@ -293,6 +293,9 @@ final class Validator
         return $password;
     }
 
+    /** R1 panel identity remediation (see Panel\PanelHardener). */
+    public const HARDEN_PANEL_CONFIRM = 'HARDEN-PANEL';
+
     public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
 
     public const DROP_MAIL_CONFIRM = 'DROP-MAIL';
