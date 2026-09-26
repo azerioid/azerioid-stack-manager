@@ -249,6 +249,7 @@ final class Kernel
         'vhost.files.mkdir' => VhostFilesAction::class,
         'vhost.files.rename' => VhostFilesAction::class,
         'vhost.files.move' => VhostFilesAction::class,
+        'vhost.files.copy' => VhostFilesAction::class,
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 

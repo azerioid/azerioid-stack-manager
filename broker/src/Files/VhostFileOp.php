@@ -14,7 +14,7 @@ final class VhostFileOp
      * No archive extract/unzip in v1 — zip-slip is out of scope rather than
      * a naive ZipArchive loop.
      */
-    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'delete'];
+    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'delete'];
 
     /**
      * @param  array<string, mixed>  $req
@@ -39,6 +39,7 @@ final class VhostFileOp
             'write' => self::write($root, $path, (string) ($req['content_base64'] ?? ''), $maxBytes),
             'mkdir' => self::mkdir($root, $path),
             'rename', 'move' => self::rename($root, $path, (string) ($req['dest'] ?? '')),
+            'copy' => self::copy($root, $path, (string) ($req['dest'] ?? '')),
             'delete' => self::delete($root, $path, (bool) ($req['recursive'] ?? false)),
             default => throw new VhostFileException('Unknown file operation.', 2),
         };
@@ -241,6 +242,57 @@ final class VhostFileOp
             'from' => $fromOut,
             'path' => VhostPath::relativeToRoot($rootReal, $real),
             'renamed' => true,
+        ];
+    }
+
+    /**
+     * Copy a file within the vhost (B3 / request #10).
+     *
+     * Files only. A recursive directory copy can duplicate a site's whole tree and fill
+     * the disk from a single click, and the containment check would have to be repeated
+     * for every entry as it is created — so it waits for the compress/extract work, where
+     * bounded output is the whole subject.
+     *
+     * The destination is checked after the copy as well as before, the same way rename
+     * does: a path that resolves outside the root gets the copy removed rather than left
+     * behind.
+     *
+     * @return array<string, mixed>
+     */
+    private static function copy(string $root, string $fromRel, string $toRel): array
+    {
+        if (trim($toRel) === '') {
+            throw new VhostFileException('Destination path is required.', 2);
+        }
+        $src = VhostPath::resolveExisting($root, trim($fromRel));
+        $rootReal = (string) realpath(VhostPath::normalizeRoot($root));
+        $fromOut = VhostPath::relativeToRoot($rootReal, $src);
+        if ($fromOut === '') {
+            throw new VhostFileException('Refusing to copy the vhost root.', 3);
+        }
+        if (is_dir($src)) {
+            throw new VhostFileException('Copying a directory is not supported yet; copy files individually.', 3);
+        }
+        if (is_link($src)) {
+            throw new VhostFileException('Refusing to copy a symlink.', 3);
+        }
+        $destInfo = VhostPath::resolveCreate($root, $toRel);
+        if (file_exists($destInfo['dest']) || is_link($destInfo['dest'])) {
+            throw new VhostFileException('Destination already exists.', 3);
+        }
+        if (!@copy($src, $destInfo['dest'])) {
+            throw new VhostFileException('Unable to copy file.', 1);
+        }
+        $real = realpath($destInfo['dest']);
+        if ($real === false || !VhostPath::isUnder($rootReal, $real)) {
+            @unlink($destInfo['dest']);
+            throw new VhostFileException('Copy resolved outside the vhost directory; it was removed.', 3);
+        }
+
+        return [
+            'from' => $fromOut,
+            'path' => VhostPath::relativeToRoot($rootReal, $real),
+            'copied' => true,
         ];
     }
 
