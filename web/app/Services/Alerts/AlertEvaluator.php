@@ -4,6 +4,7 @@ namespace App\Services\Alerts;
 
 use App\Models\AlertIncident;
 use App\Models\BackupJob;
+use App\Models\Vhost;
 use App\Models\Setting;
 use App\Services\Broker\BrokerClient;
 use Illuminate\Support\Carbon;
@@ -82,6 +83,9 @@ final class AlertEvaluator
         $ram = (int) ($rules['ram_percent'] ?? 90);
         $load = (float) ($rules['load'] ?? 4.0);
         $tlsDays = (int) ($rules['tls_days'] ?? 14);
+        // Creating a vhost before pointing DNS at it is the normal workflow, so a
+        // freshly created site must not alarm immediately.
+        $graceHours = (int) ($rules['tls_grace_hours'] ?? 24);
         $backupHours = (int) ($rules['backup_stale_hours'] ?? 36);
         $serviceDown = (bool) ($rules['service_down'] ?? true);
         $observedDown = (bool) ($rules['observed_down'] ?? true);
@@ -182,6 +186,10 @@ final class AlertEvaluator
                     }
                 }
             }
+
+            foreach ($this->tlsIssuanceFailures($graceHours) as $issue) {
+                $out[] = $issue;
+            }
         }
 
         if ($backupOn) {
@@ -231,5 +239,85 @@ final class AlertEvaluator
         }
 
         return $out;
+    }
+
+    /**
+     * TLS configured but never actually issued (B1 / request #5).
+     *
+     * The expiry rule above reads `tls.certs`, which only lists certificates that
+     * exist — so a vhost set to automatic TLS whose issuance has never succeeded
+     * could not appear there at all, and the panel stayed silent about it. On the
+     * verification host four vhosts were in exactly that state: configured for
+     * automatic HTTPS, no certificate on disk, an unmatched-SNI handshake failure
+     * for visitors, and no alert.
+     *
+     * vhost.list already computes this through CertProbe and AcmeStatusHint, which
+     * also supplies the reason, so the alert can say *why* rather than just that
+     * something is wrong.
+     *
+     * @return list<array{rule_key:string, subject:string, message:string, severity:string}>
+     */
+    private function tlsIssuanceFailures(int $graceHours): array
+    {
+        $res = $this->broker->call('vhost.list', [], [], null, false);
+        if (! $res->ok) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($res->data['vhosts'] ?? [] as $v) {
+            if (! is_array($v) || ! empty($v['readonly'])) {
+                continue;
+            }
+            $mode = (string) ($v['tls_mode'] ?? '');
+            // Only modes that are *supposed* to obtain a certificate. `internal` and
+            // `off` are working as configured.
+            if (! in_array($mode, ['auto', 'dns01'], true)) {
+                continue;
+            }
+            $status = is_array($v['tls_status'] ?? null) ? $v['tls_status'] : [];
+            if (($status['ok'] ?? false) === true) {
+                continue;
+            }
+
+            $domain = (string) ($v['domain'] ?? '');
+            if ($domain === '' || $this->withinTlsGrace($domain, $graceHours)) {
+                continue;
+            }
+
+            $failed = ($status['failed'] ?? false) === true;
+            $reason = trim((string) ($status['error'] ?? ''));
+            $out[] = [
+                'rule_key' => 'tls.issuance',
+                'subject' => $domain,
+                'message' => $domain . ': TLS is set to ' . $mode
+                    . ' but no certificate has been issued'
+                    . ($reason !== '' ? ' — ' . $reason : '.'),
+                'severity' => $failed ? 'high' : 'medium',
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * True while a vhost is still young enough that missing TLS is expected.
+     *
+     * Age comes from the A44 projection. When a vhost is not in it — an existing
+     * host that has not run `azerioid vhost reconcile --repair` yet — we cannot
+     * date it, and the bug being fixed here is *silence*, so it alerts rather than
+     * skipping.
+     */
+    private function withinTlsGrace(string $domain, int $graceHours): bool
+    {
+        if ($graceHours <= 0) {
+            return false;
+        }
+        $row = Vhost::query()->where('domain', $domain)->first();
+        if ($row === null || $row->created_at === null) {
+            return false;
+        }
+
+        return $row->created_at->gt(Carbon::now()->subHours($graceHours));
     }
 }
