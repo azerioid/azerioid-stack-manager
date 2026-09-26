@@ -86,12 +86,23 @@ Usage:
   azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]
   azerioid backup verify  --file=<path|key> [--local|--spaces] [--json]
 
+  azerioid firewall list [--json]
+  azerioid firewall allow|deny <port>[/proto] [--from=<ip|cidr>] [--note=<label>] [--revert-after=120]
+  azerioid firewall delete <port>[/proto] [--from=<ip|cidr>]
+  azerioid firewall confirm | revert
+
   azerioid totp status  [--email=] [--json]
   azerioid totp disable --email=<admin>
   azerioid totp reset   --email=<admin>
   azerioid totp confirm --email=<admin>
 
   azerioid audit tail [--follow] [--lines=50] [--json]
+
+Firewall:
+  A rule change is applied inside a revert window: if you do not run `azerioid firewall confirm`
+  before it closes, the previous rules are restored automatically. The confirmation is the proof
+  your own session survived the change. Use --no-revert --confirm=I-HAVE-CONSOLE-ACCESS to skip it.
+  SSH (read from sshd_config), the panel port and 80/443 cannot be denied — the broker refuses.
 
 Secrets:
   DB and mailbox passwords are generated and printed once — never accepted via argv.

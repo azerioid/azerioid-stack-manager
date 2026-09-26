@@ -4,7 +4,10 @@ namespace App\Services\Broker;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Database\DbAccessPolicy;
+use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Files\VhostPath;
+use AzerioidPanel\Broker\Network\FirewallGuard;
+use AzerioidPanel\Broker\Network\FirewallRule;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
@@ -476,6 +479,11 @@ final class FakeBroker
                 'backup.restore.check' => $this->restoreCheck($args, $stdin),
                 'spaces.test' => ['ok' => true, 'bucket' => 'azerioid', 'region' => 'fra1'],
                 'auth.audit' => ['path' => '/var/log/auth.log', 'missing' => false, 'success' => [['user' => 'root', 'ip' => '127.0.0.1', 'method' => 'publickey', 'line' => 'Accepted publickey for root from 127.0.0.1']], 'failed' => [], 'failed_count' => 0, 'new_root_ips' => []],
+                'firewall.rules' => $this->firewallList(),
+                'firewall.rule.add' => $this->firewallAdd($stdin),
+                'firewall.rule.delete' => $this->firewallDelete($stdin),
+                'firewall.confirm' => $this->firewallConfirm(),
+                'firewall.revert' => $this->firewallRevert(),
                 'firewall.status' => ['ufw' => ['installed' => true, 'status' => "Status: active\nTo 22 ALLOW  Anywhere"], 'fail2ban' => ['installed' => false]],
                 'firewall.unban' => ['ip' => $args[0] ?? '', 'jail' => $args[1] ?? 'sshd'],
                 'firewall.fail2ban.install' => $this->requireConfirm($stdin, 'INSTALL-FAIL2BAN', ['installed' => true, 'jail' => 'sshd']),
@@ -545,6 +553,210 @@ final class FakeBroker
         } catch (BrokerCallException $e) {
             return new BrokerResponse(false, null, $e->getMessage(), $e->errorCode);
         }
+    }
+
+    /**
+     * Firewall state for the local/test panel (B2).
+     *
+     * The rule *store* is in memory, but the decisions — what a rule may be, and
+     * which rules the broker refuses — run through the real FirewallRule and
+     * FirewallGuard against a FakeRuntime seeded to look like the host. Reimplementing
+     * the refusals here would let the panel tests pass while the broker refused, or
+     * worse, the other way round.
+     *
+     * @var list<array{action:string,port:int,protocol:string,source:?string,comment:string}>
+     */
+    public array $firewallRules = [
+        ['action' => 'allow', 'port' => 22, 'protocol' => 'tcp', 'source' => null, 'comment' => ''],
+        ['action' => 'allow', 'port' => 80, 'protocol' => 'tcp', 'source' => null, 'comment' => 'azerioid-http'],
+        ['action' => 'allow', 'port' => 443, 'protocol' => 'tcp', 'source' => null, 'comment' => 'azerioid-https'],
+        ['action' => 'allow', 'port' => 3306, 'protocol' => 'tcp', 'source' => '10.0.0.5', 'comment' => 'azerioid-db-mariadb'],
+        ['action' => 'allow', 'port' => 8080, 'protocol' => 'tcp', 'source' => null, 'comment' => 'azerioid-staging'],
+    ];
+
+    public string $firewallBackend = 'ufw';
+
+    /** The host's SSH port, so a test can move it and see the guard follow. */
+    public int $fakeSshPort = 22;
+
+    /** @var array<string,mixed> */
+    public array $firewallRevertState = ['armed' => false];
+
+    private function firewallGuard(): FirewallGuard
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/ssh/sshd_config'] = 'Port ' . $this->fakeSshPort . "\n";
+
+        return new FirewallGuard($rt, new \AzerioidPanel\Broker\Config());
+    }
+
+    /** @return array<string,mixed> */
+    private function firewallList(): array
+    {
+        return [
+            'backend' => $this->firewallBackend,
+            'rules' => array_map(
+                fn (array $r): array => FirewallRule::observed(
+                    $r['action'], $r['port'], $r['protocol'], $r['source'], $r['comment']
+                )->toArray(),
+                $this->firewallRules
+            ),
+            'managed_count' => count(array_filter(
+                $this->firewallRules,
+                static fn (array $r): bool => $r['comment'] !== ''
+            )),
+            'protected_ports' => $this->firewallGuard()->protectedPorts(),
+            'revert' => $this->firewallRevertState,
+            'revert_supported' => true,
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function firewallAdd(array $stdin): array
+    {
+        $this->assertNoFirewallWindow();
+        try {
+            $rule = FirewallRule::fromInput($stdin);
+            $this->firewallGuard()->assertRuleAllowed($rule);
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        foreach ($this->firewallRules as $existing) {
+            $key = $existing['action'] . ':' . $existing['port'] . ':' . $existing['protocol']
+                . ':' . ($existing['source'] ?? 'any');
+            if ($key === $rule->key()) {
+                throw new BrokerCallException('That rule already exists: ' . $rule->describe() . '.', 3);
+            }
+        }
+        // Window first, exactly like the real manager: it is what refuses a change
+        // that has no way to be undone, and a fake that applied the rule anyway would
+        // hide that from every panel test.
+        $window = $this->fakeRevertWindow($stdin, 'add ' . $rule->describe());
+        $this->firewallRules[] = [
+            'action' => $rule->action, 'port' => $rule->port, 'protocol' => $rule->protocol,
+            'source' => $rule->source, 'comment' => $rule->comment,
+        ];
+        $this->firewallRevertState = $window;
+
+        return ['added' => $rule->toArray(), 'backend' => $this->firewallBackend, 'revert' => $this->firewallRevertState];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function firewallDelete(array $stdin): array
+    {
+        $this->assertNoFirewallWindow();
+        try {
+            $rule = FirewallRule::fromInput($stdin);
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        foreach ($this->firewallRules as $index => $existing) {
+            $key = $existing['action'] . ':' . $existing['port'] . ':' . $existing['protocol']
+                . ':' . ($existing['source'] ?? 'any');
+            if ($key !== $rule->key()) {
+                continue;
+            }
+            $match = FirewallRule::observed(
+                $existing['action'], $existing['port'], $existing['protocol'], $existing['source'], $existing['comment']
+            );
+            try {
+                $this->firewallGuard()->assertDeletionAllowed($match);
+            } catch (BrokerException $e) {
+                throw new BrokerCallException($e->getMessage(), $e->errorCode);
+            }
+            if ($match->managed && $existing['comment'] !== FirewallRule::TAG
+                && preg_match('/^azerioid-(db|mail|panel|terminal)-|^azerioid-(http|https|backend-internal)$/', $existing['comment']) === 1) {
+                throw new BrokerCallException(
+                    'That rule belongs to another panel feature (' . $existing['comment'] . '). Change it there, not here.',
+                    3
+                );
+            }
+            $window = $this->fakeRevertWindow($stdin, 'delete ' . $match->describe());
+            unset($this->firewallRules[$index]);
+            $this->firewallRules = array_values($this->firewallRules);
+            $this->firewallRevertState = $window;
+
+            return ['deleted' => $match->toArray(), 'backend' => $this->firewallBackend, 'revert' => $this->firewallRevertState];
+        }
+
+        throw new BrokerCallException('No such rule on this host: ' . $rule->describe() . '.', 3);
+    }
+
+    /** A second window would snapshot the unconfirmed state as if it were good. */
+    private function assertNoFirewallWindow(): void
+    {
+        if ($this->firewallRevertState['armed'] ?? false) {
+            throw new BrokerCallException(
+                'A firewall change is already waiting to be confirmed or reverted. Confirm or revert that one first.',
+                3
+            );
+        }
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function fakeRevertWindow(array $stdin, string $description): array
+    {
+        if (($stdin['revert'] ?? null) === false || ($stdin['revert'] ?? null) === 'off') {
+            if (($stdin['confirm'] ?? '') !== 'I-HAVE-CONSOLE-ACCESS') {
+                throw new BrokerCallException(
+                    'You asked to apply this without an automatic revert. Re-send with confirm=I-HAVE-CONSOLE-ACCESS '
+                    . 'to apply it anyway — only do that if you can reach this machine another way.',
+                    3
+                );
+            }
+
+            return ['armed' => false, 'reason' => 'declined by the operator'];
+        }
+        $seconds = (int) ($stdin['revert_after'] ?? 0) ?: 120;
+        if ($seconds < 30 || $seconds > 900) {
+            throw new BrokerCallException('The revert window must be between 30 and 900 seconds.', 2);
+        }
+
+        return [
+            'armed' => true,
+            'backend' => $this->firewallBackend,
+            'seconds' => $seconds,
+            'deadline' => date('c', time() + $seconds),
+            'description' => $description,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function firewallConfirm(): array
+    {
+        if (! ($this->firewallRevertState['armed'] ?? false)) {
+            throw new BrokerCallException('There is no firewall change waiting to be confirmed.', 3);
+        }
+        $description = (string) ($this->firewallRevertState['description'] ?? '');
+        $this->firewallRevertState = ['armed' => false];
+
+        return ['confirmed' => true, 'description' => $description];
+    }
+
+    /** @return array<string,mixed> */
+    private function firewallRevert(): array
+    {
+        if (! ($this->firewallRevertState['armed'] ?? false)) {
+            throw new BrokerCallException('There is no firewall change waiting to be reverted.', 3);
+        }
+        $description = (string) ($this->firewallRevertState['description'] ?? '');
+        // The fake restores by undoing the one recorded change, which is all the
+        // snapshot in the real driver amounts to from the panel's point of view.
+        if (str_starts_with($description, 'add ')) {
+            array_pop($this->firewallRules);
+        }
+        $this->firewallRevertState = ['armed' => false];
+
+        return ['reverted' => true, 'backend' => $this->firewallBackend, 'description' => $description];
     }
 
     /** @return array<string, mixed> */

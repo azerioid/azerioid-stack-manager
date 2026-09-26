@@ -36,6 +36,7 @@
                         ['operations', 'Operations', '/operations'],
                         ['logs', 'Logs', '/logs'],
                         ['security', 'Security', '/security'],
+                        ['firewall', 'Firewall', '/firewall'],
                         ['audit', 'Audit', '/audit'],
                         ['settings', 'Settings', '/settings'],
                     ];

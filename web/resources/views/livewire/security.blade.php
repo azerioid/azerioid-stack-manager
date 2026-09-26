@@ -33,6 +33,10 @@
          installed" while the broker was writing firewalld rules (A1/G2). --}}
     <section class="panel p-5">
         @php($fwBackend = $firewall['backend'] ?? 'none')
+        <p class="mb-3 text-xs text-zinc-500">
+            This is the read-only view. Rules are added and removed on the
+            <a class="text-brass-400 hover:underline" href="/firewall">Firewall</a> page.
+        </p>
         <div class="flex items-center justify-between gap-3">
             <h2 class="text-sm font-medium">Firewall</h2>
             @if ($fwBackend === 'none')
