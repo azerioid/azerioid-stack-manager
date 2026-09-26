@@ -33,6 +33,8 @@ final class BackupList
                 'kind' => $parts[1] ?? 'unknown',
                 'name' => $parts[2] ?? '',
                 'destination' => 'spaces',
+                'format' => self::formatOf($key),
+                'legacy' => self::formatOf($key) !== 'lacmp2',
             ];
         }
         usort($objects, static fn ($a, $b) => strcmp((string) $b['last_modified'], (string) $a['last_modified']));
@@ -73,6 +75,8 @@ final class BackupList
                         'kind' => $kind,
                         'name' => $name,
                         'destination' => 'local',
+                        'format' => self::formatOf($file),
+                        'legacy' => self::formatOf($file) !== 'lacmp2',
                     ];
                 }
             }
@@ -81,8 +85,19 @@ final class BackupList
         return $objects;
     }
 
+    /**
+     * Archives written since LACMP2 carry the format in their name, so a listing
+     * can flag unauthenticated legacy archives without reading any of them.
+     */
+    public static function formatOf(string $key): string
+    {
+        return str_contains($key, '.lacmp2.') ? 'lacmp2' : 'legacy';
+    }
+
     private function stampToIso(string $stamp): ?string
     {
+        // Tolerate the format marker: 20260926T...Z.lacmp2
+        $stamp = preg_replace('/\.lacmp2$/', '', $stamp) ?? $stamp;
         // 20260909T123456123456Z (seconds + microseconds)
         if (!preg_match('/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{6})Z$/', $stamp, $m)
             && !preg_match('/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/', $stamp, $m)) {

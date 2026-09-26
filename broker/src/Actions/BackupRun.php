@@ -16,6 +16,14 @@ use AzerioidPanel\Broker\Web\WebServers;
 
 final class BackupRun
 {
+    /**
+     * Archive filename suffix. The format is encoded in the name so `backup.list`
+     * can report it for free: probing the magic bytes would mean one ranged GET
+     * per object against Spaces, which is far too many requests for a listing.
+     * Legacy archives are plain `.bin`.
+     */
+    public const SUFFIX = '.lacmp2.bin';
+
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $passphrase = Validator::password((string) ($input['passphrase'] ?? ''));
@@ -44,7 +52,7 @@ final class BackupRun
             $runtime->mkdir($base, 0750);
             $runtime->mkdir($base . '/' . $source['kind'], 0750);
             $runtime->mkdir($dir, 0750);
-            $path = $dir . '/' . $stamp . '.bin';
+            $path = $dir . '/' . $stamp . self::SUFFIX;
             if ($runtime->resolveUnderBase($path, $base) === null) {
                 throw new BrokerException('Local backup path escaped backup root.', 3);
             }
@@ -52,7 +60,7 @@ final class BackupRun
             $key = $path;
         } else {
             $client = SpacesClient::fromInput($input['spaces'] ?? []);
-            $key = 'azerioid/' . $source['kind'] . '/' . $source['name'] . '/' . $stamp . '.bin';
+            $key = 'azerioid/' . $source['kind'] . '/' . $source['name'] . '/' . $stamp . self::SUFFIX;
             $sink = new SpacesArchiveSink($client, $key);
         }
 

@@ -11,7 +11,7 @@ class BackupCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:backup
-        {action : create|list|restore}
+        {action : create|list|restore|verify}
         {--local : Store/list/restore local encrypted archives under /var/lib/azerioid-panel/backups}
         {--spaces : Use DigitalOcean Spaces (requires saved Spaces credentials)}
         {--db=all : Database name for create (default all)}
@@ -20,6 +20,7 @@ class BackupCommand extends Command
         {--target= : Target database name for restore}
         {--overwrite : Overwrite existing target DB (requires --confirm; sends OVERWRITE)}
         {--confirm : Required for restore}
+        {--kdf= : create: pbkdf2 (default, portable) or argon2id (needs libsodium)}
         {--json : JSON output}';
 
     protected $description = 'Encrypted DB backups via broker backup.* (local disk or Spaces)';
@@ -30,13 +31,60 @@ class BackupCommand extends Command
             'create', 'run' => $this->create(),
             'list' => $this->listBackups(),
             'restore' => $this->restore(),
+            'verify' => $this->verify(),
             default => $this->badAction(),
         };
     }
 
+    private function verify(): int
+    {
+        $file = trim((string) $this->option('file'));
+        if ($file === '') {
+            $this->error('verify requires --file=<local path or Spaces object key>');
+
+            return self::INVALID;
+        }
+
+        try {
+            $dest = (bool) $this->option('spaces') ? 'spaces' : 'local';
+            if ((bool) $this->option('local')) {
+                $dest = 'local';
+            }
+            $stdin = $this->stdinFor($dest);
+            $stdin['destination'] = $dest;
+            $data = $this->brokerData('backup.verify', [$file], $stdin, 900, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->wantsJson()) {
+            return $this->emitData($data);
+        }
+
+        $this->line('key      : ' . (string) ($data['key'] ?? ''));
+        $this->line('kind     : ' . (string) ($data['kind'] ?? ''));
+        $this->line('format   : ' . (string) ($data['format'] ?? ''));
+        $this->line('size     : ' . (string) ($data['plain_bytes'] ?? '') . ' bytes (decrypted)');
+        $this->line('sha256   : ' . (string) ($data['sha256'] ?? ''));
+        $structure = is_array($data['structure'] ?? null) ? $data['structure'] : [];
+        $this->line('structure: ' . (string) ($structure['detail'] ?? 'not checked'));
+        $this->newLine();
+
+        if (($data['authenticated'] ?? false) === true) {
+            $this->info('Verified: integrity authenticated and structure readable.');
+
+            return self::SUCCESS;
+        }
+
+        // Structurally fine, but the legacy format cannot prove it was not altered.
+        $this->warn((string) ($data['note'] ?? 'Legacy archive: not authenticated.'));
+
+        return self::SUCCESS;
+    }
+
     private function badAction(): int
     {
-        $this->error('Usage: azerioid backup create|list|restore [--local|--spaces] …');
+        $this->error('Usage: azerioid backup create|list|restore|verify [--local|--spaces] …');
 
         return self::INVALID;
     }
@@ -103,10 +151,11 @@ class BackupCommand extends Command
                 (string) ($o['kind'] ?? ''),
                 (string) ($o['size'] ?? ''),
                 (string) ($o['last_modified'] ?? ''),
+                ($o['legacy'] ?? false) ? 'legacy (no auth)' : (string) ($o['format'] ?? ''),
             ];
         }
 
-        return $this->emitTable(['key', 'kind', 'size', 'last_modified'], $rows);
+        return $this->emitTable(['key', 'kind', 'size', 'last_modified', 'format'], $rows);
     }
 
     private function restore(): int

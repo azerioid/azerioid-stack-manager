@@ -187,12 +187,58 @@ final class BackupRestore
             }
             throw new BrokerException(trim($moved->stderr) !== '' ? trim($moved->stderr) : 'Failed to move staged files into place.', 1);
         }
+        // Pre-restore snapshots were never pruned, so every restore left another
+        // full copy of the site next to it until the disk filled (A2.5).
+        $keepSnapshots = max(0, min(20, (int) ($input['keep_snapshots'] ?? 2)));
+        $prunedSnapshots = $this->pruneSnapshots($runtime, $config, $site, $keepSnapshots);
+
         return [
             'destination' => $dest,
             'applied' => true,
             'forced_readonly' => $protected && $force,
             'preview' => $listing,
             'previous' => $hadLive ? $backup : null,
+            'snapshots_kept' => $keepSnapshots,
+            'snapshots_pruned' => $prunedSnapshots,
         ];
+    }
+    /**
+     * Keep the newest $keep pre-restore snapshots for a site and remove the rest.
+     *
+     * Named `<site>.lacmp-pre-restore-<stamp>`, they sit beside the docroot under
+     * the www root. The stamp sorts lexicographically, so newest-first is a plain
+     * reverse string sort.
+     *
+     * @return list<string>
+     */
+    private function pruneSnapshots(Runtime $runtime, Config $config, string $site, int $keep): array
+    {
+        $base = rtrim($config->wwwRoot, '/');
+        if (!$runtime->isDir($base)) {
+            return [];
+        }
+        $prefix = $site . '.lacmp-pre-restore-';
+        $found = [];
+        foreach ($runtime->listDir($base) as $entry) {
+            if (str_starts_with($entry, $prefix)) {
+                $found[] = $entry;
+            }
+        }
+        rsort($found, SORT_STRING);
+
+        $deleted = [];
+        foreach (array_slice($found, $keep) as $old) {
+            $path = $base . '/' . $old;
+            // Never step outside the www root, even though the name came from it.
+            if ($runtime->resolveUnderBase($path, $base) === null) {
+                continue;
+            }
+            $rm = $runtime->exec(['/bin/rm', '-rf', $path], null, 120);
+            if ($rm->ok()) {
+                $deleted[] = $old;
+            }
+        }
+
+        return $deleted;
     }
 }

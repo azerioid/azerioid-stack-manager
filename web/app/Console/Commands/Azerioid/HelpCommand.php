@@ -77,9 +77,10 @@ Usage:
   azerioid updates check [--json]
   azerioid updates apply [--security] --confirm
 
-  azerioid backup create [--local|--spaces] [--db=<name|all>] [--keep=N]
+  azerioid backup create [--local|--spaces] [--db=<name|all>] [--keep=N] [--kdf=pbkdf2|argon2id]
   azerioid backup list   [--local|--spaces] [--json]
   azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]
+  azerioid backup verify  --file=<path|key> [--local|--spaces] [--json]
 
   azerioid totp status  [--email=] [--json]
   azerioid totp disable --email=<admin>
