@@ -252,6 +252,10 @@ final class Kernel
         'vhost.files.copy' => VhostFilesAction::class,
         'vhost.files.chmod' => VhostFilesAction::class,
         'vhost.files.search' => VhostFilesAction::class,
+        // vhost.files.zip is deliberately not registered yet: the op exists and is
+        // tested, but the archive it writes has to be handed to the panel user before the
+        // controller can stream it, and that plumbing is not built. A registered action
+        // that cannot complete is worse than one that is not there.
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 

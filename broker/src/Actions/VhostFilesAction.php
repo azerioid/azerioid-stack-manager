@@ -20,6 +20,9 @@ final class VhostFilesAction
             'vhost.files.mkdir' => 'mkdir',
             'vhost.files.rename' => 'rename',
             'vhost.files.move' => 'move',
+            'vhost.files.copy' => 'copy',
+            'vhost.files.chmod' => 'chmod',
+            'vhost.files.search' => 'search',
             'vhost.files.delete' => 'delete',
             default => throw new BrokerException('Unknown file manager action.', 2),
         };
