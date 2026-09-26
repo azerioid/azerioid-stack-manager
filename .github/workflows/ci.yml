@@ -28,7 +28,7 @@ jobs:
         # older versions cannot even parse it — do not add them here.
         php: ['8.4']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -47,7 +47,7 @@ jobs:
           } echo "extensions ok\n";'
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.composer/cache
           key: composer-${{ matrix.php }}-${{ hashFiles('web/composer.lock') }}
@@ -77,7 +77,7 @@ jobs:
     name: Lint and static checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
