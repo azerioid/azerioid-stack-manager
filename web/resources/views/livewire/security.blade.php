@@ -96,7 +96,7 @@
 
     <form wire:submit="saveCron" class="panel p-5 space-y-3">
         <h2 class="text-sm font-medium">Root crontab</h2>
-        <p class="text-sm text-warn">These run as root. Syntax is validated; command substitution is rejected. Do not put secrets here.</p>
+        <p class="text-sm text-warn">These run as root, and saving replaces the whole file. Prefer the <a class="underline" href="/cron">Scheduled jobs</a> page: a job there belongs to a site, runs as that site rather than as root, and can be changed one at a time. Syntax is validated; command substitution is rejected. Do not put secrets here.</p>
         <textarea class="field h-40" wire:model="crontab_text"></textarea>
         <input class="field font-mono text-sm" wire:model="confirm" placeholder="Type UPDATE-ROOT-CRON to confirm" autocomplete="off">
         <button class="btn-danger" type="submit" wire:confirm="Replace the entire root crontab?">Save crontab</button>

@@ -7,6 +7,8 @@ use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Files\VhostPath;
 use AzerioidPanel\Broker\Network\FirewallGuard;
+use AzerioidPanel\Broker\Cron\CronJob;
+use AzerioidPanel\Broker\Cron\CronRenderer;
 use AzerioidPanel\Broker\Network\FirewallRule;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
@@ -490,6 +492,13 @@ final class FakeBroker
                 'logs.search' => ['key' => $args[0] ?? 'caddy', 'path' => '/var/log/caddy/access.log', 'missing' => false, 'needle' => $args[1] ?? '', 'lines' => ['1:match']],
                 'php.opcache.stats' => ['php_version' => $args[0] ?? '8.4', 'available' => false, 'error' => 'cachetool is not installed; FPM OPcache cannot be inspected from CLI.'],
                 'php.opcache.reset' => ['php_version' => $args[0] ?? '8.4', 'reset' => true, 'available' => true],
+                'cron.jobs' => $this->cronJobs($args, $stdin),
+                'cron.job.add' => $this->cronJobAdd($stdin),
+                'cron.job.del' => $this->cronJobDel($args, $stdin),
+                'cron.job.enable' => $this->cronJobToggle($args, $stdin, true),
+                'cron.job.disable' => $this->cronJobToggle($args, $stdin, false),
+                'cron.job.run' => $this->cronJobRun($args, $stdin),
+                'cron.job.log' => $this->cronJobLog($args, $stdin),
                 'cron.list' => ['lines' => ['# comment', '0 3 * * * /usr/bin/true'], 'warning' => 'These entries run as root.'],
                 'cron.set' => $this->requireConfirm($stdin, 'UPDATE-ROOT-CRON', [
                     'updated' => true,
@@ -686,6 +695,144 @@ final class FakeBroker
         }
 
         throw new BrokerCallException('No such rule on this host: ' . $rule->describe() . '.', 3);
+    }
+
+    /**
+     * Structured cron jobs for the local/test panel (B2).
+     *
+     * Validation and the run-as decision go through the real CronJob, so a command the
+     * broker would refuse is refused here too.
+     *
+     * @var list<array<string,mixed>>
+     */
+    public array $cronJobs = [];
+
+    /** Job id => log lines, so run-now and the log view have something to show. */
+    public array $cronLogs = [];
+
+    /** Domains that have a system identity; a job for anything else is refused. */
+    public array $cronIdentities = ['shop.example.com'];
+
+    /** @var list<string> root crontab lines the panel did not write */
+    public array $unmanagedRootLines = ['0 4 * * * /usr/local/bin/nightly-backup.sh'];
+
+    /** Next run-now exit code, so a test can exercise a failing job. */
+    public int $cronNextExitCode = 0;
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function cronJobs(array $args, array $stdin): array
+    {
+        $owner = strtolower(trim((string) ($args[0] ?? $stdin['owner'] ?? '')));
+        $jobs = $owner === ''
+            ? $this->cronJobs
+            : array_values(array_filter($this->cronJobs, static fn (array $j): bool => $j['owner'] === $owner));
+
+        return [
+            'jobs' => $jobs,
+            'log_dir' => CronRenderer::LOG_DIR,
+            'unmanaged_root_lines' => $this->unmanagedRootLines,
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $stdin
+     * @return array<string,mixed>
+     */
+    private function cronJobAdd(array $stdin): array
+    {
+        try {
+            $job = CronJob::fromInput($stdin, now()->toIso8601String());
+            if ($job->runsAsRoot()) {
+                if (($stdin['confirm'] ?? '') !== 'RUN-AS-ROOT') {
+                    throw new BrokerException('Confirmation phrase did not match.', 3);
+                }
+            } elseif (! in_array($job->owner, $this->cronIdentities, true)) {
+                throw new BrokerException(
+                    'There is no system identity for ' . $job->owner . ' (expected ' . $job->runsAs() . '). '
+                    . 'Run `azerioid vhost reconcile --repair`, or create the vhost first.',
+                    3
+                );
+            }
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        $this->cronJobs[] = $job->toArray();
+
+        return ['job' => $job->toArray()];
+    }
+
+    /** @param list<string> $args */
+    private function cronJobIndex(array $args, array $stdin): int
+    {
+        $id = trim((string) ($args[0] ?? $stdin['id'] ?? ''));
+        foreach ($this->cronJobs as $index => $job) {
+            if (($job['id'] ?? '') === $id) {
+                return $index;
+            }
+        }
+        throw new BrokerCallException('No such cron job: ' . $id . '.', 3);
+    }
+
+    /** @return array<string,mixed> */
+    private function cronJobDel(array $args, array $stdin): array
+    {
+        $index = $this->cronJobIndex($args, $stdin);
+        $job = $this->cronJobs[$index];
+        unset($this->cronJobs[$index]);
+        $this->cronJobs = array_values($this->cronJobs);
+
+        return ['deleted' => $job];
+    }
+
+    /** @return array<string,mixed> */
+    private function cronJobToggle(array $args, array $stdin, bool $enabled): array
+    {
+        $index = $this->cronJobIndex($args, $stdin);
+        if ($enabled && ($this->cronJobs[$index]['owner'] ?? '') === 'root'
+            && ($stdin['confirm'] ?? '') !== 'RUN-AS-ROOT') {
+            throw new BrokerCallException('Confirmation phrase did not match.', 3);
+        }
+        $this->cronJobs[$index]['enabled'] = $enabled;
+
+        return ['job' => $this->cronJobs[$index]];
+    }
+
+    /** @return array<string,mixed> */
+    private function cronJobRun(array $args, array $stdin): array
+    {
+        $index = $this->cronJobIndex($args, $stdin);
+        $job = $this->cronJobs[$index];
+        $code = $this->cronNextExitCode;
+        $this->cronNextExitCode = 0;
+        $this->cronLogs[$job['id']][] = now()->toIso8601String() . ' EXIT ' . $code;
+
+        return [
+            'id' => $job['id'],
+            'ran_as' => $job['runs_as'],
+            'exit_code' => $code,
+            'ok' => $code === 0,
+            'output' => $code === 0 ? 'fake job output' : 'fake job failed',
+            'log' => CronRenderer::logPathFor((string) $job['runs_as'], (string) $job['id']),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function cronJobLog(array $args, array $stdin): array
+    {
+        $index = $this->cronJobIndex($args, $stdin);
+        $job = $this->cronJobs[$index];
+        $lines = $this->cronLogs[$job['id']] ?? [];
+
+        return [
+            'id' => $job['id'],
+            'path' => CronRenderer::logPathFor((string) $job['runs_as'], (string) $job['id']),
+            'missing' => $lines === [],
+            'lines' => $lines,
+        ];
     }
 
     /** A second window would snapshot the unconfirmed state as if it were good. */

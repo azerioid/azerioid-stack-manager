@@ -37,6 +37,7 @@
                         ['logs', 'Logs', '/logs'],
                         ['security', 'Security', '/security'],
                         ['firewall', 'Firewall', '/firewall'],
+                        ['cron', 'Cron', '/cron'],
                         ['audit', 'Audit', '/audit'],
                         ['settings', 'Settings', '/settings'],
                     ];

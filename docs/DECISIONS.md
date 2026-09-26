@@ -732,3 +732,43 @@ someone who meant to close something else, on a host whose only access is that p
 **Deliberately not in this phase:** changing the default incoming policy, interface- and
 zone-scoped rules, rate limiting, and IPv6-specific rules. Each is a separate lockout
 surface and none is needed for "open a port for my app".
+
+## A47 — Cron: structured jobs, running as the vhost identity
+
+**Status:** Accepted (2026-09-26, B2).
+**Relates to:** A25 (per-vhost `az-vh-*` identity), A9/A44 (config is truth, database is a
+projection), A30 (marker discipline), request #4.
+
+**Problem:** the panel's only cron feature was a textarea holding the whole root crontab.
+Three defects, one shape:
+
+1. **Everything ran as root**, including a site's own queue worker — a job whose command
+   that site's code can often influence.
+2. **Saving replaced the entire file.** Two operators editing at once silently lost one
+   set of changes, and one stray keystroke could delete every job on the host.
+3. There was **no way to disable one job, run one job, or see what a job printed.**
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Run-as | A job belongs to a vhost and runs as **that vhost's identity** (`az-vh-*`). This is the security win of the phase: a privilege *reduction* for the common case |
+| Root jobs | Still possible — host maintenance needs them — but require a typed `RUN-AS-ROOT` **every time, including on re-enable**. The asymmetry is deliberate |
+| State | A **broker-owned file**, not the panel database, for the same reason vhosts use config files (A9, A44): the thing that runs must be the thing that is true. cron reads crontabs, so the crontab is rendered from state and the panel reads state back through the broker |
+| Existing lines | **Preserved byte for byte**, outside a marked block (A30). A host that already had root cron jobs — a provider image's backup script, a certbot hook — keeps them. Not politeness: the difference between a feature and an outage |
+| Truncated block | A block missing its end marker **does not** cause the rest of the crontab to be treated as panel content and deleted |
+| No jobs | **No empty block** left behind for an operator to wonder about |
+| Disabled jobs | Stay in the crontab, commented, so *disabled* and *deleted* are distinguishable on the host itself |
+| `@reboot` | **Refused.** It is a startup hook, not a schedule; accepting one would give a site a way to run code on every boot that appears in no schedule anyone reviews |
+| Commands | Pipes and redirection are fine (cron uses `sh`), but a **line break** (ends the crontab line and starts another) and **`%`** (cron's escape, which turns the rest of the line into stdin) are refused |
+| Output | Captured through a generated wrapper, per job, with the exit code. cron's default is to mail output to a local mailbox nobody opens, which is why a failing cron job is normally discovered by its consequences |
+| Log ownership | **One directory per identity, owned by that identity.** Found the hard way: a single root-owned directory makes every site job fail at its own redirection, before its command runs — a feature that looks like "cron is broken" |
+| Log rotation | `copytruncate`, because rotation must not hand a site's log back to root; a lost line of job output is diagnostics, not an integrity control like the audit log. 14 days, `maxsize 20M` |
+| Run now | Uses the **same wrapper and identity** as the schedule, so "it works when I run it" and "it works at 3am" are the same statement |
+| Legacy actions | `cron.list` / `cron.set` are **kept**: released UI and CLI call them, and an operator's scripts may too. The Security page now points at the new page and says why |
+
+**Deliberately not in this phase:** per-job schedules expressed in the panel's own
+vocabulary ("every 5 minutes") on top of cron syntax, catch-up runs for a job missed
+while the host was down, and alerting on a failed scheduled run. The last one is worth
+doing and is the obvious next step: the exit code is already recorded per job, so the
+alert rule has something real to read.
