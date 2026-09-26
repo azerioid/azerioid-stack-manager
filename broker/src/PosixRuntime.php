@@ -142,6 +142,120 @@ final class PosixRuntime implements Runtime
         @chmod($path, $mode);
     }
 
+    public function gzReader(string $path): callable
+    {
+        $fh = @gzopen($path, 'rb');
+        if ($fh === false) {
+            throw new BrokerException(self::describeIoFailure('read', $path, error_get_last()), 1);
+        }
+
+        return static function (int $n) use ($fh): string {
+            if ($n <= 0) {
+                return '';
+            }
+            $buf = '';
+            while (strlen($buf) < $n) {
+                $part = gzread($fh, $n - strlen($buf));
+                if ($part === false || $part === '') {
+                    break;
+                }
+                $buf .= $part;
+            }
+            if ($buf === '') {
+                gzclose($fh);
+            }
+
+            return $buf;
+        };
+    }
+
+    public function execReader(array $command, ?string $cwd = null, int $timeoutSeconds = 3600): array
+    {
+        if ($command === []) {
+            throw new BrokerException('Refusing to execute an empty command.', 1);
+        }
+        foreach ($command as $part) {
+            if (!is_string($part)) {
+                throw new BrokerException('Command argv must be strings.', 1);
+            }
+        }
+
+        $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $proc = @proc_open($command, $descriptors, $pipes, $cwd, self::childEnv(), ['bypass_shell' => true]);
+        if (!is_resource($proc)) {
+            throw new BrokerException('Failed to spawn process.', 1);
+        }
+        fclose($pipes[0]);
+        stream_set_blocking($pipes[2], false);
+
+        $deadline = microtime(true) + $timeoutSeconds;
+        $stderr = '';
+
+        $read = static function (int $n) use ($pipes, &$stderr, $deadline): string {
+            if ($n <= 0) {
+                return '';
+            }
+            // Drain stderr opportunistically so a chatty child cannot deadlock on
+            // a full pipe while we are only reading stdout.
+            $err = stream_get_contents($pipes[2]);
+            if (is_string($err) && $err !== '') {
+                $stderr .= $err;
+            }
+            if (microtime(true) > $deadline) {
+                throw new BrokerException('Command timed out while streaming output.', 1);
+            }
+            $chunk = fread($pipes[1], $n);
+
+            return $chunk === false ? '' : $chunk;
+        };
+
+        $finish = static function () use ($proc, $pipes, &$stderr, $command): ExecResult {
+            $rest = stream_get_contents($pipes[1]);
+            $err = stream_get_contents($pipes[2]);
+            if (is_string($err) && $err !== '') {
+                $stderr .= $err;
+            }
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $code = proc_close($proc);
+
+            return new ExecResult($command, $code, is_string($rest) ? $rest : '', $stderr);
+        };
+
+        return ['read' => $read, 'finish' => $finish];
+    }
+
+    public function appendWriter(string $path, int $mode = 0600): callable
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            throw new BrokerException("Directory does not exist: {$dir}", 1);
+        }
+        $fh = @fopen($path, 'wb');
+        if ($fh === false) {
+            throw new BrokerException(self::describeIoFailure('write', $path, error_get_last()), 1);
+        }
+        @chmod($path, $mode);
+
+        return static function (string $chunk) use (&$fh, $path): void {
+            if ($fh === null) {
+                return;
+            }
+            if ($chunk === '') {
+                fflush($fh);
+                fclose($fh);
+                $fh = null;
+
+                return;
+            }
+            if (fwrite($fh, $chunk) === false) {
+                fclose($fh);
+                $fh = null;
+                throw new BrokerException('Failed writing to ' . $path . '.', 1);
+            }
+        };
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!@rename($from, $to)) {

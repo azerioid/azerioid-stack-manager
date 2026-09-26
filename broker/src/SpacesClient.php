@@ -62,6 +62,117 @@ final class SpacesClient
         return ['key' => $key, 'size' => strlen($body), 'etag' => $res['headers']['etag'] ?? null];
     }
 
+    /**
+     * S3 multipart upload (A2.3).
+     *
+     * put() signs `hash('sha256', $body)` over the whole payload, so it needs the
+     * entire object in memory. Multipart signs each part separately, which bounds
+     * memory to one part regardless of archive size.
+     *
+     * Every part except the last must be at least MIN_PART_BYTES, per the S3 API.
+     */
+    public const MIN_PART_BYTES = 5 * 1024 * 1024;
+
+    public function createMultipart(string $key, string $contentType = 'application/octet-stream'): string
+    {
+        $key = Validator::objectKey($key);
+        $res = $this->request('POST', '/' . $this->bucket . '/' . $key, ['uploads' => ''], '', $contentType);
+        if ($res['status'] >= 400) {
+            throw new BrokerException('Spaces multipart initiate failed (HTTP ' . $res['status'] . ').', 1);
+        }
+        $uploadId = $this->xml($res['body'], 'UploadId');
+        if ($uploadId === '') {
+            throw new BrokerException('Spaces multipart initiate returned no UploadId.', 1);
+        }
+
+        return $uploadId;
+    }
+
+    /** @return string the part ETag, quotes included */
+    public function uploadPart(string $key, string $uploadId, int $partNumber, string $body): string
+    {
+        $key = Validator::objectKey($key);
+        if ($partNumber < 1 || $partNumber > 10000) {
+            throw new BrokerException('Spaces part number out of range.', 2);
+        }
+        $res = $this->request(
+            'PUT',
+            '/' . $this->bucket . '/' . $key,
+            ['partNumber' => (string) $partNumber, 'uploadId' => $uploadId],
+            $body
+        );
+        if ($res['status'] >= 400) {
+            throw new BrokerException(
+                'Spaces part ' . $partNumber . ' upload failed (HTTP ' . $res['status'] . ').',
+                1
+            );
+        }
+        $etag = $res['headers']['etag'] ?? '';
+        if ($etag === '') {
+            throw new BrokerException('Spaces part ' . $partNumber . ' returned no ETag.', 1);
+        }
+
+        return $etag;
+    }
+
+    /**
+     * @param  list<string>  $etags  in part order, 1-based
+     * @return array{key:string, etag:?string, parts:int}
+     */
+    public function completeMultipart(string $key, string $uploadId, array $etags): array
+    {
+        $key = Validator::objectKey($key);
+        if ($etags === []) {
+            throw new BrokerException('Refusing to complete a multipart upload with no parts.', 1);
+        }
+        $xml = '<CompleteMultipartUpload>';
+        foreach ($etags as $i => $etag) {
+            $quoted = str_starts_with($etag, '"') ? $etag : '"' . trim($etag, '"') . '"';
+            $xml .= '<Part><PartNumber>' . ($i + 1) . '</PartNumber><ETag>'
+                . htmlspecialchars($quoted, ENT_XML1) . '</ETag></Part>';
+        }
+        $xml .= '</CompleteMultipartUpload>';
+
+        $res = $this->request(
+            'POST',
+            '/' . $this->bucket . '/' . $key,
+            ['uploadId' => $uploadId],
+            $xml,
+            'text/xml'
+        );
+        if ($res['status'] >= 400) {
+            throw new BrokerException('Spaces multipart complete failed (HTTP ' . $res['status'] . ').', 1);
+        }
+        // S3 can return 200 with an <Error> document when completion fails late.
+        if (str_contains($res['body'], '<Error>')) {
+            $code = $this->xml($res['body'], 'Code');
+            throw new BrokerException(
+                'Spaces multipart complete returned an error' . ($code !== '' ? ': ' . $code : '.'),
+                1
+            );
+        }
+
+        return [
+            'key' => $key,
+            'etag' => $this->xml($res['body'], 'ETag') ?: null,
+            'parts' => count($etags),
+        ];
+    }
+
+    /**
+     * Abandon an upload so its parts stop being billed. Best-effort: this runs on
+     * a failure path and must never mask the original error.
+     */
+    public function abortMultipart(string $key, string $uploadId): void
+    {
+        try {
+            $key = Validator::objectKey($key);
+            $this->request('DELETE', '/' . $this->bucket . '/' . $key, ['uploadId' => $uploadId]);
+        } catch (\Throwable) {
+            // swallowed on purpose
+        }
+    }
+
     public function get(string $key): string
     {
         $key = Validator::objectKey($key);

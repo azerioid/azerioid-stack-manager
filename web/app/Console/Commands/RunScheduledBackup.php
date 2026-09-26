@@ -31,15 +31,38 @@ class RunScheduledBackup extends Command
         if ($last && $last->created_at->isToday()) {
             return self::SUCCESS;
         }
-        $spaces = self::spacesStdin();
         $pass = Setting::getSecret('backup.passphrase');
-        if ($spaces === null || $pass === null) {
-            $this->error('backup secrets missing');
+        if ($pass === null) {
+            $this->error('backup passphrase is not configured');
+
             return self::FAILURE;
         }
-        $stdin = ['spaces' => $spaces, 'passphrase' => $pass];
-        foreach (['backup.caddy' => ['caddy', 'caddy']] as $action => $meta) {
-            $this->runOne($broker, $action, [], $stdin, $meta[0], $meta[1]);
+
+        // Scheduled backups used to require Spaces and bail out without it, so a
+        // local-only schedule was impossible even though manual local backups
+        // worked. The destination now follows the saved schedule (A2.5).
+        $destination = strtolower((string) ($cfg['destination'] ?? 'spaces'));
+        if (! in_array($destination, ['spaces', 'local'], true)) {
+            $this->error("unknown backup destination: {$destination}");
+
+            return self::FAILURE;
+        }
+
+        $stdin = ['passphrase' => $pass, 'destination' => $destination];
+        if ($destination === 'spaces') {
+            $spaces = self::spacesStdin();
+            if ($spaces === null) {
+                $this->error('Spaces credentials are incomplete; configure them or switch the schedule to local.');
+
+                return self::FAILURE;
+            }
+            $stdin['spaces'] = $spaces;
+        }
+        if (isset($cfg['kdf']) && $cfg['kdf'] !== '') {
+            $stdin['kdf'] = (string) $cfg['kdf'];
+        }
+        if (($cfg['include_caddy'] ?? true) !== false) {
+            $this->runOne($broker, 'backup.caddy', [], $stdin, 'caddy', 'caddy');
         }
         $targets = $cfg['databases'] ?? ['all'];
         foreach ($targets as $db) {

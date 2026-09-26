@@ -16,6 +16,7 @@ use AzerioidPanel\Broker\Actions\BackupList;
 use AzerioidPanel\Broker\Actions\BackupPrune;
 use AzerioidPanel\Broker\Actions\BackupRestore;
 use AzerioidPanel\Broker\Actions\BackupRun;
+use AzerioidPanel\Broker\Actions\BackupVerify;
 use AzerioidPanel\Broker\Actions\CronManage;
 use AzerioidPanel\Broker\Actions\DbAccessSet;
 use AzerioidPanel\Broker\Actions\DbAccessShow;
@@ -193,6 +194,7 @@ final class Kernel
         'backup.caddy' => BackupRun::class,
         'backup.list' => BackupList::class,
         'backup.prune' => BackupPrune::class,
+        'backup.verify' => BackupVerify::class,
         'backup.restore.db' => BackupRestore::class,
         'backup.restore.files' => BackupRestore::class,
         'spaces.test' => SpacesTest::class,

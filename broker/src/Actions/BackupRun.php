@@ -3,7 +3,10 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
-use AzerioidPanel\Broker\ArchiveCrypto;
+use AzerioidPanel\Broker\Backup\BackupEngines;
+use AzerioidPanel\Broker\Backup\BackupPipeline;
+use AzerioidPanel\Broker\Backup\LocalArchiveSink;
+use AzerioidPanel\Broker\Backup\SpacesArchiveSink;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
@@ -13,41 +16,89 @@ use AzerioidPanel\Broker\Web\WebServers;
 
 final class BackupRun
 {
+    /**
+     * Archive filename suffix. The format is encoded in the name so `backup.list`
+     * can report it for free: probing the magic bytes would mean one ranged GET
+     * per object against Spaces, which is far too many requests for a listing.
+     * Legacy archives are plain `.bin`.
+     */
+    public const SUFFIX = '.lacmp2.bin';
+
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $passphrase = Validator::password((string) ($input['passphrase'] ?? ''));
         $destination = $this->destination($input);
+        $kdf = isset($input['kdf']) ? (string) $input['kdf'] : null;
         $stamp = gmdate('Ymd\THis') . sprintf('%06d', (int) ((microtime(true) - floor(microtime(true))) * 1_000_000)) . 'Z';
         $keep = max(1, min(365, (int) ($input['keep'] ?? 14)));
 
-        $plain = match ($action) {
-            'backup.db' => $this->dumpDb($runtime, $config, (string) ($args[0] ?? ($input['database'] ?? 'all'))),
-            'backup.files' => $this->tarSite($runtime, $config, (string) ($args[0] ?? '')),
-            'backup.caddy' => $this->tarCaddy($runtime, $config, (bool) ($input['include_fpm'] ?? false)),
+        $source = match ($action) {
+            'backup.db' => $this->dumpDbSource(
+                $runtime,
+                $config,
+                (string) ($args[0] ?? ($input['database'] ?? 'all')),
+                isset($input['engine']) ? (string) $input['engine'] : null
+            ),
+            'backup.files' => $this->tarSiteSource($runtime, $config, (string) ($args[0] ?? '')),
+            'backup.caddy' => $this->tarCaddySource($runtime, $config, (bool) ($input['include_fpm'] ?? false)),
             default => throw new BrokerException('Unknown backup action.', 2),
         };
 
-        $blob = ArchiveCrypto::encrypt($plain['bytes'], $passphrase);
-        unset($plain['bytes']);
-
+        // The archive is streamed straight from the source process into the sink,
+        // so neither the plaintext nor the ciphertext is ever held whole (A2.3).
         if ($destination === 'local') {
-            return $this->storeLocal($runtime, $config, $plain, $blob, $stamp, $keep);
+            $base = rtrim($config->localBackupDir, '/');
+            $dir = $base . '/' . $source['kind'] . '/' . $source['name'];
+            $runtime->mkdir($base, 0750);
+            $runtime->mkdir($base . '/' . $source['kind'], 0750);
+            $runtime->mkdir($dir, 0750);
+            $path = $dir . '/' . $stamp . self::SUFFIX;
+            if ($runtime->resolveUnderBase($path, $base) === null) {
+                throw new BrokerException('Local backup path escaped backup root.', 3);
+            }
+            $sink = new LocalArchiveSink($runtime, $path);
+            $key = $path;
+        } else {
+            $client = SpacesClient::fromInput($input['spaces'] ?? []);
+            $key = 'azerioid/' . $source['kind'] . '/' . $source['name'] . '/' . $stamp . self::SUFFIX;
+            $sink = new SpacesArchiveSink($client, $key);
         }
 
-        $client = SpacesClient::fromInput($input['spaces'] ?? []);
-        $key = 'azerioid/' . $plain['kind'] . '/' . $plain['name'] . '/' . $stamp . '.bin';
-        $uploaded = $client->put($key, $blob);
-        unset($blob);
+        try {
+            $meta = (new BackupPipeline($runtime))->run(
+                $source['command'],
+                $sink,
+                $passphrase,
+                $kdf,
+                $source['cwd'] ?? null
+            );
+        } finally {
+            ($source['cleanup'])();
+        }
 
-        return [
-            'key' => $uploaded['key'],
-            'size' => $uploaded['size'],
-            'kind' => $plain['kind'],
-            'name' => $plain['name'],
-            'sha256' => $plain['sha256'],
-            'destination' => 'spaces',
+        $out = [
+            'key' => $key,
+            'size' => $meta['size'],
+            'kind' => $source['kind'],
+            'name' => $source['name'],
+            'sha256' => $meta['sha256'],
+            'destination' => $destination,
             'encrypted' => true,
+            'format' => 'lacmp2',
+            'kdf' => $meta['kdf'] === 1 ? 'argon2id' : 'pbkdf2',
+            'plain_bytes' => $meta['bytes_in'],
+            'engine' => $source['engine'] ?? null,
         ];
+
+        if ($destination === 'local') {
+            $out['pruned'] = $this->pruneLocal(
+                $runtime,
+                rtrim($config->localBackupDir, '/') . '/' . $source['kind'] . '/' . $source['name'],
+                $keep
+            );
+        }
+
+        return $out;
     }
 
     /** @param array<string,mixed> $input */
@@ -61,42 +112,6 @@ final class BackupRun
             return 'spaces';
         }
         throw new BrokerException('destination must be spaces or local.', 2);
-    }
-
-    /**
-     * @param array{kind:string,name:string,sha256:string} $plain
-     * @return array{key:string,size:int,kind:string,name:string,sha256:string,destination:string,encrypted:bool,pruned:list<string>}
-     */
-    private function storeLocal(
-        Runtime $runtime,
-        Config $config,
-        array $plain,
-        string $blob,
-        string $stamp,
-        int $keep,
-    ): array {
-        $base = rtrim($config->localBackupDir, '/');
-        $dir = $base . '/' . $plain['kind'] . '/' . $plain['name'];
-        $runtime->mkdir($base, 0750);
-        $runtime->mkdir($base . '/' . $plain['kind'], 0750);
-        $runtime->mkdir($dir, 0750);
-        $path = $dir . '/' . $stamp . '.bin';
-        if ($runtime->resolveUnderBase($path, $base) === null) {
-            throw new BrokerException('Local backup path escaped backup root.', 3);
-        }
-        $runtime->writeFile($path, $blob, 0600);
-        $pruned = $this->pruneLocal($runtime, $dir, $keep);
-
-        return [
-            'key' => $path,
-            'size' => strlen($blob),
-            'kind' => $plain['kind'],
-            'name' => $plain['name'],
-            'sha256' => $plain['sha256'],
-            'destination' => 'local',
-            'encrypted' => true,
-            'pruned' => $pruned,
-        ];
     }
 
     /** @return list<string> */
@@ -121,46 +136,33 @@ final class BackupRun
         return $deleted;
     }
 
-    /** @return array{kind:string,name:string,bytes:string,sha256:string} */
-    private function dumpDb(Runtime $runtime, Config $config, string $which): array
+    /**
+     * Each source returns the argv that writes the archive to stdout, plus a
+     * cleanup closure for anything that must outlive the spawn (a credentials
+     * file cannot be deleted before the child has read it).
+     *
+     * The engine is resolved per host, so PostgreSQL and MongoDB are backed up
+     * through their own tools instead of the previous mysqldump-only path (A2.4).
+     *
+     * @return array{kind:string,name:string,command:list<string>,cwd:?string,cleanup:callable():void,engine:string}
+     */
+    private function dumpDbSource(Runtime $runtime, Config $config, string $which, ?string $engine): array
     {
-        $which = trim($which);
-        $args = [
-            '/usr/bin/mysqldump',
-            '--protocol=socket',
-            '--socket=' . $config->mysqlSocket,
-            '--single-transaction',
-            '--quick',
-            '--routines',
-            '--skip-comments',
-        ];
-        if ($which === '' || $which === 'all') {
-            $args[] = '--all-databases';
-            $name = 'all';
-        } else {
-            $name = Validator::dbName($which);
-            $args[] = $name;
-        }
-        $cnf = $this->defaultsFile($runtime, $config);
-        array_splice($args, 1, 0, ['--defaults-extra-file=' . $cnf]);
-        try {
-            $result = $runtime->exec($args, null, 300);
-        } finally {
-            $runtime->deleteFile($cnf);
-        }
-        if (!$result->ok() || $result->stdout === '') {
-            throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'mysqldump failed.', 1);
-        }
+        $driver = (new BackupEngines($config, $runtime))->for($engine);
+        $spec = $driver->dumpCommand($which);
+
         return [
             'kind' => 'db',
-            'name' => $name,
-            'bytes' => $result->stdout,
-            'sha256' => hash('sha256', $result->stdout),
+            'name' => $spec['name'],
+            'command' => $spec['command'],
+            'cwd' => null,
+            'cleanup' => $spec['cleanup'],
+            'engine' => $driver->engine(),
         ];
     }
 
-    /** @return array{kind:string,name:string,bytes:string,sha256:string} */
-    private function tarSite(Runtime $runtime, Config $config, string $site): array
+    /** @return array{kind:string,name:string,command:list<string>,cwd:?string,cleanup:callable():void} */
+    private function tarSiteSource(Runtime $runtime, Config $config, string $site): array
     {
         $site = Validator::siteName($site);
         $root = rtrim($config->wwwRoot, '/') . '/' . $site;
@@ -170,61 +172,42 @@ final class BackupRun
         if (!$runtime->isDir($root) && !$runtime->fileExists($root)) {
             throw new BrokerException('Site directory does not exist.', 2);
         }
-        $out = rtrim($config->stagingDir, '/') . '/files-' . $site . '.tgz';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $result = $runtime->exec([
-            '/usr/bin/tar',
-            '-C',
-            $config->wwwRoot,
-            '-czf',
-            $out,
-            '--exclude=' . $site . '/vendor',
-            '--exclude=' . $site . '/node_modules',
-            '--exclude=' . $site . '/storage/logs',
-            $site,
-        ], null, 300);
-        if (!$result->ok()) {
-            throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'tar failed.', 1);
-        }
-        $bytes = $runtime->readFile($out);
-        $runtime->deleteFile($out);
+
         return [
             'kind' => 'files',
             'name' => $site,
-            'bytes' => $bytes,
-            'sha256' => hash('sha256', $bytes),
+            // `-` writes to stdout, so no intermediate tarball is staged on disk.
+            'command' => [
+                '/usr/bin/tar',
+                '-C', $config->wwwRoot,
+                '-czf', '-',
+                '--exclude=' . $site . '/vendor',
+                '--exclude=' . $site . '/node_modules',
+                '--exclude=' . $site . '/storage/logs',
+                $site,
+            ],
+            'cwd' => null,
+            'cleanup' => static function (): void {
+            },
         ];
     }
 
-    /** @return array{kind:string,name:string,bytes:string,sha256:string} */
-    private function tarCaddy(Runtime $runtime, Config $config, bool $includeFpm): array
+    /** @return array{kind:string,name:string,command:list<string>,cwd:?string,cleanup:callable():void} */
+    private function tarCaddySource(Runtime $runtime, Config $config, bool $includeFpm): array
     {
-        $out = rtrim($config->stagingDir, '/') . '/caddy.tgz';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $cmd = array_merge(['/usr/bin/tar', '-czf', $out], WebServers::for($config)->backupPaths($config));
+        $cmd = array_merge(['/usr/bin/tar', '-czf', '-'], WebServers::for($config)->backupPaths($config));
         if ($includeFpm) {
             $cmd[] = '/etc/php';
         }
-        $result = $runtime->exec($cmd, null, 120);
-        if (!$result->ok()) {
-            throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'tar failed.', 1);
-        }
-        $bytes = $runtime->readFile($out);
-        $runtime->deleteFile($out);
+
         return [
             'kind' => 'caddy',
             'name' => $includeFpm ? 'caddy-php' : 'caddy',
-            'bytes' => $bytes,
-            'sha256' => hash('sha256', $bytes),
+            'command' => $cmd,
+            'cwd' => null,
+            'cleanup' => static function (): void {
+            },
         ];
     }
 
-    private function defaultsFile(Runtime $runtime, Config $config): string
-    {
-        $path = rtrim($config->stagingDir, '/') . '/mysqldump.cnf';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $body = "[client]\nuser={$config->mysqlUser}\npassword={$config->mysqlPassword}\nsocket={$config->mysqlSocket}\n";
-        $runtime->writeFile($path, $body, 0600);
-        return $path;
-    }
 }

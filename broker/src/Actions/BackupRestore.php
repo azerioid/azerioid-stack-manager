@@ -3,7 +3,10 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
-use AzerioidPanel\Broker\ArchiveCrypto;
+use AzerioidPanel\Broker\Backup\ArchiveCipher;
+use AzerioidPanel\Broker\Backup\BackupEngines;
+use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
+use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
@@ -29,56 +32,83 @@ final class BackupRestore
             throw new BrokerException('destination must be spaces or local.', 2);
         }
 
-        $plain = ArchiveCrypto::decrypt($cipher, $passphrase);
+        // Reads LACMP2 and, for archives predating it, LACMP1/LCMP1. LACMP2
+        // authenticates every chunk, so a tampered archive fails here rather than
+        // reaching tar or mysql (A2.2).
+        $format = ArchiveCipher::detect($cipher);
+        $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
 
         $storage = $destination === '' ? 'spaces' : $destination;
         if ($action === 'backup.restore.db') {
             return $this->restoreDb($runtime, $config, $plain, $input) + [
                 'key' => $key,
                 'storage' => $storage,
+                'format' => $format,
             ];
         }
         return $this->restoreFiles($runtime, $config, $plain, $input) + [
             'key' => $key,
             'storage' => $storage,
+            'format' => $format,
         ];
     }
 
-    /** @param array<string,mixed> $input */
-    private function restoreDb(Runtime $runtime, Config $config, string $sql, array $input): array
+    /**
+     * Restore a database dump through the engine that produced it (A2.4).
+     *
+     * The dump reaches the tool on stdin and is never written to disk: the
+     * previous staging copy put decrypted database contents on the filesystem for
+     * no functional reason (A2.1).
+     *
+     * @param array<string,mixed> $input
+     */
+    private function restoreDb(Runtime $runtime, Config $config, string $dump, array $input): array
     {
         $target = Validator::dbName((string) ($input['target'] ?? ''));
         $overwrite = (bool) ($input['overwrite'] ?? false);
+        $driver = (new BackupEngines($config, $runtime))->for(
+            isset($input['engine']) ? (string) $input['engine'] : null
+        );
+
         if ($overwrite) {
             Validator::typedConfirm((string) ($input['confirm'] ?? ''), 'OVERWRITE');
+        } elseif ($driver->targetExists($target)) {
+            throw new BrokerException(
+                'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.',
+                3
+            );
         }
-        // MariaDB rejects bound parameters for SHOW DATABASES LIKE; dbName is already allowlisted.
-        $existing = $runtime->dbQuery('SHOW DATABASES LIKE \'' . $target . '\'');
-        if ($existing !== [] && !$overwrite) {
-            throw new BrokerException('Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.', 3);
+
+        $driver->prepareTarget($target);
+
+        if ($driver instanceof PostgreSqlBackupEngine) {
+            // pg_dump -Fc and pg_dumpall output need different tools; the payload
+            // itself says which, so no metadata has to travel with the archive.
+            $spec = $driver->restoreCommandFor($target, substr($dump, 0, 16));
+            $tool = $spec['tool'];
+        } else {
+            $spec = $driver->restoreCommand($target);
+            $tool = basename($spec['command'][0]);
         }
-        if ($existing === []) {
-            $runtime->dbExec('CREATE DATABASE `' . $target . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-        }
-        $cnf = rtrim($config->stagingDir, '/') . '/mysql-restore.cnf';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $runtime->writeFile($cnf, "[client]\nuser={$config->mysqlUser}\npassword={$config->mysqlPassword}\nsocket={$config->mysqlSocket}\n", 0600);
-        $sqlFile = rtrim($config->stagingDir, '/') . '/restore.sql';
-        $runtime->writeFile($sqlFile, $sql, 0600);
+
         try {
-            $result = $runtime->exec([
-                '/usr/bin/mysql',
-                '--defaults-extra-file=' . $cnf,
-                $target,
-            ], $sql, 300);
+            $result = $runtime->exec($spec['command'], $dump, 1800);
         } finally {
-            $runtime->deleteFile($cnf);
-            $runtime->deleteFile($sqlFile);
+            ($spec['cleanup'])();
         }
         if (!$result->ok()) {
-            throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'mysql restore failed.', 1);
+            throw new BrokerException(
+                trim($result->stderr) !== '' ? trim($result->stderr) : $tool . ' restore failed.',
+                1
+            );
         }
-        return ['target' => $target, 'overwrite' => $overwrite];
+
+        return [
+            'target' => $target,
+            'overwrite' => $overwrite,
+            'engine' => $driver->engine(),
+            'tool' => $tool,
+        ];
     }
 
     /** @param array<string,mixed> $input */
@@ -103,9 +133,28 @@ final class BackupRestore
         $runtime->mkdir($staging, 0750);
         $archive = $staging . '.tgz';
         $runtime->writeFile($archive, $tgz, 0600);
-        $listingResult = $runtime->exec(['/usr/bin/tar', '-tzf', $archive], null, 60);
-        $listing = array_slice(array_values(array_filter(explode("\n", trim($listingResult->stdout)))), 0, 200);
-        $extract = $runtime->exec(['/usr/bin/tar', '-C', $staging, '-xzf', $archive], null, 120);
+        // Inspect BEFORE extracting, by parsing the tar format directly (not the
+        // human-readable `tar -tv` output, which differs between GNU and BSD tar
+        // and is locale-dependent). tar -x runs as root here, so a tampered
+        // archive could otherwise land setuid binaries, device nodes or symlinks
+        // under the web root (A2.1).
+        try {
+            $inspected = ArchiveGuard::inspectStream($runtime->gzReader($archive));
+        } catch (BrokerException $e) {
+            $runtime->deleteFile($archive);
+            throw $e;
+        }
+        $listing = array_slice($inspected['names'], 0, 200);
+
+        $extract = $runtime->exec(
+            array_merge(
+                ['/usr/bin/tar', '-C', $staging],
+                ArchiveGuard::safeExtractFlags(),
+                ['-xzf', $archive]
+            ),
+            null,
+            300
+        );
         $runtime->deleteFile($archive);
         if (!$extract->ok()) {
             throw new BrokerException(trim($extract->stderr) !== '' ? trim($extract->stderr) : 'tar extract to staging failed.', 1);
@@ -138,12 +187,58 @@ final class BackupRestore
             }
             throw new BrokerException(trim($moved->stderr) !== '' ? trim($moved->stderr) : 'Failed to move staged files into place.', 1);
         }
+        // Pre-restore snapshots were never pruned, so every restore left another
+        // full copy of the site next to it until the disk filled (A2.5).
+        $keepSnapshots = max(0, min(20, (int) ($input['keep_snapshots'] ?? 2)));
+        $prunedSnapshots = $this->pruneSnapshots($runtime, $config, $site, $keepSnapshots);
+
         return [
             'destination' => $dest,
             'applied' => true,
             'forced_readonly' => $protected && $force,
             'preview' => $listing,
             'previous' => $hadLive ? $backup : null,
+            'snapshots_kept' => $keepSnapshots,
+            'snapshots_pruned' => $prunedSnapshots,
         ];
+    }
+    /**
+     * Keep the newest $keep pre-restore snapshots for a site and remove the rest.
+     *
+     * Named `<site>.lacmp-pre-restore-<stamp>`, they sit beside the docroot under
+     * the www root. The stamp sorts lexicographically, so newest-first is a plain
+     * reverse string sort.
+     *
+     * @return list<string>
+     */
+    private function pruneSnapshots(Runtime $runtime, Config $config, string $site, int $keep): array
+    {
+        $base = rtrim($config->wwwRoot, '/');
+        if (!$runtime->isDir($base)) {
+            return [];
+        }
+        $prefix = $site . '.lacmp-pre-restore-';
+        $found = [];
+        foreach ($runtime->listDir($base) as $entry) {
+            if (str_starts_with($entry, $prefix)) {
+                $found[] = $entry;
+            }
+        }
+        rsort($found, SORT_STRING);
+
+        $deleted = [];
+        foreach (array_slice($found, $keep) as $old) {
+            $path = $base . '/' . $old;
+            // Never step outside the www root, even though the name came from it.
+            if ($runtime->resolveUnderBase($path, $base) === null) {
+                continue;
+            }
+            $rm = $runtime->exec(['/bin/rm', '-rf', $path], null, 120);
+            if ($rm->ok()) {
+                $deleted[] = $old;
+            }
+        }
+
+        return $deleted;
     }
 }

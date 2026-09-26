@@ -92,6 +92,61 @@ final class FakeRuntime implements Runtime
         $this->dirs[dirname($path)] = true;
     }
 
+    public function gzReader(string $path): callable
+    {
+        if (!array_key_exists($path, $this->files)) {
+            throw new BrokerException("File not found: {$path}", 1);
+        }
+        $raw = $this->files[$path];
+        // Accept both gzipped and plain fixtures so tests can use either.
+        $decoded = @gzdecode($raw);
+        $body = is_string($decoded) ? $decoded : $raw;
+        $pos = 0;
+
+        return static function (int $n) use ($body, &$pos): string {
+            if ($n <= 0) {
+                return '';
+            }
+            $out = substr($body, $pos, $n);
+            $pos += strlen($out);
+
+            return $out;
+        };
+    }
+
+    public function execReader(array $command, ?string $cwd = null, int $timeoutSeconds = 3600): array
+    {
+        $result = $this->exec($command, null, min($timeoutSeconds, 30));
+        $body = $result->stdout;
+        $pos = 0;
+
+        return [
+            'read' => static function (int $n) use ($body, &$pos): string {
+                if ($n <= 0) {
+                    return '';
+                }
+                $out = substr($body, $pos, $n);
+                $pos += strlen($out);
+
+                return $out;
+            },
+            'finish' => static fn (): ExecResult => new ExecResult($command, $result->exitCode, '', $result->stderr),
+        ];
+    }
+
+    public function appendWriter(string $path, int $mode = 0600): callable
+    {
+        $this->files[$path] = '';
+        $files = &$this->files;
+
+        return static function (string $chunk) use (&$files, $path): void {
+            if ($chunk === '') {
+                return;
+            }
+            $files[$path] .= $chunk;
+        };
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!isset($this->files[$from])) {
