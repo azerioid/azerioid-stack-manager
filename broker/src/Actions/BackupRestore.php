@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\Backup\ArchiveCipher;
+use AzerioidPanel\Broker\Backup\BackupEngines;
+use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
 use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
@@ -51,41 +53,62 @@ final class BackupRestore
         ];
     }
 
-    /** @param array<string,mixed> $input */
-    private function restoreDb(Runtime $runtime, Config $config, string $sql, array $input): array
+    /**
+     * Restore a database dump through the engine that produced it (A2.4).
+     *
+     * The dump reaches the tool on stdin and is never written to disk: the
+     * previous staging copy put decrypted database contents on the filesystem for
+     * no functional reason (A2.1).
+     *
+     * @param array<string,mixed> $input
+     */
+    private function restoreDb(Runtime $runtime, Config $config, string $dump, array $input): array
     {
         $target = Validator::dbName((string) ($input['target'] ?? ''));
         $overwrite = (bool) ($input['overwrite'] ?? false);
+        $driver = (new BackupEngines($config, $runtime))->for(
+            isset($input['engine']) ? (string) $input['engine'] : null
+        );
+
         if ($overwrite) {
             Validator::typedConfirm((string) ($input['confirm'] ?? ''), 'OVERWRITE');
+        } elseif ($driver->targetExists($target)) {
+            throw new BrokerException(
+                'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.',
+                3
+            );
         }
-        // MariaDB rejects bound parameters for SHOW DATABASES LIKE; dbName is already allowlisted.
-        $existing = $runtime->dbQuery('SHOW DATABASES LIKE \'' . $target . '\'');
-        if ($existing !== [] && !$overwrite) {
-            throw new BrokerException('Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.', 3);
+
+        $driver->prepareTarget($target);
+
+        if ($driver instanceof PostgreSqlBackupEngine) {
+            // pg_dump -Fc and pg_dumpall output need different tools; the payload
+            // itself says which, so no metadata has to travel with the archive.
+            $spec = $driver->restoreCommandFor($target, substr($dump, 0, 16));
+            $tool = $spec['tool'];
+        } else {
+            $spec = $driver->restoreCommand($target);
+            $tool = basename($spec['command'][0]);
         }
-        if ($existing === []) {
-            $runtime->dbExec('CREATE DATABASE `' . $target . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-        }
-        $cnf = rtrim($config->stagingDir, '/') . '/mysql-restore.cnf';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $runtime->writeFile($cnf, "[client]\nuser={$config->mysqlUser}\npassword={$config->mysqlPassword}\nsocket={$config->mysqlSocket}\n", 0600);
-        // The dump is handed to mysql on stdin; it is deliberately NOT written to
-        // disk. The previous staging copy put decrypted database contents on the
-        // filesystem for no functional reason (A2.1).
+
         try {
-            $result = $runtime->exec([
-                '/usr/bin/mysql',
-                '--defaults-extra-file=' . $cnf,
-                $target,
-            ], $sql, 300);
+            $result = $runtime->exec($spec['command'], $dump, 1800);
         } finally {
-            $runtime->deleteFile($cnf);
+            ($spec['cleanup'])();
         }
         if (!$result->ok()) {
-            throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'mysql restore failed.', 1);
+            throw new BrokerException(
+                trim($result->stderr) !== '' ? trim($result->stderr) : $tool . ' restore failed.',
+                1
+            );
         }
-        return ['target' => $target, 'overwrite' => $overwrite];
+
+        return [
+            'target' => $target,
+            'overwrite' => $overwrite,
+            'engine' => $driver->engine(),
+            'tool' => $tool,
+        ];
     }
 
     /** @param array<string,mixed> $input */

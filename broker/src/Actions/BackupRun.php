@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
+use AzerioidPanel\Broker\Backup\BackupEngines;
 use AzerioidPanel\Broker\Backup\BackupPipeline;
 use AzerioidPanel\Broker\Backup\LocalArchiveSink;
 use AzerioidPanel\Broker\Backup\SpacesArchiveSink;
@@ -24,7 +25,12 @@ final class BackupRun
         $keep = max(1, min(365, (int) ($input['keep'] ?? 14)));
 
         $source = match ($action) {
-            'backup.db' => $this->dumpDbSource($runtime, $config, (string) ($args[0] ?? ($input['database'] ?? 'all'))),
+            'backup.db' => $this->dumpDbSource(
+                $runtime,
+                $config,
+                (string) ($args[0] ?? ($input['database'] ?? 'all')),
+                isset($input['engine']) ? (string) $input['engine'] : null
+            ),
             'backup.files' => $this->tarSiteSource($runtime, $config, (string) ($args[0] ?? '')),
             'backup.caddy' => $this->tarCaddySource($runtime, $config, (bool) ($input['include_fpm'] ?? false)),
             default => throw new BrokerException('Unknown backup action.', 2),
@@ -73,6 +79,7 @@ final class BackupRun
             'format' => 'lacmp2',
             'kdf' => $meta['kdf'] === 1 ? 'argon2id' : 'pbkdf2',
             'plain_bytes' => $meta['bytes_in'],
+            'engine' => $source['engine'] ?? null,
         ];
 
         if ($destination === 'local') {
@@ -123,43 +130,26 @@ final class BackupRun
 
     /**
      * Each source returns the argv that writes the archive to stdout, plus a
-     * cleanup closure for anything that must outlive the spawn (the mysqldump
-     * credentials file cannot be deleted before the child has read it).
+     * cleanup closure for anything that must outlive the spawn (a credentials
+     * file cannot be deleted before the child has read it).
      *
-     * @return array{kind:string,name:string,command:list<string>,cwd:?string,cleanup:callable():void}
+     * The engine is resolved per host, so PostgreSQL and MongoDB are backed up
+     * through their own tools instead of the previous mysqldump-only path (A2.4).
+     *
+     * @return array{kind:string,name:string,command:list<string>,cwd:?string,cleanup:callable():void,engine:string}
      */
-    private function dumpDbSource(Runtime $runtime, Config $config, string $which): array
+    private function dumpDbSource(Runtime $runtime, Config $config, string $which, ?string $engine): array
     {
-        $which = trim($which);
-        $cnf = $this->defaultsFile($runtime, $config);
-        $args = [
-            '/usr/bin/mysqldump',
-            '--defaults-extra-file=' . $cnf,
-            '--protocol=socket',
-            '--socket=' . $config->mysqlSocket,
-            '--single-transaction',
-            '--quick',
-            '--routines',
-            '--skip-comments',
-        ];
-        if ($which === '' || $which === 'all') {
-            $args[] = '--all-databases';
-            $name = 'all';
-        } else {
-            $name = Validator::dbName($which);
-            $args[] = $name;
-        }
+        $driver = (new BackupEngines($config, $runtime))->for($engine);
+        $spec = $driver->dumpCommand($which);
 
         return [
             'kind' => 'db',
-            'name' => $name,
-            'command' => $args,
+            'name' => $spec['name'],
+            'command' => $spec['command'],
             'cwd' => null,
-            'cleanup' => static function () use ($runtime, $cnf): void {
-                if ($runtime->fileExists($cnf)) {
-                    $runtime->deleteFile($cnf);
-                }
-            },
+            'cleanup' => $spec['cleanup'],
+            'engine' => $driver->engine(),
         ];
     }
 
@@ -212,12 +202,4 @@ final class BackupRun
         ];
     }
 
-    private function defaultsFile(Runtime $runtime, Config $config): string
-    {
-        $path = rtrim($config->stagingDir, '/') . '/mysqldump.cnf';
-        $runtime->mkdir($config->stagingDir, 0750);
-        $body = "[client]\nuser={$config->mysqlUser}\npassword={$config->mysqlPassword}\nsocket={$config->mysqlSocket}\n";
-        $runtime->writeFile($path, $body, 0600);
-        return $path;
-    }
 }

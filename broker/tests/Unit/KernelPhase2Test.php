@@ -140,17 +140,12 @@ final class KernelPhase2Test extends TestCase
         $rt->files[$oldDir . '/20260101T000000Z.bin'] = 'old1';
         $rt->files[$oldDir . '/20260102T000000Z.bin'] = 'old2';
         $rt->files[$oldDir . '/20260103T000000Z.bin'] = 'old3';
-        $rt->script([
-            '/usr/bin/mysqldump',
-            '--defaults-extra-file=/var/lib/azerioid-panel/staging/mysqldump.cnf',
-            '--protocol=socket',
-            '--socket=' . $cfg->mysqlSocket,
-            '--single-transaction',
-            '--quick',
-            '--routines',
-            '--skip-comments',
-            '--all-databases',
-        ], 0, '-- dump --');
+        $rt->defaultExec = new \AzerioidPanel\Broker\ExecResult(
+            ['/usr/bin/mysqldump'],
+            0,
+            '-- dump --',
+            ''
+        );
 
         [$code, $json] = $this->capture($this->kernel($rt, $cfg), ['broker', 'backup.db', 'all'], [
             'destination' => 'local',
@@ -236,17 +231,12 @@ final class KernelPhase2Test extends TestCase
         $rt = new FakeRuntime();
         $cfg = new Config();
         $cfg->mysqlPassword = 'db-secret-password-xx';
-        $rt->script([
-            '/usr/bin/mysqldump',
-            '--defaults-extra-file=/var/lib/azerioid-panel/staging/mysqldump.cnf',
-            '--protocol=socket',
-            '--socket=/run/mysqld/mysqld.sock',
-            '--single-transaction',
-            '--quick',
-            '--routines',
-            '--skip-comments',
-            '--all-databases',
-        ], 0, '-- dump --');
+        $rt->defaultExec = new \AzerioidPanel\Broker\ExecResult(
+            ['/usr/bin/mysqldump'],
+            0,
+            '-- dump --',
+            ''
+        );
 
         [$code, $json] = $this->capture($this->kernel($rt, $cfg), ['broker', 'backup.db', 'all'], $this->stdin());
         $this->assertSame(0, $code);
@@ -274,6 +264,7 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame(0, $code);
         $this->assertSame('lacmp2', $json['data']['format']);
         $this->assertSame('pbkdf2', $json['data']['kdf'], 'portable default (A2.2)');
+        $this->assertMysqldumpShape($rt);
 
         $stored = $this->spaces->objects['/azerioid-backups/' . $json['data']['key']] ?? '';
         $this->assertStringStartsWith('LACMP2', $stored);
@@ -347,22 +338,35 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame([], $this->spaces->objects, 'no partial object may be left behind');
     }
 
+    /**
+     * The engine writes a randomly named credentials file per run, so exact-argv
+     * scripting is no longer possible. Supply the dump as the default response and
+     * assert the command *shape* separately via assertMysqldumpShape().
+     */
     private function scriptedDump(string $dump): FakeRuntime
     {
         $rt = new FakeRuntime();
-        $rt->script([
-            '/usr/bin/mysqldump',
-            '--defaults-extra-file=/var/lib/azerioid-panel/staging/mysqldump.cnf',
-            '--protocol=socket',
-            '--socket=/run/mysqld/mysqld.sock',
-            '--single-transaction',
-            '--quick',
-            '--routines',
-            '--skip-comments',
-            '--all-databases',
-        ], 0, $dump);
+        $rt->defaultExec = new \AzerioidPanel\Broker\ExecResult(['/usr/bin/mysqldump'], 0, $dump, '');
 
         return $rt;
+    }
+
+    private function assertMysqldumpShape(FakeRuntime $rt): void
+    {
+        $dumps = array_values(array_filter(
+            $rt->execLog,
+            static fn ($row) => ($row['command'][0] ?? '') === '/usr/bin/mysqldump'
+        ));
+        $this->assertNotSame([], $dumps, 'mysqldump must be invoked');
+        $argv = $dumps[0]['command'];
+        $this->assertSame('--protocol=socket', $argv[2] ?? null);
+        $this->assertContains('--single-transaction', $argv);
+        $this->assertContains('--all-databases', $argv);
+        $this->assertMatchesRegularExpression(
+            '#^--defaults-extra-file=/var/lib/azerioid-panel/staging/mysql-[0-9a-f]{12}\.cnf$#',
+            $argv[1] ?? '',
+            'credentials must come from a per-run file, never argv'
+        );
     }
 
     public function test_restore_db_into_new_name(): void
@@ -380,7 +384,7 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame('projob_restore_1', $json['data']['target']);
         $this->assertFalse($json['data']['overwrite']);
         $sql = implode("\n", $rt->dbExecLog);
-        $this->assertStringContainsString('CREATE DATABASE `projob_restore_1`', $sql);
+        $this->assertStringContainsString('CREATE DATABASE IF NOT EXISTS `projob_restore_1`', $sql);
     }
 
     public function test_restore_db_refuses_existing_without_overwrite(): void
