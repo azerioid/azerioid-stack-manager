@@ -692,3 +692,43 @@ audited broker call and that trace should not be lost.
 deliberately, per call site. There is no blanket hook in `BrokerClient` — one would recurse
 (the job calls the same action) and would silently change the contract of every existing
 caller that uses the returned data.
+
+## A46 — Firewall management: additive rules, broker-side guards, self-closing revert window
+
+**Status:** Accepted (2026-09-26, B2).
+**Relates to:** A1/G2 (firewalld reporting parity), A23 (per-DB remote access rules),
+A36 (mail ports), A22 (panel port), request #2.
+
+**Problem:** A1 fixed firewall *reporting* — the Security page had claimed no firewall
+existed on EL hosts while the broker was writing firewalld rules through
+`DbAccessFirewall`, `MailFirewall` and `SiteHttpFirewall`. It did not add
+*management*: an operator could see rules and not change them, so every real firewall
+change still happened over SSH, outside the panel, with no audit trail.
+
+Managing a firewall from a web interface is the most lockout-prone feature in the
+roadmap after SFTP. The dangerous change is not exotic — it is `deny 22/tcp` typed by
+someone who meant to close something else, on a host whose only access is that port.
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Rule model | **Additive**, never declarative. The panel adds and removes individual rules and leaves every other rule alone. A declarative "make the host match this list" model would delete the operator's own rules, the provider's, and any other tool's, the first time someone pressed Save |
+| Expressiveness | Only the **intersection of both backends**: allow/deny, one port, optional single source. A model that can express everything either backend can do is a model whose two drivers cannot be kept equivalent, and B2 exists so a rule means the same thing on Debian and on Rocky. Anything more complex stays the operator's own, shown as unmanaged and never rewritten |
+| Guards | **In the broker, not the UI.** The same action is reachable from the CLI, a second session, and anything that can call the broker. A hidden button is not a guard |
+| Protected ports | SSH (**read from `sshd_config` and its drop-ins**, not assumed to be 22 — an operator who moved SSH to 2222 is exactly who a hardcoded 22 would lock out), the panel port, and 80/443. Denying them is refused, and so is *deleting the rule that allows them*, which closes the port just as effectively under default-deny |
+| Deny with a source | **Also refused** on protected ports. "Deny SSH from that one address" reads as narrow, but the panel cannot know the operator is not behind it, and that is the case where the mistake cannot be undone |
+| Hostname sources | **Refused.** They resolve at write time; a rule that silently means something else after a DNS change is not a rule an operator can reason about |
+| Unsafe-but-legal changes | **Self-closing revert window.** The rule set is snapshotted, the change applied, and a one-shot systemd timer restores the snapshot unless the operator confirms. Verification is *the operator reaching the panel*, because a host cannot meaningfully test its own inbound reachability — it sees loopback and its own interfaces, not the path the operator's packets take |
+| Why systemd, not PHP | The window must survive PHP-FPM restarting, the queue worker dying and the operator's session ending — all of which happen during exactly the network trouble it exists for. All five targets are systemd |
+| No systemd-run | The change is **refused** unless the operator types `I-HAVE-CONSOLE-ACCESS`. Same for explicitly declining the window |
+| Concurrency | **One unconfirmed change at a time.** A second window would snapshot the unconfirmed state as if it were known-good |
+| Rule deletion on ufw | **By specification, never by the printed index.** `ufw delete 3` deletes whatever happens to be third when it runs — a race between listing rules and confirming a deletion, with a firewall rule as the prize |
+| firewalld writes | Always `--permanent` **plus** `--reload`. A runtime-only rule works all week and vanishes during an unrelated restart |
+| firewalld deny | `reject`, not `drop`. A refused connection fails fast and says so; a silent drop looks like a network fault |
+| Ownership marking | ufw: its own **comment** field. firewalld: a **sidecar index**, because rich rules have nowhere to record a comment. Known cost: if the sidecar is lost, panel rules keep working but stop being recognised as panel-written — which is why the index is keyed by rule identity, so it can be rebuilt |
+| Feature-owned rules | Rules written by another part of the panel (database remote access, mail, site serving) are **not editable here**. Deleting one leaves that feature believing it is still reachable, and it would write the rule back anyway |
+
+**Deliberately not in this phase:** changing the default incoming policy, interface- and
+zone-scoped rules, rate limiting, and IPv6-specific rules. Each is a separate lockout
+surface and none is needed for "open a port for my app".

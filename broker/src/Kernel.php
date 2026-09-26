@@ -28,6 +28,7 @@ use AzerioidPanel\Broker\Actions\DbEngine;
 use AzerioidPanel\Broker\Actions\DbList;
 use AzerioidPanel\Broker\Actions\DbResetpw;
 use AzerioidPanel\Broker\Actions\Fail2banInstall;
+use AzerioidPanel\Broker\Actions\FirewallRules;
 use AzerioidPanel\Broker\Actions\FirewallStatus;
 use AzerioidPanel\Broker\Actions\FirewallUnban;
 use AzerioidPanel\Broker\Actions\LogsSearch;
@@ -207,6 +208,13 @@ final class Kernel
         'spaces.test' => SpacesTest::class,
         'auth.audit' => AuthAudit::class,
         'firewall.status' => FirewallStatus::class,
+        // B2: management, not just reporting. Guards and the revert window live in
+        // the broker (Network\FirewallGuard, Network\FirewallRevertWindow).
+        'firewall.rules' => FirewallRules::class,
+        'firewall.rule.add' => FirewallRules::class,
+        'firewall.rule.delete' => FirewallRules::class,
+        'firewall.confirm' => FirewallRules::class,
+        'firewall.revert' => FirewallRules::class,
         'firewall.unban' => FirewallUnban::class,
         'firewall.fail2ban.install' => Fail2banInstall::class,
         'cron.list' => CronManage::class,
