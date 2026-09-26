@@ -9,6 +9,15 @@ interface Runtime
 
     public function readFile(string $path): string;
 
+    /**
+     * Streaming reader over a gzip file: returns a callable that yields up to n
+     * decompressed bytes per call, and '' at EOF. Keeps archive inspection out
+     * of memory without bypassing this abstraction.
+     *
+     * @return callable(int):string
+     */
+    public function gzReader(string $path): callable;
+
     public function writeFile(string $path, string $contents, int $mode = 0644): void;
 
     public function rename(string $from, string $to): void;

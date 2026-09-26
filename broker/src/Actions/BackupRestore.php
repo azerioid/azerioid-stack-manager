@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\ArchiveCrypto;
+use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
@@ -63,8 +64,9 @@ final class BackupRestore
         $cnf = rtrim($config->stagingDir, '/') . '/mysql-restore.cnf';
         $runtime->mkdir($config->stagingDir, 0750);
         $runtime->writeFile($cnf, "[client]\nuser={$config->mysqlUser}\npassword={$config->mysqlPassword}\nsocket={$config->mysqlSocket}\n", 0600);
-        $sqlFile = rtrim($config->stagingDir, '/') . '/restore.sql';
-        $runtime->writeFile($sqlFile, $sql, 0600);
+        // The dump is handed to mysql on stdin; it is deliberately NOT written to
+        // disk. The previous staging copy put decrypted database contents on the
+        // filesystem for no functional reason (A2.1).
         try {
             $result = $runtime->exec([
                 '/usr/bin/mysql',
@@ -73,7 +75,6 @@ final class BackupRestore
             ], $sql, 300);
         } finally {
             $runtime->deleteFile($cnf);
-            $runtime->deleteFile($sqlFile);
         }
         if (!$result->ok()) {
             throw new BrokerException(trim($result->stderr) !== '' ? trim($result->stderr) : 'mysql restore failed.', 1);
@@ -103,9 +104,28 @@ final class BackupRestore
         $runtime->mkdir($staging, 0750);
         $archive = $staging . '.tgz';
         $runtime->writeFile($archive, $tgz, 0600);
-        $listingResult = $runtime->exec(['/usr/bin/tar', '-tzf', $archive], null, 60);
-        $listing = array_slice(array_values(array_filter(explode("\n", trim($listingResult->stdout)))), 0, 200);
-        $extract = $runtime->exec(['/usr/bin/tar', '-C', $staging, '-xzf', $archive], null, 120);
+        // Inspect BEFORE extracting, by parsing the tar format directly (not the
+        // human-readable `tar -tv` output, which differs between GNU and BSD tar
+        // and is locale-dependent). tar -x runs as root here, so a tampered
+        // archive could otherwise land setuid binaries, device nodes or symlinks
+        // under the web root (A2.1).
+        try {
+            $inspected = ArchiveGuard::inspectStream($runtime->gzReader($archive));
+        } catch (BrokerException $e) {
+            $runtime->deleteFile($archive);
+            throw $e;
+        }
+        $listing = array_slice($inspected['names'], 0, 200);
+
+        $extract = $runtime->exec(
+            array_merge(
+                ['/usr/bin/tar', '-C', $staging],
+                ArchiveGuard::safeExtractFlags(),
+                ['-xzf', $archive]
+            ),
+            null,
+            300
+        );
         $runtime->deleteFile($archive);
         if (!$extract->ok()) {
             throw new BrokerException(trim($extract->stderr) !== '' ? trim($extract->stderr) : 'tar extract to staging failed.', 1);

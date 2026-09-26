@@ -298,7 +298,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_refuses_projob_without_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt('tgz', 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $cfg = new Config();
         $cfg->readonlyVhosts = ['projob.az', 'www.projob.az'];
@@ -315,7 +315,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_projob_requires_typed_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt('tgz', 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $rt->dirs['/data/www/projob.az'] = true;
         $rt->dirs['/var/lib/azerioid-panel/staging/restore-projob.az/projob.az'] = true;
@@ -327,6 +327,39 @@ final class KernelPhase2Test extends TestCase
             $this->stdin() + ['site' => 'projob.az', 'apply' => true, 'force' => true, 'confirm' => 'PROJOB.AZ']
         );
         $this->assertSame(0, $code);
+    }
+
+    /** A real gzipped ustar archive, so restore's archive inspection is exercised. */
+    private static function tgzFixture(string $site = 'projob.az'): string
+    {
+        $put = static fn (string $b, int $o, string $v): string => substr_replace($b, $v, $o, strlen($v));
+        $entry = static function (string $name, string $body, string $type = '0', int $mode = 0644) use ($put): string {
+            $h = str_repeat("\0", 512);
+            $h = $put($h, 0, substr($name, 0, 100));
+            $h = $put($h, 100, sprintf('%07o', $mode) . "\0");
+            $h = $put($h, 108, sprintf('%07o', 0) . "\0");
+            $h = $put($h, 116, sprintf('%07o', 0) . "\0");
+            $h = $put($h, 124, sprintf('%011o', strlen($body)) . "\0");
+            $h = $put($h, 136, sprintf('%011o', 1790000000) . "\0");
+            $h = $put($h, 156, $type);
+            $h = $put($h, 257, "ustar\0" . '00');
+            $h = $put($h, 148, str_repeat(' ', 8));
+            $sum = 0;
+            for ($i = 0; $i < 512; $i++) {
+                $sum += ord($h[$i]);
+            }
+            $h = $put($h, 148, sprintf('%06o', $sum) . "\0 ");
+            if ($body !== '') {
+                $h .= str_pad($body, (int) (ceil(strlen($body) / 512) * 512), "\0");
+            }
+
+            return $h;
+        };
+        $tar = $entry($site, '', '5', 0755)
+            . $entry($site . '/index.php', "<?php\n")
+            . str_repeat("\0", 1024);
+
+        return (string) gzencode($tar);
     }
 
     public function test_auth_audit_parses_sshd_lines(): void

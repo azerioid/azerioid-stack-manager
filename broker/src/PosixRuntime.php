@@ -142,6 +142,33 @@ final class PosixRuntime implements Runtime
         @chmod($path, $mode);
     }
 
+    public function gzReader(string $path): callable
+    {
+        $fh = @gzopen($path, 'rb');
+        if ($fh === false) {
+            throw new BrokerException(self::describeIoFailure('read', $path, error_get_last()), 1);
+        }
+
+        return static function (int $n) use ($fh): string {
+            if ($n <= 0) {
+                return '';
+            }
+            $buf = '';
+            while (strlen($buf) < $n) {
+                $part = gzread($fh, $n - strlen($buf));
+                if ($part === false || $part === '') {
+                    break;
+                }
+                $buf .= $part;
+            }
+            if ($buf === '') {
+                gzclose($fh);
+            }
+
+            return $buf;
+        };
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!@rename($from, $to)) {

@@ -92,6 +92,28 @@ final class FakeRuntime implements Runtime
         $this->dirs[dirname($path)] = true;
     }
 
+    public function gzReader(string $path): callable
+    {
+        if (!array_key_exists($path, $this->files)) {
+            throw new BrokerException("File not found: {$path}", 1);
+        }
+        $raw = $this->files[$path];
+        // Accept both gzipped and plain fixtures so tests can use either.
+        $decoded = @gzdecode($raw);
+        $body = is_string($decoded) ? $decoded : $raw;
+        $pos = 0;
+
+        return static function (int $n) use ($body, &$pos): string {
+            if ($n <= 0) {
+                return '';
+            }
+            $out = substr($body, $pos, $n);
+            $pos += strlen($out);
+
+            return $out;
+        };
+    }
+
     public function rename(string $from, string $to): void
     {
         if (!isset($this->files[$from])) {
