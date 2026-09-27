@@ -115,8 +115,53 @@ site_pool_user_conflict() {
     return 1
 }
 
+# A39 Part A: the dedicated account the panel runs as once migrated. Its end
+# state is produced by the broker (PanelIdentityMigrator), never by hand here.
+PANEL_IDENTITY_USER=azerioid-panel
+
+# The panel identity for this run: the dedicated account when the host already
+# has it (a re-run over a migrated install), otherwise the web user — which a
+# fresh install is moved off by migrate_panel_identity at the end.
+detect_panel_user() {
+    if id -u "${PANEL_IDENTITY_USER}" >/dev/null 2>&1; then
+        echo "${PANEL_IDENTITY_USER}"
+    else
+        echo "${WEB_USER}"
+    fi
+}
+
+# True once the panel has its own php-fpm master with its own php.ini.
+panel_has_own_master() {
+    grep -q -- '-c /etc/azerioid-panel/php.ini' /etc/systemd/system/azerioid-panel-php-fpm.service 2>/dev/null
+}
+
+# Mirror of the broker's PanelFileAccess: when the panel and Caddy are different
+# users, Caddy gets its group on web/ and the state dir and read on web/public —
+# nothing else. No-op while they are the same user.
+apply_panel_file_access() {
+    [[ "${PANEL_USER}" != "${WEB_USER}" ]] || return 0
+    chown "${PANEL_USER}:${WEB_USER}" "${PREFIX}/web" /var/lib/azerioid-panel
+    chmod 0750 "${PREFIX}/web" /var/lib/azerioid-panel
+    [[ -d "${PREFIX}/web/public" ]] && chmod -R o+rX "${PREFIX}/web/public"
+    return 0
+}
+
+# Hand the host to the broker's migrator (ADR A39 Part A) — the single
+# implementation of the dedicated-identity end state, shared with self-update.
+# Idempotent: a no-op on an already-migrated host.
+migrate_panel_identity() {
+    echo "==> Moving the panel onto its dedicated account (${PANEL_IDENTITY_USER}, ADR A39)"
+    local out
+    if ! out="$(printf '%s' '{"confirm":"MIGRATE-PANEL-IDENTITY","origin":"installer"}' | "${PREFIX}/broker" panel.identity.apply 2>&1)"; then
+        echo "${out}" >&2
+        die "The panel is installed and working as '${PANEL_USER}', but moving it to '${PANEL_IDENTITY_USER}' failed and was rolled back (details above). Fix the cause, then run: azerioid panel identity apply --confirm"
+    fi
+    PANEL_USER="${PANEL_IDENTITY_USER}"
+    export PANEL_USER
+}
+
 run_as_web() {
-    sudo -u "${WEB_USER}" -H env COMPOSER_HOME="${COMPOSER_HOME:-/tmp}" \
+    sudo -u "${PANEL_USER}" -H env COMPOSER_HOME="${COMPOSER_HOME:-/tmp}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
         bash -c "cd '${PREFIX}/web' && $*"
 }

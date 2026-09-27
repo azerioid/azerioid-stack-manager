@@ -17,9 +17,9 @@ final class SchedulerInstall
         if (($underPanel === null && $underWww === null) || !$runtime->fileExists($artisan)) {
             throw new BrokerException('Artisan path is missing or outside the panel/www root.', 3);
         }
-        $user = $config->webUser;
+        $user = $config->panelUser;
         if (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user)) {
-            throw new BrokerException('Invalid web user.', 2);
+            throw new BrokerException('Invalid panel user.', 2);
         }
         $body = "# AZERIOID Stack Manager — Laravel scheduler (idempotent)\n"
             . "SHELL=/bin/sh\n"

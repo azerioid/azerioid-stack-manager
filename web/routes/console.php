@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\ConvergePanelIdentity;
 use App\Console\Commands\EvaluateAlerts;
 use App\Console\Commands\PanelMaintenance;
 use App\Console\Commands\RunScheduledBackup;
@@ -20,6 +21,10 @@ Schedule::command(RunScheduledBackup::class)->hourly()->withoutOverlapping();
 // Components page forever) and prune historical records. Every ten minutes keeps
 // the wedge window short without adding meaningful load.
 Schedule::command(PanelMaintenance::class)->everyTenMinutes()->withoutOverlapping();
+
+// A39 Part A: finish moving the panel onto its own account after a self-update
+// deploys the release that introduces it. A no-op broker call once migrated.
+Schedule::command(ConvergePanelIdentity::class)->everyFiveMinutes()->withoutOverlapping();
 
 Schedule::call(function () {
     app(\App\Services\Broker\BrokerClient::class)->call('terminal.session.cleanup', [], [], null, false);

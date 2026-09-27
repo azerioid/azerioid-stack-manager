@@ -10,7 +10,7 @@ ADR-style record of locked decisions for AZERIOID Stack Manager.
 ## A1 — Panel PHP isolation
 
 **Status:** Accepted  
-**Decision:** Panel PHP visible in Settings (runtime section) and Components (non-removable system card). Pinned to PHP 8.4. Broker refuses removal while panel depends on it. Dedicated FPM pool at `/run/php/azerioid-panel.sock`, user `caddy`.
+**Decision:** Panel PHP visible in Settings (runtime section) and Components (non-removable system card). Pinned to PHP 8.4. Broker refuses removal while panel depends on it. Dedicated FPM pool at `/run/php/azerioid-panel.sock`, user `caddy`. **Pool user revised by A39 Part A:** `azerioid-panel`, on its own php-fpm master.
 
 ## A2 — Panel database / legacy migration
 
@@ -334,7 +334,7 @@ Port range `34000–34999` is reserved for these workers (see `docs/port-ownersh
 
 ## A39 — Panel service identity must never be a site PHP-FPM pool user
 
-**Status:** **Part B landed (hotfix, 2026-09-26). Part A pending — next major.**
+**Status:** **Part B landed (hotfix, 2026-09-26). Part A landed in v2.0.0 (2026-09-27)** — see *Part A — as built* below.
 
 **Problem (R1):** `deploy/install.sh` called `detect_web_user()` **before** `bootstrap_packages`
 installed Caddy. `deploy/lib/common.sh` prefers the dedicated `caddy` identity only when that user
@@ -405,6 +405,34 @@ families. That is what makes items 1 and 2 possible and what finally lets site p
   **This is no longer a root path** — the sudo grant is gone — but it is weaker than SPEC intends.
 - `caddy` now holds the broker grant, so a Caddy compromise reaches the broker. Narrower than "any
   hosted site", but not the fully isolated identity Part A delivers.
+
+(Both residual risks above are closed on a host once Part A has migrated it; `azerioid panel identity
+status` exits non-zero until it has.)
+
+**Part A — as built (v2.0.0, 2026-09-27):**
+
+One implementation, `PanelIdentityMigrator` (broker), produces the end state; nothing else writes it.
+
+| Aspect | Decision |
+|--------|----------|
+| Account | `azerioid-panel`, `useradd --system --user-group`, shell `nologin`, home `/var/lib/azerioid-panel` (not created). Runs the pool, the queue worker and the scheduler; the only sudoers entry. |
+| Config | New broker.json key `panel_user` (`Config::$panelUser`), falling back to `web_user` on hosts that predate it. `web_user` keeps meaning the web server / site PHP identity. Panel-identity consumers (self-update, DB snapshot restore, scheduler cron, zip handover, panel `.env`, SFTP forbidden list) now read `panel_user`. |
+| PHP-FPM | `azerioid-panel-php-fpm.service` on every family: `<php-fpm> --nodaemonize -c /etc/azerioid-panel/php.ini --fpm-config /etc/azerioid-panel/php-fpm.conf`, pool in `/etc/azerioid-panel/php-fpm.d/`. apt uses the distro binary (so it still gets security updates on restart); EL keeps its SELinux `bin_t` copy. No `PrivateTmp`: the broker runs from this unit's pool and must keep seeing the real `/tmp`, as it did via `systemd-run` on apt. |
+| php.ini | Seeded from the distro FPM php.ini with only `proc_open`/`proc_get_status` removed from `disable_functions`, so every other setting is unchanged for the panel. The distro php.ini gets back the `disable_functions` line from `<ini>.azerioid-panel.bak` (the pre-install copy), if the installer had loosened it — **only for an FPM-only ini** (Debian/Ubuntu `/etc/php/X/fpm/php.ini`). On EL and Remi the same file also serves the PHP CLI, which runs the queue worker and scheduler and needs `proc_open` to reach the broker, so it is left as it is; on those families site pools keep process-spawning unless the operator locks them down per pool. The ini is chosen in the installer's `fpm_ini()` order, so both sides mean the same file. |
+| Caddy access | Caddy is no longer the panel, so it gets exactly: its group on `web/` and `/var/lib/azerioid-panel` (mode `0750`), world-read on `web/public`, and the socket group. `.env`, `storage/`, `panel.sqlite` stay unreadable to it. `PanelFileAccess` is re-applied by self-update after its `chown -R`. `/run/php` goes back to `root:root` so the web user cannot replace the panel socket. |
+| Order | account → **additive** sudoers (every current holder + new) → php.ini, master conf, pool → files → queue unit, cron, tmpfiles → unit → cut-over (apt: pool leaves the distro master, which is reloaded, then the new master starts) → broker.json/runtime.json → distro php.ini → queue restart → **verify** (unit active; socket `azerioid-panel:<caddy>`; `runuser -u azerioid-panel -- sudo -n broker version.all`; `GET /login` through Caddy returns 200/302; queue active; the PHP CLI can use `proc_open` as `azerioid-panel`) → sudoers `azerioid-panel` only. Any failure reverts every journalled step, restarts the previous master and queue, removes the account it created, and records the failure. |
+| Trigger: existing hosts | The release that first ships this is deployed by the *previous* release's updater, which cannot call it. So the trigger is the panel scheduler: `azerioid:identity-converge` every 5 minutes asks the broker (`panel.identity.converge`), which, when due, starts the migration in its own transient unit (`azerioid-panel-identity.service`) — it restarts the panel FPM master and the queue worker, so it must not run inside either. It waits while any operation is queued/running (rows touched in the last 30 minutes, so a stranded row cannot block it forever) and while a `panel.update.apply` process exists. |
+| Trigger: fresh install | `install.sh` installs as before (panel on the web user), then its last step runs the same migrator (`migrate_panel_identity`). While it runs it holds `/run/azerioid-panel-installing` (removed by an EXIT trap; `/run` clears on reboot), and the scheduled converge refuses while that exists — the scheduler cron line is written early in the install, and a converge mid-install would race the installer for the same files. A re-run over a migrated host keeps the dedicated layout (installer `PANEL_USER`) and the migrator is then a no-op. |
+| Failure | "Fail loudly": the state file `/etc/azerioid-panel/panel-identity.json` (root-only, so the panel cannot clear it) records `failed` with the error and log; automatic retries stop; `azerioid panel identity status` exits non-zero and says so; an operator retries with `azerioid panel identity apply --confirm` (`--dry-run` shows the plan). An attempt that died without rolling back (`running` with nothing running) is reported as interrupted and also waits for an operator. The installer exits non-zero. |
+| Downgrade | Self-update refuses to move a migrated host below `v2.0.0`: older updaters would hand the broker grant back to `web_user` while the pool still runs as `azerioid-panel`, leaving the panel with no broker. |
+| Uninstall | Removes the unit, master config and php.ini. The account goes only with `--drop-db`, because it owns the retained database. |
+
+**Found while building this — Part B defect:** `PanelHardener::rewriteSchedulerCron()` used a pattern
+whose `\s` crossed newlines. On the installer's cron file it rewrote a word of the header comment and
+left the scheduler job running as the old user, so on a host hardened by `harden apply` the scheduler
+may still run as `www-data` — which no longer holds the broker grant, so broker-backed scheduled tasks
+fail. Fixed (line-wise, job lines only, shared `PanelSudoers::cronUser()`); the Part A migration rewrites
+the job line correctly and so repairs such hosts as it migrates them.
 
 ## A43 — Panel self-update snapshots the panel database before migrating
 

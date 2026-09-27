@@ -9,7 +9,7 @@ install_queue_worker() {
 
     sed -i \
         -e "s|@PREFIX@|${PREFIX}|g" \
-        -e "s|@WEB_USER@|${WEB_USER}|g" \
+        -e "s|@PANEL_USER@|${PANEL_USER}|g" \
         -e "s|@PHP_BIN@|${PHP_BIN}|g" \
         /etc/systemd/system/azerioid-panel-queue.service
 

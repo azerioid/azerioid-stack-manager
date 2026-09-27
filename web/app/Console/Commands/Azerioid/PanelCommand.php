@@ -12,7 +12,7 @@ class PanelCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:panel
-        {action : domain|update|harden|default-site}
+        {action : domain|update|harden|identity|default-site}
         {op? : show|set|clear|check|apply|status}
         {--domain= : Panel hostname (set)}
         {--tls= : auto|internal|dns01}
@@ -20,13 +20,13 @@ class PanelCommand extends Command
         {--dns-provider= : cloudflare|digitalocean (dns01)}
         {--staging : Let\'s Encrypt staging}
         {--v= : Target release tag (e.g. v0.2.2); omit to use latest semver tag}
-        {--confirm : Required for panel update apply / harden apply}
+        {--confirm : Required for panel update apply / harden apply / identity apply}
         {--lockdown-site-pools : (harden apply) also disable process spawning in SITE FPM pools}
-        {--dry-run : (harden apply) show the plan without changing anything}
+        {--dry-run : (harden/identity apply) show the plan without changing anything}
         {--mode= : (default-site set) page|404|421}
         {--json : JSON output}';
 
-    protected $description = 'Panel access (custom domain), panel self-update, and R1 identity hardening';
+    protected $description = 'Panel access (custom domain), panel self-update, R1 hardening and the A39 dedicated panel identity';
 
     public function handle(): int
     {
@@ -36,6 +36,7 @@ class PanelCommand extends Command
             'domain' => $this->handleDomain(),
             'update' => $this->handleUpdate(),
             'harden' => $this->handleHarden(),
+            'identity' => $this->handleIdentity(),
             'default-site', 'defaultsite' => $this->handleDefaultSite(),
             default => $this->badAction(),
         };
@@ -43,7 +44,7 @@ class PanelCommand extends Command
 
     private function badAction(): int
     {
-        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply | azerioid panel harden status|apply | azerioid panel default-site show|set|clear');
+        $this->error('Unknown panel action. Use: azerioid panel domain … | azerioid panel update check|apply | azerioid panel harden status|apply | azerioid panel identity status|apply | azerioid panel default-site show|set|clear');
 
         return self::INVALID;
     }
@@ -243,6 +244,109 @@ class PanelCommand extends Command
         }
         $this->newLine();
         $this->line('Residual risk: ' . (string) ($data['residual_risk'] ?? ''));
+
+        return self::SUCCESS;
+    }
+
+    private function handleIdentity(): int
+    {
+        $op = strtolower((string) ($this->argument('op') ?: 'status'));
+
+        return match ($op) {
+            'status', 'check' => $this->identityStatus(),
+            'apply' => $this->identityApply(),
+            default => $this->badIdentityOp(),
+        };
+    }
+
+    private function badIdentityOp(): int
+    {
+        $this->error('Unknown identity op. Use: azerioid panel identity status|apply');
+
+        return self::INVALID;
+    }
+
+    private function identityStatus(): int
+    {
+        try {
+            $data = $this->brokerData('panel.identity.status', [], [], 60, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return ($data['migrated'] ?? false) === true ? self::SUCCESS : self::FAILURE;
+        }
+
+        $this->line('Panel runs as     : '.(string) ($data['panel_pool_user'] ?? '(unknown)'));
+        $this->line('Queue worker as   : '.(string) ($data['queue_user'] ?? '(unknown)'));
+        $this->line('Sudoers grants to : '.implode(', ', (array) ($data['sudoers_users'] ?? [])));
+        $this->line('Panel FPM unit    : '.(string) ($data['fpm_unit'] ?? '(unknown)'));
+        $this->line('Target identity   : '.(string) ($data['target_user'] ?? 'azerioid-panel'));
+        $last = $data['last_attempt'] ?? null;
+        if (is_array($last)) {
+            $this->line('Last attempt      : '.(string) ($last['result'] ?? '?')
+                .(isset($last['finished_at']) ? ' at '.(string) $last['finished_at'] : '')
+                .(isset($last['trigger']) ? ' ('.(string) $last['trigger'].')' : ''));
+        }
+        $this->newLine();
+        if (($data['migrated'] ?? false) === true) {
+            $this->info((string) ($data['verdict'] ?? 'OK'));
+
+            return self::SUCCESS;
+        }
+        $this->warn((string) ($data['verdict'] ?? 'PENDING'));
+
+        // Non-zero until migrated, so a fleet check can gate on it.
+        return self::FAILURE;
+    }
+
+    private function identityApply(): int
+    {
+        $dryRun = (bool) $this->option('dry-run');
+        if (! $dryRun && ! $this->option('confirm')) {
+            $this->error('Refusing to migrate without --confirm (this moves the panel to a new system account and PHP-FPM master).');
+
+            return self::INVALID;
+        }
+
+        try {
+            $data = $this->brokerData('panel.identity.apply', [], [
+                'confirm' => 'MIGRATE-PANEL-IDENTITY',
+                'dry_run' => $dryRun,
+            ], 900);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+
+        if ($dryRun) {
+            $this->info('Dry run — nothing changed.');
+            $this->line('Would migrate: '.(string) ($data['from_user'] ?? '?').' → '.(string) ($data['to_user'] ?? '?'));
+            foreach ((array) ($data['steps'] ?? []) as $i => $step) {
+                $this->line('  '.($i + 1).'. '.(string) $step);
+            }
+
+            return self::SUCCESS;
+        }
+
+        if (($data['already_migrated'] ?? false) === true) {
+            $this->info('Already migrated — the panel runs as azerioid-panel.');
+
+            return self::SUCCESS;
+        }
+
+        $this->info('Panel identity migrated: '.(string) ($data['from_user'] ?? '?').' → '.(string) ($data['to_user'] ?? '?'));
+        foreach ((array) ($data['log'] ?? []) as $line) {
+            $this->line('  · '.(string) $line);
+        }
 
         return self::SUCCESS;
     }

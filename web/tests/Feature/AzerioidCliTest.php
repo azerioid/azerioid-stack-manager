@@ -503,4 +503,37 @@ class AzerioidCliTest extends TestCase
             putenv('AZERIOID_TOTP_CODE');
         }
     }
+
+    public function test_panel_identity_status_is_nonzero_until_migrated(): void
+    {
+        $fake = $this->app->make(FakeBroker::class);
+
+        $this->assertSame(1, Artisan::call('azerioid:panel', ['action' => 'identity', 'op' => 'status']));
+        $this->assertStringContainsString('PENDING', Artisan::output());
+
+        $fake->panelIdentityMigrated = true;
+        $this->assertSame(0, Artisan::call('azerioid:panel', ['action' => 'identity', 'op' => 'status']));
+        $this->assertStringContainsString('azerioid-panel', Artisan::output());
+    }
+
+    public function test_panel_identity_apply_requires_confirm(): void
+    {
+        $fake = $this->app->make(FakeBroker::class);
+
+        $this->assertSame(2, Artisan::call('azerioid:panel', ['action' => 'identity', 'op' => 'apply']));
+        $this->assertFalse($fake->panelIdentityMigrated);
+
+        $this->assertSame(0, Artisan::call('azerioid:panel', ['action' => 'identity', 'op' => 'apply', '--confirm' => true]));
+        $this->assertTrue($fake->panelIdentityMigrated);
+        $this->assertStringContainsString('caddy → azerioid-panel', Artisan::output());
+    }
+
+    public function test_panel_identity_dry_run_changes_nothing(): void
+    {
+        $fake = $this->app->make(FakeBroker::class);
+
+        $this->assertSame(0, Artisan::call('azerioid:panel', ['action' => 'identity', 'op' => 'apply', '--dry-run' => true]));
+        $this->assertStringContainsString('Dry run', Artisan::output());
+        $this->assertFalse($fake->panelIdentityMigrated);
+    }
 }

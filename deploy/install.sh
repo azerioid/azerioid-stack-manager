@@ -163,6 +163,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "  prefix:    ${PREFIX}"
     echo "  php:       ${PANEL_PHP_VERSION}"
     echo "  web user:  ${WEB_USER}"
+    echo "  panel user: azerioid-panel (dedicated account, ADR A39)"
     echo "  port:      ${PANEL_PORT}"
     echo "  access:    ${ACCESS}"
     echo "  totp:      ${REQUIRE_TOTP}"
@@ -178,6 +179,14 @@ fi
 }
 
 echo "==> AZERIOID Stack Manager bootstrap into ${PREFIX}"
+
+# While this runs, the panel scheduler's identity converge (ADR A39) must stay
+# out: the cron line exists long before install finishes, and the migration
+# would race this script for the same pool, unit and sudoers files. This script
+# runs the migration itself at the end (migrate_panel_identity).
+install -d -m 0755 /run
+: > /run/azerioid-panel-installing
+trap 'rm -f /run/azerioid-panel-installing' EXIT
 
 setup_repos
 bootstrap_packages
@@ -215,12 +224,20 @@ if [[ "${EXPLICIT_WEB_USER}" -ne 1 ]] && site_pool_user_conflict "${WEB_USER}"; 
     echo "       an explicit --web-user=<dedicated-user> if you know what you are doing." >&2
     exit 1
 fi
+
+# The identity the panel itself runs as (ADR A39 Part A). WEB_USER stays the web
+# server's; the panel starts on it only until migrate_panel_identity below moves
+# it to its dedicated account, or is already on that account (re-run).
+PANEL_USER="$(detect_panel_user)"
+export PANEL_USER
+echo "==> Panel user: ${PANEL_USER}"
 source "${LIB}/ttyd.sh"
 install_ttyd
 apply_selinux
 install_broker
 install_panel_app
 configure_panel_db
+apply_panel_file_access
 configure_panel_fpm
 configure_panel_caddy
 install_queue_worker
@@ -236,6 +253,7 @@ apply_selinux
 wait_for_panel_ready
 verify_public_panel_ready
 create_install_admin
+migrate_panel_identity
 print_install_success
 print_install_warnings
 

@@ -53,6 +53,14 @@ final class Config
     public string $cronDPath = '/etc/cron.d/azerioid-panel';
     public string $webUser = 'caddy';
 
+    /**
+     * Identity the panel itself runs as: panel FPM pool, queue worker, scheduler,
+     * and the only holder of the broker sudo grant (ADR A39 Part A). Distinct
+     * from $webUser, which is the web server / site PHP identity. Hosts that
+     * predate Part A have no `panel_user` key, so it falls back to web_user.
+     */
+    public string $panelUser = 'caddy';
+
     /** Apache loopback backend (Caddy reverse_proxy target). */
     public int $apacheBackendPort = 8081;
     /** Nginx loopback backend (Caddy reverse_proxy target). */
@@ -198,6 +206,7 @@ final class Config
         $cfg->webUser = (string) ($data['web_user'] ?? $cfg->webUser);
         $cfg->phpUser = $cfg->webUser;
         $cfg->phpGroup = $cfg->webUser;
+        $cfg->panelUser = (string) ($data['panel_user'] ?? $cfg->webUser);
         if (isset($data['panel_runtime']) && is_array($data['panel_runtime'])) {
             $rt = $data['panel_runtime'];
             $cfg->panelPhpVersion = (string) ($rt['php_version'] ?? $cfg->panelPhpVersion);

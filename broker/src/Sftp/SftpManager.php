@@ -315,7 +315,7 @@ CONF;
     {
         $domain = Validator::domain($domain);
         $user = VhostUser::username($domain);
-        $forbidden = array_merge(self::NEVER, [$this->config->webUser, $this->config->phpUser]);
+        $forbidden = array_merge(self::NEVER, [$this->config->webUser, $this->config->phpUser, $this->config->panelUser]);
         if (in_array($user, $forbidden, true) || !str_starts_with($user, VhostUser::PREFIX)) {
             throw new BrokerException('Refusing to grant SFTP to ' . $user . '.', 3);
         }

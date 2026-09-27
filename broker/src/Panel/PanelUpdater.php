@@ -19,6 +19,9 @@ use AzerioidPanel\Broker\Validator;
 final class PanelUpdater
 {
     public const CONFIRM = 'PANEL-UPDATE';
+
+    /** First release that knows the dedicated panel identity (ADR A39 Part A). */
+    public const IDENTITY_MIN_TAG = 'v2.0.0';
     public const CHANNEL = 'main'; // clone default branch only — releases are tags
     public const DEFAULT_REMOTE = 'https://github.com/azerioid/azerioid-stack-manager.git';
     public const LOG_SUMMARY_LIMIT = 30;
@@ -164,6 +167,17 @@ final class PanelUpdater
                     . ' is already ahead of '
                     . $targetTag
                     . '. Create a newer release tag, or pass --v=<tag> explicitly to move to that tag.',
+                    3
+                );
+            }
+            if ($this->config->panelUser === PanelIdentityMigrator::USER
+                && Semver::compare($targetTag, self::IDENTITY_MIN_TAG) < 0) {
+                throw new BrokerException(
+                    'Refusing to move to ' . $targetTag . ': this host runs the panel as '
+                    . PanelIdentityMigrator::USER . ' (ADR A39 Part A), which releases before '
+                    . self::IDENTITY_MIN_TAG . ' do not know about. Their updater would hand the broker '
+                    . 'grant back to the web user while the panel still runs as ' . PanelIdentityMigrator::USER
+                    . ', leaving it with no working broker.',
                     3
                 );
             }
@@ -565,7 +579,7 @@ final class PanelUpdater
     private function deployFromSource(string $source, string $prefix, OperationLogger $log): void
     {
         $log->info('Deploying broker + panel app from source → ' . $prefix);
-        $webUser = $this->config->webUser;
+        $webUser = $this->config->panelUser;
 
         if (!$this->runtime->isDir($prefix)) {
             $this->runtime->mkdir($prefix, 0751);
@@ -595,17 +609,8 @@ final class PanelUpdater
             $this->runtime->chmod('/usr/local/bin/azerioid', 0755);
         }
 
-        // Keep sudoers aligned with broker.json web_user (FPM/queue must be able to invoke the broker).
-        $sudoers = "/etc/sudoers.d/azerioid-panel";
-        $sudoBody = "# AZERIOID Stack Manager — sudoers (panel self-update)\n"
-            . "Defaults:{$webUser} !requiretty\n"
-            . "Defaults:{$webUser} umask=0022\n"
-            . "{$webUser} ALL=(root) NOPASSWD: {$prefix}/broker\n";
-        $this->runtime->writeFile($sudoers, $sudoBody, 0440);
-        $visudo = $this->runtime->exec(['/usr/sbin/visudo', '-c'], null, 15);
-        if (!$visudo->ok()) {
-            throw new BrokerException('Generated sudoers failed visudo -c: ' . $this->execDetail($visudo), 1);
-        }
+        // Keep sudoers aligned with broker.json panel_user (FPM/queue must be able to invoke the broker).
+        PanelSudoers::install($this->runtime, $this->config, [$webUser], 'panel self-update');
 
         // Registry
         if ($this->runtime->isDir($source . '/registry')) {
@@ -687,7 +692,7 @@ final class PanelUpdater
         $this->syncPanelFpmOpenBasedir($prefix, $log);
         $this->assertPanelBrokerAutoloadReadable($prefix, $webUser, $log);
 
-        // Panel SQLite + state dir must remain accessible to the FPM/queue user (web_user).
+        // Panel SQLite + state dir must remain accessible to the FPM/queue user (panel_user).
         $stateDir = '/var/lib/azerioid-panel';
         if ($this->runtime->isDir($stateDir)) {
             $this->runtime->exec(['/usr/bin/chown', $webUser . ':' . $webUser, $stateDir], null, 30);
@@ -700,6 +705,11 @@ final class PanelUpdater
                     }
                 }
             }
+        }
+
+        // The chowns above reset the group Caddy reads the panel through (A39).
+        foreach (PanelFileAccess::apply($this->runtime, $this->config) as $line) {
+            $log->info('Caddy access: ' . $line);
         }
 
         $php = $this->phpBin();
@@ -959,7 +969,7 @@ final class PanelUpdater
         $runuser = $this->runuserBin();
         $shell = 'cd ' . escapeshellarg($cwd) . ' && exec ' . implode(' ', array_map('escapeshellarg', $command));
 
-        return $this->runtime->exec([$runuser, '-u', $this->config->webUser, '--', '/bin/bash', '-lc', $shell], null, $timeout);
+        return $this->runtime->exec([$runuser, '-u', $this->config->panelUser, '--', '/bin/bash', '-lc', $shell], null, $timeout);
     }
 
     private function runuserBin(): string

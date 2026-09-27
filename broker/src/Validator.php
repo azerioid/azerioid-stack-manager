@@ -296,6 +296,8 @@ final class Validator
     /** R1 panel identity remediation (see Panel\PanelHardener). */
     public const HARDEN_PANEL_CONFIRM = 'HARDEN-PANEL';
 
+    public const MIGRATE_PANEL_IDENTITY_CONFIRM = 'MIGRATE-PANEL-IDENTITY';
+
     public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
 
     public const DROP_MAIL_CONFIRM = 'DROP-MAIL';
