@@ -459,6 +459,24 @@ final class PanelIdentityMigratorTest extends TestCase
         $this->assertStringContainsString('memory_limit = 128M', $this->rt->files[M::INI]);
     }
 
+    /**
+     * Regression (found on Rocky 9): stock php.ini has an empty `disable_functions =`
+     * followed by a blank line and a comment. `\s*` after the `=` crossed the newline
+     * and merged the next line into the value; had it been a directive, it would have
+     * been lost.
+     */
+    public function test_allow_proc_open_never_reaches_into_the_next_line(): void
+    {
+        $this->assertSame(
+            "disable_functions = \n\ndisable_classes = Foo\n",
+            M::allowProcOpen("disable_functions =\n\ndisable_classes = Foo\n")
+        );
+        $this->assertSame(
+            "disable_functions = exec\n; comment\n",
+            M::allowProcOpen("disable_functions = exec,proc_open\n; comment\n")
+        );
+    }
+
     public function test_allow_proc_open_only_touches_the_two_functions(): void
     {
         $this->assertSame(

@@ -27,7 +27,7 @@ def repl(match):
         if f not in seen:
             seen.add(f); out.append(f)
     return "disable_functions = " + ",".join(out)
-new, n = re.subn(r"^disable_functions\s*=\s*(.*)$", repl, text, count=1, flags=re.M)
+new, n = re.subn(r"^disable_functions[ \t]*=[ \t]*(.*)$", repl, text, count=1, flags=re.M)
 if n == 1:
     path.write_text(new)
 PY
