@@ -259,6 +259,91 @@
             {{-- vhost.files.move existed in the broker since the File Manager
                  shipped; only the UI was missing, so files could be renamed but
                  never relocated (B1 / G11). --}}
+            {{-- B3: search. Results replace the listing rather than sitting beside it, so it is
+                 always clear which one is being looked at. Bounds come from the broker; when it
+                 reports a truncated list the page says so, because a capped list reads as
+                 "not there". --}}
+            <div class="flex flex-wrap items-center gap-2 border-b border-white/5 px-4 py-2 text-xs">
+                <input class="field max-w-[14rem] text-xs" wire:model="searchQuery"
+                       placeholder="name contains…" @keydown.enter.prevent="$wire.search()">
+                <input class="field max-w-[14rem] font-mono text-xs" wire:model="searchContains"
+                       placeholder="file contains…" @keydown.enter.prevent="$wire.search()">
+                <button type="button" class="btn-ghost text-xs" wire:click="search">Search</button>
+                @if ($searchResult !== null)
+                    <button type="button" class="text-zinc-500 hover:text-zinc-200" wire:click="clearSearch">Back to the listing</button>
+                    <span class="text-zinc-500">
+                        {{ $searchResult['count'] }} match{{ $searchResult['count'] === 1 ? '' : 'es' }}
+                        @if ($searchResult['truncated'])
+                            — showing the first {{ $searchResult['limit'] }}; narrow the search to see the rest
+                        @endif
+                        under <span class="font-mono">{{ $searchResult['path'] === '' ? '/' : $searchResult['path'] }}</span>
+                    </span>
+                @endif
+            </div>
+
+            @if ($searchResult !== null)
+                <div class="divide-y divide-white/5">
+                    @forelse ($searchResult['results'] as $hit)
+                        <div wire:key="hit-{{ $hit['path'] }}" class="flex items-center justify-between px-4 py-2 text-sm">
+                            <span class="font-mono text-zinc-200">
+                                {{ $hit['path'] }}
+                                <span class="ml-2 text-[11px] text-zinc-500">{{ $hit['type'] }}</span>
+                            </span>
+                            @if ($hit['type'] === 'dir')
+                                <button type="button" class="text-xs text-brass-400 hover:underline"
+                                        wire:click="clearSearch(); $wire.openDir('{{ $hit['path'] }}')">Open</button>
+                            @else
+                                <span class="text-[11px] text-zinc-500">{{ $hit['size'] }} bytes</span>
+                            @endif
+                        </div>
+                    @empty
+                        <p class="px-4 py-3 text-sm text-zinc-500">Nothing matched.</p>
+                    @endforelse
+                </div>
+            @endif
+
+            {{-- B3: chmod, presets only. A free-text mode field here is an invitation to type
+                 777, which would let every other identity on the host write this site's files. --}}
+            @if ($chmodTarget !== null)
+                <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
+                    <p class="text-zinc-300">
+                        Permissions for <span class="font-mono text-brass-400">{{ basename($chmodTarget) }}</span>:
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" class="btn-primary" wire:click="applyChmod('default')">
+                            Default ({{ $chmodTargetIsDir ? '755' : '644' }})
+                        </button>
+                        <button type="button" class="btn-ghost" wire:click="applyChmod('private')">
+                            Private ({{ $chmodTargetIsDir ? '700' : '600' }})
+                        </button>
+                        @unless ($chmodTargetIsDir)
+                            <button type="button" class="btn-ghost" wire:click="applyChmod('executable')">Executable (755)</button>
+                        @endunless
+                        <button type="button" class="btn-ghost" wire:click="cancelChmod">Cancel</button>
+                    </div>
+                </div>
+            @endif
+
+            {{-- B3: copy sits next to move because it is the same question — which folder —
+                 with one difference: the folder may be the one the file is already in, so a
+                 same-folder copy is given a -copy suffix rather than refused. --}}
+            @if ($copyFrom !== null)
+                <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
+                    <p class="text-zinc-300">
+                        Copy <span class="font-mono text-brass-400">{{ basename($copyFrom) }}</span> to folder:
+                    </p>
+                    <input class="field mt-2 font-mono text-xs" wire:model="copyTo"
+                           placeholder="relative to the document root; the same folder gives a -copy suffix"
+                           x-init="$nextTick(() => { $el.focus(); $el.select() })"
+                           @keydown.enter.prevent="$wire.copy()"
+                           @keydown.escape.prevent="$wire.cancelCopy()">
+                    <div class="mt-3 flex gap-2">
+                        <button type="button" class="btn-primary" wire:click="copy">Copy</button>
+                        <button type="button" class="btn-ghost" wire:click="cancelCopy">Cancel</button>
+                    </div>
+                </div>
+            @endif
+
             @if ($moveFrom !== null)
                 <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
                     <p class="text-zinc-300">
@@ -286,6 +371,8 @@
             <a class="block px-3 py-1.5 text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" :href="downloadUrl(menu.rel)" @click="menu.open = false">Download</a>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" @click="$wire.startRename(menu.rel); menu.open = false">Rename</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startMove(menu.rel); menu.open = false">Move…</button>
+            <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" @click="$wire.startCopy(menu.rel); menu.open = false">Copy…</button>
+            <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startChmod(menu.rel, menu.dir); menu.open = false">Permissions…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-ink-600" @click="$wire.askDelete(menu.rel, menu.dir); menu.open = false">Delete</button>
         </div>
     @endif

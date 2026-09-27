@@ -41,6 +41,21 @@ class VhostFilesPage extends Component
     public ?string $moveFrom = null;
     public string $moveTo = '';
 
+    public ?string $chmodTarget = null;
+
+    public bool $chmodTargetIsDir = false;
+
+    public string $searchQuery = '';
+
+    public string $searchContains = '';
+
+    /** @var array<string,mixed>|null null = not searching; the listing is shown instead */
+    public ?array $searchResult = null;
+
+    public ?string $copyFrom = null;
+
+    public string $copyTo = '';
+
     public ?string $editorPath = null;
     public string $editorContent = '';
     public bool $editorText = true;
@@ -357,6 +372,130 @@ class VhostFilesPage extends Component
         $this->moveFrom = null;
         $this->moveTo = '';
         $this->reload($broker);
+    }
+
+    public function startCopy(string $rel): void
+    {
+        $this->copyFrom = $rel;
+        $this->copyTo = $this->path;
+        $this->error = null;
+    }
+
+    public function cancelCopy(): void
+    {
+        $this->copyFrom = null;
+        $this->copyTo = '';
+    }
+
+    /**
+     * Copy keeps the filename and changes the directory, like move — but into a
+     * directory that may be the one it is already in, which is the common case
+     * ("give me a second copy of this config to edit"). So a same-directory copy is
+     * allowed and gets a suffix, where move refuses it as a no-op.
+     */
+    public function copy(BrokerClient $broker): void
+    {
+        if ($this->copyFrom === null) {
+            return;
+        }
+        $name = basename($this->copyFrom);
+        $dir = trim(trim($this->copyTo), '/');
+
+        try {
+            $dest = $this->join($dir, $name);
+            if ($dest === $this->copyFrom) {
+                $dest = $this->join($dir, $this->suffixed($name));
+            }
+        } catch (BrokerCallException $e) {
+            $this->error = $e->getMessage();
+
+            return;
+        }
+
+        $this->mutate('vhost.files.copy', [
+            'path' => $this->copyFrom,
+            'dest' => $dest,
+        ], $broker, 'Copied to ' . $dest);
+        $this->copyFrom = null;
+        $this->copyTo = '';
+        $this->reload($broker);
+    }
+
+    /**
+     * `app.css` becomes `app-copy.css`, not `app.css-copy`: the extension is what decides
+     * how the file is served, and a copy that stops being a stylesheet is a surprise.
+     */
+    private function suffixed(string $name): string
+    {
+        $dot = strrpos($name, '.');
+        if ($dot === false || $dot === 0) {
+            return $name . '-copy';
+        }
+
+        return substr($name, 0, $dot) . '-copy' . substr($name, $dot);
+    }
+
+    // ------------------------------------------------------------------ chmod
+
+    public function startChmod(string $rel, bool $isDir): void
+    {
+        $this->chmodTarget = $rel;
+        $this->chmodTargetIsDir = $isDir;
+        $this->error = null;
+    }
+
+    public function cancelChmod(): void
+    {
+        $this->chmodTarget = null;
+    }
+
+    /**
+     * Presets only from the interface. An operator who needs an unusual mode can still send
+     * one through the broker, but a text field here is an invitation to type 777 — which
+     * would let every other identity on the host write this site's files (A25).
+     */
+    public function applyChmod(BrokerClient $broker, string $preset): void
+    {
+        if ($this->chmodTarget === null) {
+            return;
+        }
+        $this->mutate('vhost.files.chmod', [
+            'path' => $this->chmodTarget,
+            'mode' => $preset,
+        ], $broker, 'Permissions set to ' . $preset . ' on ' . $this->chmodTarget);
+        $this->chmodTarget = null;
+        $this->reload($broker);
+    }
+
+    // ----------------------------------------------------------------- search
+
+    public function search(BrokerClient $broker): void
+    {
+        $this->error = null;
+        if (trim($this->searchQuery) === '' && trim($this->searchContains) === '') {
+            $this->clearSearch();
+
+            return;
+        }
+        $res = $broker->call('vhost.files.search', [$this->domain], [
+            'path' => $this->path,
+            'query' => trim($this->searchQuery),
+            'contains' => trim($this->searchContains),
+        ], 60, false);
+        if (! $res->ok) {
+            $this->error = $res->error;
+            $this->searchResult = null;
+
+            return;
+        }
+        $this->searchResult = is_array($res->data) ? $res->data : null;
+    }
+
+    public function clearSearch(): void
+    {
+        $this->searchQuery = '';
+        $this->searchContains = '';
+        $this->searchResult = null;
     }
 
     public function render()

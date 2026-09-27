@@ -249,6 +249,12 @@ final class Kernel
         'vhost.files.mkdir' => VhostFilesAction::class,
         'vhost.files.rename' => VhostFilesAction::class,
         'vhost.files.move' => VhostFilesAction::class,
+        'vhost.files.copy' => VhostFilesAction::class,
+        'vhost.files.chmod' => VhostFilesAction::class,
+        'vhost.files.search' => VhostFilesAction::class,
+        // Assembles the archive as the vhost identity and hands it to the panel user to
+        // stream; see VhostFilesAction::zip() for the ownership handover (G12).
+        'vhost.files.zip' => VhostFilesAction::class,
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 
