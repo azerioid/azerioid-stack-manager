@@ -209,6 +209,128 @@ fi
 printf '%s\n' "${DB_OUT}" | head -c 400
 echo
 
+echo "=== spot-check: default site (real TLS handshake, not config shape) ==="
+# This check exists because the :443 catch-all shipped broken twice and the test suite could
+# not see it either time: both broken forms were valid configurations Caddy accepted, and
+# `caddy adapt` accepted all of them. Only a real request distinguishes them.
+DS_OUT="$("${PREFIX}/broker" panel.default-site.show </dev/null 2>&1)" || true
+if printf '%s' "${DS_OUT}" | grep -q '"enabled":true'; then
+    DS_CODE="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' -H 'Host: nonexistent.invalid' https://127.0.0.1/ 2>/dev/null || echo 000)"
+    DS_BODY="$(curl -sk -m 8 -H 'Host: nonexistent.invalid' https://127.0.0.1/ 2>/dev/null | grep -c 'not configured on this server' || true)"
+    echo "DEFAULT_SITE_443_CODE=${DS_CODE}"
+    # 000 means the handshake itself failed — the original defect. A 200 with no body means
+    # the handshake succeeded but nothing routed, which was the second defect.
+    if [[ "${DS_CODE}" == "200" && "${DS_BODY}" != "0" ]]; then
+        echo "CHECK_DEFAULT_SITE_TLS=pass"
+    else
+        echo "CHECK_DEFAULT_SITE_TLS=fail"
+    fi
+    DS_HTTP="$(curl -s -m 8 -o /dev/null -w '%{http_code}' -H 'Host: nonexistent.invalid' http://127.0.0.1/ 2>/dev/null || echo 000)"
+    if [[ "${DS_HTTP}" == "200" || "${DS_HTTP}" == "308" ]]; then
+        echo "CHECK_DEFAULT_SITE_HTTP=pass"
+    else
+        echo "CHECK_DEFAULT_SITE_HTTP=fail"
+    fi
+    # Specificity: a real HTTPS vhost must keep serving itself, not the catch-all. Picks the
+    # first vhost that actually has a certificate; if none does, the check is not applicable.
+    TLS_VHOST="$("${PREFIX}/broker" vhost.list </dev/null 2>&1 \
+        | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin)["data"]["vhosts"]
+except Exception:
+    sys.exit(0)
+for v in d:
+    st=v.get("tls_status") or {}
+    # Must actually serve HTTPS. A vhost configured without TLS has no HTTPS block, so it
+    # *should* receive the default-site notice — selecting one would fail this check for
+    # behaviour that is correct.
+    if v.get("tls") and st.get("ok") and not v.get("readonly") \
+            and not v.get("domain","").endswith(".invalid"):
+        print(v["domain"]); break' 2>/dev/null || true)"
+    if [[ -n "${TLS_VHOST}" ]]; then
+        VH_DEFAULT="$(curl -sk -m 8 -H "Host: ${TLS_VHOST}" https://127.0.0.1/ 2>/dev/null | grep -c 'not configured on this server' || true)"
+        if [[ "${VH_DEFAULT}" == "0" ]]; then
+            echo "CHECK_DEFAULT_SITE_SPECIFICITY=pass"
+        else
+            echo "CHECK_DEFAULT_SITE_SPECIFICITY=fail"
+        fi
+        echo "SPECIFICITY_VHOST=${TLS_VHOST}"
+    fi
+else
+    echo "DEFAULT_SITE=not-enabled (opt-in; azerioid panel default-site set --mode=page)"
+fi
+
+echo "=== spot-check: firewall (B2) ==="
+FW_OUT="$("${PREFIX}/broker" firewall.rules </dev/null 2>&1)" || true
+if printf '%s' "${FW_OUT}" | grep -q '"ok":true'; then
+    echo "CHECK_FIREWALL_READS=pass"
+else
+    # An inactive firewall is a legitimate host state, so this reports rather than fails.
+    echo "FIREWALL=no active backend or unreadable"
+    echo "CHECK_FIREWALL_READS=fail"
+fi
+if printf '%s' "${FW_OUT}" | grep -q '"backend":"\(ufw\|firewalld\)"'; then
+    echo "CHECK_FIREWALL_BACKEND=pass"
+else
+    echo "CHECK_FIREWALL_BACKEND=fail"
+fi
+# The panel's own rules must still be recognised as panel-owned after an upgrade. If this
+# regresses, the UI offers an operator the chance to delete a rule a feature depends on.
+if printf '%s' "${FW_OUT}" | grep -q '"comment":"azerioid'; then
+    echo "CHECK_FIREWALL_OWNERSHIP=pass"
+else
+    echo "CHECK_FIREWALL_OWNERSHIP=fail"
+fi
+# Protected ports are the lockout guard; an empty list means the guard has nothing to defend.
+if printf '%s' "${FW_OUT}" | grep -q '"protected_ports"'; then
+    echo "CHECK_FIREWALL_PROTECTED=pass"
+else
+    echo "CHECK_FIREWALL_PROTECTED=fail"
+fi
+
+echo "=== spot-check: cron (B2) ==="
+CRON_OUT="$("${PREFIX}/broker" cron.jobs </dev/null 2>&1)" || true
+if printf '%s' "${CRON_OUT}" | grep -q '"ok":true'; then
+    echo "CHECK_CRON_READS=pass"
+else
+    echo "CHECK_CRON_READS=fail"
+fi
+# Root crontab lines the panel did not write must survive every upgrade untouched.
+if printf '%s' "${CRON_OUT}" | grep -q '"unmanaged_root_lines"'; then
+    echo "CHECK_CRON_UNMANAGED_REPORTED=pass"
+else
+    echo "CHECK_CRON_UNMANAGED_REPORTED=fail"
+fi
+# The permission chain, which is what actually broke in v1.8.0: a site identity must be able
+# to traverse the log base to reach its own directory. Unit tests cannot see this — the
+# filesystem double treats mkdir and chown as no-ops.
+CRON_LOG_DIR="/var/log/azerioid-cron"
+if [[ -d "${CRON_LOG_DIR}" ]]; then
+    CRON_MODE="$(stat -c '%a' "${CRON_LOG_DIR}" 2>/dev/null || stat -f '%Lp' "${CRON_LOG_DIR}" 2>/dev/null)"
+    echo "CRON_LOG_DIR_MODE=${CRON_MODE}"
+    if [[ "${CRON_MODE}" == "751" || "${CRON_MODE}" == "755" ]]; then
+        echo "CHECK_CRON_LOG_TRAVERSABLE=pass"
+    else
+        echo "CHECK_CRON_LOG_TRAVERSABLE=fail"
+    fi
+    # Each identity's own directory must belong to it, or the wrapper cannot append.
+    BAD_OWNER=0
+    for d in "${CRON_LOG_DIR}"/az-vh-*; do
+        [[ -d "${d}" ]] || continue
+        if [[ "$(stat -c '%U' "${d}" 2>/dev/null)" != "$(basename "${d}")" ]]; then
+            BAD_OWNER=1
+            echo "CRON_LOG_DIR_WRONG_OWNER=${d}"
+        fi
+    done
+    if [[ "${BAD_OWNER}" == "0" ]]; then
+        echo "CHECK_CRON_LOG_OWNERSHIP=pass"
+    else
+        echo "CHECK_CRON_LOG_OWNERSHIP=fail"
+    fi
+else
+    echo "CRON_LOG_DIR=absent (no scheduled jobs have run yet)"
+fi
+
 echo "VERIFY_REMOTE_DONE"
 EOS
 )
