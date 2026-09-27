@@ -33,6 +33,11 @@ final class SftpManage
             'sftp.unconfigure' => $manager->unconfigure(),
             'sftp.enable' => $manager->enable($domain),
             'sftp.disable' => $manager->disable($domain),
+            'sftp.key.list' => $manager->listKeys($domain),
+            // The key arrives on stdin, never in argv: it is not secret, but argv is world-readable
+            // through /proc and the same channel carries everything else here.
+            'sftp.key.add' => $manager->addKey($domain, (string) ($input['key'] ?? '')),
+            'sftp.key.del' => $manager->removeKey($domain, (string) ($args[1] ?? $input['fingerprint'] ?? '')),
             default => throw new BrokerException('Unsupported sftp action: ' . $action, 2),
         };
     }

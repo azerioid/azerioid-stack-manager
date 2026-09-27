@@ -214,6 +214,9 @@ final class Kernel
         'sftp.unconfigure' => SftpManage::class,
         'sftp.enable' => SftpManage::class,
         'sftp.disable' => SftpManage::class,
+        'sftp.key.list' => SftpManage::class,
+        'sftp.key.add' => SftpManage::class,
+        'sftp.key.del' => SftpManage::class,
         'firewall.status' => FirewallStatus::class,
         // B2: management, not just reporting. Guards and the revert window live in
         // the broker (Network\FirewallGuard, Network\FirewallRevertWindow).

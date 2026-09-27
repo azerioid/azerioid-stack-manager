@@ -44,6 +44,17 @@ final class SftpManager
 
     private const SSHD = '/usr/sbin/sshd';
 
+    /**
+     * Keys live outside the account's home, owned by root.
+     *
+     * The obvious place is `~/.ssh/authorized_keys`, and it is the wrong one: the account owns its
+     * home, so the site could rewrite its own key file. Anyone who got code execution as the site
+     * once could then install a key and keep access after the original hole was closed — a
+     * privilege-persistence foothold handed over by the panel. Root owns these; the site can use
+     * them and cannot change them.
+     */
+    public const KEY_DIR = '/etc/ssh/azerioid-authorized-keys';
+
     /** Accounts that must never end up in the SFTP group, whatever else happens. */
     private const NEVER = ['root'];
 
@@ -182,6 +193,7 @@ final class SftpManager
     private function render(): string
     {
         $group = self::GROUP;
+        $keyDir = self::KEY_DIR;
 
         return <<<SSHD
 # AZERIOID Stack Manager — per-vhost SFTP (broker-managed, ADR A48).
@@ -208,8 +220,191 @@ Match Group {$group}
 	PermitTunnel no
 	GatewayPorts no
 	PermitOpen none
+	# Keys are read from a root-owned directory, not from the account's home: the account owns its
+	# home and could otherwise install its own key and keep access after a hole was closed.
+	AuthorizedKeysFile {$keyDir}/%u
 
 SSHD;
+    }
+
+    /**
+     * Install a public key for one site.
+     *
+     * @return array<string,mixed>
+     */
+    public function addKey(string $domain, string $key): array
+    {
+        $user = $this->identityFor($domain);
+        [$type, $blob, $comment] = self::parseKey($key);
+        $line = $type . ' ' . $blob . ($comment === '' ? '' : ' ' . $comment);
+        $fingerprint = self::fingerprint($blob);
+
+        $existing = $this->keys($user);
+        foreach ($existing as $row) {
+            if ($row['fingerprint'] === $fingerprint) {
+                throw new BrokerException('That key is already installed for ' . $domain . '.', 3);
+            }
+        }
+
+        $this->writeKeys($user, array_merge(
+            array_map(static fn (array $r): string => $r['line'], $existing),
+            [$line]
+        ));
+
+        return ['domain' => $domain, 'user' => $user, 'fingerprint' => $fingerprint, 'keys' => count($existing) + 1];
+    }
+
+    /** @return array<string,mixed> */
+    public function removeKey(string $domain, string $fingerprint): array
+    {
+        $user = $this->identityFor($domain);
+        $fingerprint = trim($fingerprint);
+        $existing = $this->keys($user);
+        $kept = array_values(array_filter(
+            $existing,
+            static fn (array $r): bool => $r['fingerprint'] !== $fingerprint
+        ));
+        if (count($kept) === count($existing)) {
+            throw new BrokerException('No key with that fingerprint for ' . $domain . '.', 3);
+        }
+        $this->writeKeys($user, array_map(static fn (array $r): string => $r['line'], $kept));
+
+        return ['domain' => $domain, 'user' => $user, 'removed' => $fingerprint, 'keys' => count($kept)];
+    }
+
+    /** @return array<string,mixed> */
+    public function listKeys(string $domain): array
+    {
+        $user = $this->identityFor($domain);
+
+        return [
+            'domain' => $domain,
+            'user' => $user,
+            'path' => self::KEY_DIR . '/' . $user,
+            // Never the key material itself: a fingerprint and a comment identify a key without
+            // putting a credential in a log or a JSON response.
+            'keys' => array_map(
+                static fn (array $r): array => ['fingerprint' => $r['fingerprint'], 'type' => $r['type'], 'comment' => $r['comment']],
+                $this->keys($user)
+            ),
+        ];
+    }
+
+    /** @return list<array{line:string,type:string,blob:string,comment:string,fingerprint:string}> */
+    private function keys(string $user): array
+    {
+        $path = self::KEY_DIR . '/' . $user;
+        if (!$this->runtime->fileExists($path)) {
+            return [];
+        }
+        $out = [];
+        foreach (explode("\n", $this->runtime->readFile($path)) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            try {
+                [$type, $blob, $comment] = self::parseKey($line);
+            } catch (BrokerException) {
+                // A line the panel cannot parse is kept verbatim rather than silently dropped: it
+                // may be an operator's own, and deleting someone's access to tidy a file is worse
+                // than showing a row the panel does not fully understand.
+                $out[] = [
+                    'line' => $line, 'type' => 'unknown', 'blob' => '',
+                    'comment' => '', 'fingerprint' => 'unparsed',
+                ];
+
+                continue;
+            }
+            $out[] = [
+                'line' => $line, 'type' => $type, 'blob' => $blob,
+                'comment' => $comment, 'fingerprint' => self::fingerprint($blob),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** @param list<string> $lines */
+    private function writeKeys(string $user, array $lines): void
+    {
+        $this->runtime->mkdir(self::KEY_DIR, 0755);
+        $path = self::KEY_DIR . '/' . $user;
+        $body = $lines === [] ? '' : implode("\n", $lines) . "\n";
+        // 0644 root:root. sshd refuses a key file that is group- or world-writable, and the point of
+        // this location is that the account using the keys cannot write them.
+        $this->runtime->writeFile($path, $body, 0644);
+        $this->runtime->chmod($path, 0644);
+        $this->runtime->chown($path, 'root', 'root');
+    }
+
+    /**
+     * Accepts one bare public key and nothing else.
+     *
+     * Options are refused rather than passed through. `command=`, `environment=` and
+     * `permitopen=` in an authorized_keys line change what the key can do, and a panel that
+     * forwarded them would let an operator paste a line that quietly re-enabled forwarding or ran a
+     * command — undoing the restrictions the Match block exists to impose. An operator who needs
+     * that is editing sshd's files directly, not going through here.
+     *
+     * @return array{0:string,1:string,2:string}
+     */
+    public static function parseKey(string $key): array
+    {
+        $key = trim(preg_replace('/\s+/', ' ', $key) ?? '');
+        if ($key === '') {
+            throw new BrokerException('Provide a public key.', 2);
+        }
+        if (str_contains($key, "\n") || str_contains($key, "\r")) {
+            throw new BrokerException('Provide one key, on one line.', 2);
+        }
+        if (str_starts_with($key, '-----BEGIN')) {
+            throw new BrokerException(
+                'That looks like a *private* key. Paste the public one (.pub) — and treat the key you '
+                . 'just pasted as compromised.',
+                2
+            );
+        }
+
+        $parts = explode(' ', $key);
+        $allowed = [
+            'ssh-ed25519', 'ssh-rsa', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384',
+            'ecdsa-sha2-nistp521', 'sk-ssh-ed25519@openssh.com', 'sk-ecdsa-sha2-nistp256@openssh.com',
+        ];
+        if (!in_array($parts[0], $allowed, true)) {
+            throw new BrokerException(
+                'Unsupported or option-bearing key line. Paste a bare public key beginning with one '
+                . 'of: ' . implode(', ', $allowed) . '.',
+                2
+            );
+        }
+        $blob = $parts[1] ?? '';
+        if ($blob === '' || preg_match('#^[A-Za-z0-9+/]+={0,2}$#', $blob) !== 1) {
+            throw new BrokerException('The key body is not valid base64.', 2);
+        }
+        $decoded = base64_decode($blob, true);
+        if ($decoded === false || strlen($decoded) < 16) {
+            throw new BrokerException('The key body could not be decoded.', 2);
+        }
+        // The blob announces its own type first; a mismatch means a hand-edited line.
+        $length = unpack('N', substr($decoded, 0, 4));
+        $announced = substr($decoded, 4, (int) ($length[1] ?? 0));
+        if ($announced !== $parts[0]) {
+            throw new BrokerException('The key type does not match its body.', 2);
+        }
+
+        $comment = trim(implode(' ', array_slice($parts, 2)));
+        if (strlen($comment) > 200 || preg_match('/[^\P{C}]/u', $comment) === 1) {
+            throw new BrokerException('The key comment must be plain text, at most 200 characters.', 2);
+        }
+
+        return [$parts[0], $blob, $comment];
+    }
+
+    /** OpenSSH's own format, so an operator can compare it with `ssh-keygen -lf`. */
+    public static function fingerprint(string $blob): string
+    {
+        return 'SHA256:' . rtrim(base64_encode(hash('sha256', (string) base64_decode($blob, true), true)), '=');
     }
 
     /** sshd validates the whole configuration, including every drop-in, with -t. */

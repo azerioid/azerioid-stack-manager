@@ -286,6 +286,157 @@ final class SftpManagerTest extends TestCase
         $this->assertArrayNotHasKey(SftpManager::DROP_IN, $rt->files);
     }
 
+    // --------------------------------------------------------------------- keys
+
+    /** A real ed25519 public key, generated for this suite. */
+    private function keyLine(string $comment = 'operator@workstation'): string
+    {
+        // 32-byte key, wrapped in the SSH wire format the parser checks against the type prefix.
+        $type = 'ssh-ed25519';
+        $blob = base64_encode(
+            pack('N', strlen($type)) . $type . pack('N', 32) . str_repeat("\x2a", 32)
+        );
+
+        return $type . ' ' . $blob . ' ' . $comment;
+    }
+
+    /**
+     * The whole reason keys do not live in the account's home: the account owns its home, so it
+     * could install its own key and keep access after the hole that let it in was closed.
+     */
+    public function test_keys_live_outside_the_account_home_and_are_owned_by_root(): void
+    {
+        $rt = $this->runtime();
+
+        $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine()]);
+
+        $path = SftpManager::KEY_DIR . '/az-vh-shop-example-com';
+        $this->assertArrayHasKey($path, $rt->files);
+        $this->assertStringStartsWith('/etc/ssh/', $path);
+        $this->assertStringNotContainsString('/data/www', $path);
+        $this->assertSame(['root', 'root'], $rt->owners[$path] ?? null);
+        $this->assertSame(0644, $rt->modes[$path] ?? null, 'sshd refuses a group-writable key file');
+    }
+
+    public function test_the_drop_in_points_sshd_at_that_directory(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.configure']);
+
+        $this->assertStringContainsString(
+            'AuthorizedKeysFile ' . SftpManager::KEY_DIR . '/%u',
+            $rt->files[SftpManager::DROP_IN]
+        );
+    }
+
+    public function test_a_key_is_listed_by_fingerprint_and_never_echoed_back(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine()]);
+
+        [$code, $json] = $this->call($rt, ['sftp.key.list', 'shop.example.com']);
+
+        $this->assertSame(0, $code);
+        $row = $json['data']['keys'][0];
+        $this->assertStringStartsWith('SHA256:', $row['fingerprint']);
+        $this->assertSame('ssh-ed25519', $row['type']);
+        $this->assertSame('operator@workstation', $row['comment']);
+        $this->assertArrayNotHasKey('blob', $row, 'key material must not be echoed into a response');
+    }
+
+    public function test_a_second_copy_of_the_same_key_is_refused(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine()]);
+
+        [$code, $json] = $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine('other')]);
+
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('already installed', (string) $json['error']);
+    }
+
+    public function test_a_key_can_be_removed_by_fingerprint(): void
+    {
+        $rt = $this->runtime();
+        [, $added] = $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine()]);
+        $fingerprint = $added['data']['fingerprint'];
+
+        [$code, $json] = $this->call($rt, ['sftp.key.del', 'shop.example.com', $fingerprint]);
+
+        $this->assertSame(0, $code);
+        $this->assertSame(0, $json['data']['keys']);
+        $this->assertSame('', $rt->files[SftpManager::KEY_DIR . '/az-vh-shop-example-com']);
+    }
+
+    public function test_removing_a_key_that_is_not_there_is_reported(): void
+    {
+        [$code, $json] = $this->call($this->runtime(), ['sftp.key.del', 'shop.example.com', 'SHA256:nope']);
+
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('No key with that fingerprint', (string) $json['error']);
+    }
+
+    /**
+     * Options in an authorized_keys line change what the key can do — `command=` runs something,
+     * `permitopen=` re-enables forwarding — which would undo the restrictions the Match block
+     * exists to impose.
+     */
+    public function test_an_option_bearing_key_line_is_refused(): void
+    {
+        foreach ([
+            'command="/bin/sh" ' . $this->keyLine(),
+            'permitopen="127.0.0.1:5432" ' . $this->keyLine(),
+            'no-pty,environment="X=1" ' . $this->keyLine(),
+        ] as $line) {
+            [$code] = $this->call($this->runtime(), ['sftp.key.add', 'shop.example.com'], ['key' => $line]);
+            $this->assertNotSame(0, $code, $line);
+        }
+    }
+
+    /** Pasting the wrong file is a mistake worth naming loudly rather than storing. */
+    public function test_a_private_key_is_refused_with_a_warning(): void
+    {
+        [$code, $json] = $this->call($this->runtime(), ['sftp.key.add', 'shop.example.com'], [
+            'key' => '-----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNzaA==',
+        ]);
+
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('private', strtolower((string) $json['error']));
+        $this->assertStringContainsString('compromised', (string) $json['error']);
+    }
+
+    public function test_a_key_whose_body_does_not_match_its_type_is_refused(): void
+    {
+        [$code] = $this->call($this->runtime(), ['sftp.key.add', 'shop.example.com'], [
+            'key' => 'ssh-rsa ' . explode(' ', $this->keyLine())[1],
+        ]);
+
+        $this->assertNotSame(0, $code);
+    }
+
+    public function test_rubbish_is_refused(): void
+    {
+        foreach (['', 'not a key', 'ssh-ed25519 !!!not-base64!!!', 'ssh-ed25519'] as $line) {
+            [$code] = $this->call($this->runtime(), ['sftp.key.add', 'shop.example.com'], ['key' => $line]);
+            $this->assertNotSame(0, $code, json_encode($line));
+        }
+    }
+
+    /**
+     * A line the panel cannot parse is kept rather than dropped: it may be an operator's own, and
+     * deleting someone's access to tidy a file is worse than showing a row we do not understand.
+     */
+    public function test_an_unparsable_existing_line_is_preserved(): void
+    {
+        $rt = $this->runtime();
+        $path = SftpManager::KEY_DIR . '/az-vh-shop-example-com';
+        $rt->files[$path] = "ssh-dss AAAAsomethingOld operator\n";
+
+        $this->call($rt, ['sftp.key.add', 'shop.example.com'], ['key' => $this->keyLine()]);
+
+        $this->assertStringContainsString('ssh-dss AAAAsomethingOld', $rt->files[$path]);
+    }
+
     public function test_status_reports_without_changing_anything(): void
     {
         $rt = $this->runtime();
