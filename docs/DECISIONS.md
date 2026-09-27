@@ -801,3 +801,66 @@ have credentials.
 **Build order for B3 (agreed):** file operations (copy, chmod presets, recursive search,
 multi-upload) → ZIP download moved out of panel PHP into the broker (G12) → archive extract
 behind the mandatory adversarial suite (A40) → SFTP last, on its own.
+## A46-E1 — Erratum: the default site's `:443` catch-all never worked as released
+
+**Status:** Erratum (2026-09-27). Amends the default-site decision (request #14, shipped v1.7.1),
+fixed in **v1.8.1**.
+
+**What was claimed:** that a hostless pair of blocks — `http://:80` and `https://:443` with
+`tls internal` — answers any hostname no vhost claims, on both protocols. The v1.7.1 release
+notes said so, and this document reasoned from **A22**: the `:3169` catch-all had closed the
+same hole on the panel port, so the same shape was assumed to close it on the public ports.
+
+**What was true:** only `:80` worked. On `:443`, an unmatched SNI failed the TLS handshake
+outright — the exact symptom the feature existed to remove. It stayed that way through v1.7.1,
+v1.7.2, v1.8.0 and was found only by running `curl -k -H "Host: nonexistent.invalid"` against a
+live host on 2026-09-27.
+
+**Why the A22 precedent did not transfer.** A22's catch-all serves a **known name**: the panel's
+own address, for which a certificate exists. This one must answer an **arbitrary SNI**, for which
+none does. Those are different problems, and the shared phrase "catch-all" hid that. A precedent
+is only a precedent for the case it actually covered.
+
+**Two distinct causes, either of which alone leaves the feature broken:**
+
+1. A hostless `https://:443` block **provisions no certificate**. `tls internal` signs names Caddy
+   knows about; it does not invent one. There was nothing to present.
+2. Naming the block instead fixes the handshake and serves nothing: Caddy matches site blocks on
+   the HTTP **`Host` header, not SNI**, so a visitor asking for an unknown name matches no site
+   and receives Caddy's empty `200`.
+
+**The corrected shape (v1.8.1) is three parts, each doing one job:** a hostless `https://:443`
+block for routing; a named block under `.invalid` (RFC 2606 — unregistrable, so it can never
+collide with a real site) whose only purpose is to make Caddy provision a certificate; and the
+global `default_sni` pointing at that name. The global must live in the **main Caddyfile**,
+because Caddyfile globals cannot appear in an imported file — which is the structural reason a
+feature designed as "one more snippet in `conf.d`" could not have worked on `:443` at all.
+
+**Rejected: on-demand TLS.** The page is a static neutral notice, identical for every hostname, so
+one certificate serves all of them. On-demand issuance would let anyone trigger certificate
+generation by requesting arbitrary names.
+
+**Consequence for the snapshot/rollback rule:** because the global lives in a file every site on
+the host shares, `apply()` and `disable()` snapshot **both** it and the snippet and restore both
+on failure. Rolling back only the snippet would leave a `default_sni` pointing at a site that no
+longer exists.
+
+**Consequence for `vhost.list`:** the provisioning block is a real named site in `conf.d`, so it
+appeared in the operator's vhost listing as a site they never created and nothing routes to. It is
+now filtered out — listing it invites someone to tidy away the thing that makes unmatched HTTPS
+work.
+
+**The testing lesson, which is the part worth carrying forward.** `DefaultSiteTest` asserted the
+generated snippet's *shape* and that Caddy accepted the config. Both broken forms were valid
+configurations: `caddy adapt` accepted all three attempts, including the two that did not work.
+Config validity cannot see this class of defect. A real handshake check now lives in
+`deploy/verify-release.sh` — it asserts `200` **and** the page body, because `000` was the first
+defect and `200` with an empty body was the second, so either assertion alone would have passed a
+broken build. One of the original tests also encoded the *wrong* invariant
+(`test_blocks_are_hostless_so_named_vhosts_still_win`), requiring the very shape that cannot hold
+a certificate; the real invariant is that the catch-all must never match a name a vhost could
+claim, which `.invalid` satisfies more strongly than hostlessness does.
+
+This is the same seam as two other defects found the same week — a broker action registered but
+unreachable, and a cron log directory whose permission chain the filesystem double treats as a
+no-op. In each case two fakes agreed with each other and the host disagreed with both.

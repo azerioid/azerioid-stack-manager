@@ -258,7 +258,7 @@ final class CronJobsTest extends TestCase
         $this->assertContains(
             ['/sbin/runuser', '-u', 'az-vh-shop-example-com', '--', '/bin/sh',
                 '/usr/local/lib/azerioid-panel/azerioid-cron-run', $id,
-                '/var/log/azerioid-panel/cron/az-vh-shop-example-com/' . $id . '.log', '/bin/true'],
+                CronRenderer::logPathFor('az-vh-shop-example-com', $id), '/bin/true'],
             array_column($rt->execLog, 'command')
         );
     }
@@ -290,6 +290,11 @@ final class CronJobsTest extends TestCase
 
         $dir = CronRenderer::LOG_DIR . '/az-vh-shop-example-com';
         $this->assertArrayHasKey($dir, $rt->dirs);
+        // The whole chain has to be walkable by the identity, not just the leaf. A live host
+        // proved that: the leaf was owned correctly and the job still could not reach it,
+        // because an ancestor was 0750 and owned by someone else.
+        $this->assertSame(0751, $rt->modes[CronRenderer::LOG_DIR] ?? null, 'the base must be traversable by every identity');
+        $this->assertStringStartsNotWith('/var/log/azerioid-panel', CronRenderer::LOG_DIR, 'cron logs must not depend on traversing the audit log directory');
         $this->assertSame(
             ['az-vh-shop-example-com', 'az-vh-shop-example-com'],
             $rt->owners[$dir] ?? null,

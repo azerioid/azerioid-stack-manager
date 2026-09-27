@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Web\DefaultSite;
 use AzerioidPanel\Broker\Tls\AcmeStatusHint;
 use AzerioidPanel\Broker\Tls\CertProbe;
 use AzerioidPanel\Broker\Tls\TlsMode;
@@ -19,6 +20,14 @@ final class VhostList
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
         $vhosts = WebServers::for($config)->listVhosts($runtime, $config);
+        // The default site's certificate-provisioning block is a real named site in conf.d,
+        // so it shows up here — as a site the operator never created, cannot usefully edit,
+        // and which nothing routes to. It is infrastructure for the catch-all, not a vhost;
+        // listing it invites someone to "tidy up" the thing that makes unmatched HTTPS work.
+        $vhosts = array_values(array_filter(
+            $vhosts,
+            static fn (array $v): bool => ($v['domain'] ?? '') !== DefaultSite::SNI_HOST
+        ));
         foreach ($vhosts as &$vhost) {
             $vhost = self::withRuntimeFields($runtime, $vhost);
             // Hash of the config file itself. The panel keeps a projection of these

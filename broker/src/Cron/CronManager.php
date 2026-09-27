@@ -270,7 +270,12 @@ final class CronManager
      */
     private function prepareLogDir(string $runsAs): void
     {
+        // 0751 on the base: every identity must be able to *traverse* it to reach its own
+        // directory, and none may list what other identities have. mkdir() does not change
+        // the mode of a directory that already exists, so the chmod is explicit — the first
+        // version of this relied on mkdir alone and left an unreachable tree behind.
         $this->runtime->mkdir(CronRenderer::LOG_DIR, 0751);
+        $this->runtime->chmod(CronRenderer::LOG_DIR, 0751);
         $dir = CronRenderer::LOG_DIR . '/' . $runsAs;
         $this->runtime->mkdir($dir, 0750);
         if ($runsAs !== 'root') {

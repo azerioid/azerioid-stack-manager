@@ -22,8 +22,18 @@ final class CronRenderer
 
     public const END = '# END azerioid-panel managed jobs';
 
-    /** Base directory for job output; each identity gets its own subdirectory. */
-    public const LOG_DIR = '/var/log/azerioid-panel/cron';
+    /**
+     * Base directory for job output; each identity gets its own subdirectory.
+     *
+     * Deliberately **not** under /var/log/azerioid-panel. That directory is 0750 root:<panel>
+     * because it holds the broker audit log, whose integrity is a security control (A1/R6,
+     * A29) — and a vhost identity is neither its owner nor in its group, so it could not
+     * traverse into it. Measured on a live host: every site job failed with "Permission
+     * denied" at its own redirection, before its command ran. Loosening the audit directory
+     * so cron could write through it would trade a security control for a feature; cron gets
+     * its own tree instead.
+     */
+    public const LOG_DIR = '/var/log/azerioid-cron';
 
     /**
      * Per-identity subdirectory, because a site job runs *as the site* and therefore
