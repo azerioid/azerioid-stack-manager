@@ -11,10 +11,11 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane|pm2|docker|reconcile}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status (with docker)}
+        {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status (with docker); status|apply (with isolation)}
         {--domain= : Vhost domain}
-        {--dry-run : reconcile: report drift without changing the projection}
+        {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
+        {--confirm : Required for isolation apply (moves every vhost identity onto a group of its own)}
         {--repair : reconcile: rebuild the projection from the config files}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -57,8 +58,109 @@ class VhostCommand extends Command
             'pm2' => $this->pm2(),
             'docker' => $this->docker(),
             'reconcile' => $this->reconcile(),
+            'isolation' => $this->isolation(),
             default => $this->invalidAction(),
         };
+    }
+
+    /**
+     * ADR A49: every vhost identity on a group of its own, so no site can open another's files.
+     * Runs automatically from the scheduler; this is the status check and the operator retry.
+     */
+    private function isolation(): int
+    {
+        $op = strtolower((string) ($this->argument('filesOp') ?: 'status'));
+
+        return match ($op) {
+            'status', 'check' => $this->isolationStatus(),
+            'apply' => $this->isolationApply(),
+            default => $this->badIsolationOp(),
+        };
+    }
+
+    private function badIsolationOp(): int
+    {
+        $this->error('Unknown isolation op. Use: azerioid vhost isolation status|apply');
+
+        return self::INVALID;
+    }
+
+    private function isolationStatus(): int
+    {
+        try {
+            $data = $this->brokerData('vhost.isolation.status', [], [], 120, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return ($data['migrated'] ?? false) === true ? self::SUCCESS : self::FAILURE;
+        }
+
+        foreach ((array) ($data['pending'] ?? []) as $row) {
+            $this->line('  '.(string) ($row['user'] ?? '?').'  '.(string) ($row['root'] ?? '').'  — '.(string) ($row['reason'] ?? ''));
+        }
+        $last = $data['last_attempt'] ?? null;
+        if (is_array($last) && $last !== []) {
+            $this->line('Last attempt: '.(string) ($last['result'] ?? '?')
+                .(isset($last['finished_at']) ? ' at '.(string) $last['finished_at'] : '')
+                .(isset($last['trigger']) ? ' ('.(string) $last['trigger'].')' : ''));
+        }
+        if (($data['migrated'] ?? false) === true) {
+            $this->info((string) ($data['verdict'] ?? 'OK'));
+
+            return self::SUCCESS;
+        }
+        $this->warn((string) ($data['verdict'] ?? 'PENDING'));
+
+        // Non-zero until isolated, so a fleet check can gate on it.
+        return self::FAILURE;
+    }
+
+    private function isolationApply(): int
+    {
+        $dryRun = (bool) $this->option('dry-run');
+        if (! $dryRun && ! $this->option('confirm')) {
+            $this->error('Refusing to migrate without --confirm (this regroups every vhost docroot and restarts the web server).');
+
+            return self::INVALID;
+        }
+
+        try {
+            $data = $this->brokerData('vhost.isolation.apply', [], [
+                'confirm' => Validator::ISOLATE_VHOSTS_CONFIRM,
+                'dry_run' => $dryRun,
+            ], 3600);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return self::SUCCESS;
+        }
+        if (($data['already_migrated'] ?? false) === true) {
+            $this->info('Already isolated — every vhost identity has a group of its own.');
+
+            return self::SUCCESS;
+        }
+        if ($dryRun) {
+            $this->info('Dry run — nothing changed. Readers: '.implode(', ', (array) ($data['readers'] ?? [])));
+            foreach ((array) ($data['plan'] ?? []) as $row) {
+                $this->line('  '.(string) ($row['user'] ?? '?').'  '.(string) ($row['root'] ?? '').'  — '.(string) ($row['reason'] ?? ''));
+            }
+
+            return self::SUCCESS;
+        }
+        $this->info('Isolated: '.implode(', ', (array) ($data['identities'] ?? [])));
+        foreach ((array) ($data['log'] ?? []) as $line) {
+            $this->line('  · '.(string) $line);
+        }
+
+        return self::SUCCESS;
     }
 
     /**

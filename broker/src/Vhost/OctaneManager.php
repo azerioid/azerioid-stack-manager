@@ -96,7 +96,7 @@ final class OctaneManager
 
         // Composer / octane:install write vendor + the FrankenPHP binary — grant the
         // supervised user recursive access on the full Laravel app (docroot may be …/public).
-        $this->ensureAppWritable($appDir);
+        $this->ensureAppWritable($appDir, VhostUser::docrootGroup($this->runtime, $domain));
         $this->installOctanePackage($appDir, $php);
         $this->installFrankenPhpServer($appDir, $php);
 
@@ -170,7 +170,7 @@ final class OctaneManager
             VhostUser::ensure($this->runtime, $this->config, $domain, $root);
             $appDir = self::detectLaravel($this->runtime, $root)['app_dir'] ?? null;
             if (is_string($appDir) && $appDir !== '') {
-                $this->ensureFpmWritableLaravelDirs($appDir);
+                $this->ensureFpmWritableLaravelDirs($appDir, VhostUser::docrootGroup($this->runtime, $domain));
             }
         }
 
@@ -459,14 +459,13 @@ final class OctaneManager
         ]));
     }
 
-    private function ensureAppWritable(string $appDir): void
+    private function ensureAppWritable(string $appDir, string $group): void
     {
         if ($this->runtime->getuid() !== 0) {
             return;
         }
         SupervisedUser::ensure($this->runtime);
         $user = SupervisedUser::USERNAME;
-        $group = 'azerioid-vhosts';
 
         // Prefer ACL when available (Ubuntu/Debian often ship without `acl` by default).
         $setfacl = null;
@@ -491,7 +490,7 @@ final class OctaneManager
             }
         }
 
-        // Group-writable fallback: supervised is a member of azerioid-vhosts.
+        // Group-writable fallback: supervised is a member of every vhost group (A49).
         $this->runtime->exec(['/bin/chgrp', '-R', $group, $appDir], null, 60);
         $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
     }
@@ -500,7 +499,7 @@ final class OctaneManager
      * After Octane disable, ensure Laravel writable dirs remain usable by the site FPM pool
      * (group bits + SELinux httpd_sys_rw_content_t when enforcing).
      */
-    private function ensureFpmWritableLaravelDirs(string $appDir): void
+    private function ensureFpmWritableLaravelDirs(string $appDir, string $phpGroup): void
     {
         if ($this->runtime->getuid() !== 0) {
             return;
@@ -511,13 +510,12 @@ final class OctaneManager
             $appDir . '/database',
         ];
         $phpUser = $this->config->phpUser !== '' ? $this->config->phpUser : 'caddy';
-        $phpGroup = VhostUser::GROUP;
         foreach ($dirs as $writable) {
             if (!$this->runtime->isDir($writable)) {
                 continue;
             }
             // Own as the FPM pool user so SQLite/session writes work after Octane
-            // (azerioid-supervised) owned the tree; keep azerioid-vhosts for group share.
+            // (azerioid-supervised) owned the tree; keep the vhost group for group share.
             $this->runtime->exec(['/bin/chown', '-R', $phpUser . ':' . $phpGroup, $writable], null, 30);
             $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
             // Best-effort SELinux rw label (no-op when chcon is absent / SELinux off).

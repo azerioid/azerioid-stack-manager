@@ -177,6 +177,11 @@ PY
     getent passwd | awk -F: '$1 ~ /^az-vh-/ {print $1}' | while read -r user; do
         userdel --force "${user}" 2>/dev/null || true
     done
+    # A49: each identity has a group of its own, and userdel keeps a user-private group
+    # that still has members (the web server, PHP and supervised users are in every one).
+    getent group | awk -F: '$1 ~ /^az-vh-/ {print $1}' | while read -r group; do
+        groupdel "${group}" 2>/dev/null || true
+    done
     if getent passwd azerioid-supervised >/dev/null 2>&1; then
         userdel --force azerioid-supervised 2>/dev/null || true
     fi

@@ -82,6 +82,7 @@ use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
 use AzerioidPanel\Broker\Actions\VhostOctane;
 use AzerioidPanel\Broker\Actions\VhostDocker;
+use AzerioidPanel\Broker\Actions\VhostIsolation;
 use AzerioidPanel\Broker\Actions\VhostPm2;
 use AzerioidPanel\Broker\Actions\WebFrontRouterMigrate;
 use AzerioidPanel\Broker\Actions\WebReleaseSitePorts;
@@ -102,6 +103,9 @@ final class Kernel
         'panel.identity.status' => PanelIdentity::class,
         'panel.identity.apply' => PanelIdentity::class,
         'panel.identity.converge' => PanelIdentity::class,
+        'vhost.isolation.status' => VhostIsolation::class,
+        'vhost.isolation.apply' => VhostIsolation::class,
+        'vhost.isolation.converge' => VhostIsolation::class,
         'panel.fpm.refresh' => PanelFpmRefresh::class,
         'panel.update.check' => PanelUpdateCheck::class,
         'panel.update.apply' => PanelUpdateApply::class,

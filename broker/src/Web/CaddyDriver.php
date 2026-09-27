@@ -584,6 +584,11 @@ EOF;
         if (isset($changes['root']) && $root !== '' && !$runtime->isDir($root)) {
             $runtime->mkdir($root, 0755);
             $runtime->chown($root, $config->phpUser, $config->phpGroup);
+            // A new docroot belongs to the vhost's own identity and group (A49), not to a
+            // 0755 directory every other site's identity can list.
+            if ($domain !== '') {
+                VhostUser::ensure($runtime, $config, $domain, $root);
+            }
         }
         if ($type === 'php' && isset($changes['php_version'])) {
             $phpVersion = $changes['php_version'];

@@ -34,6 +34,15 @@ final class FakeRuntime implements Runtime
      */
     public $execHook = null;
 
+    /**
+     * Stateful responder for tests that simulate a host (users, groups, permissions):
+     * return an ExecResult to answer a command, or null to fall through to the scripted
+     * responses.
+     *
+     * @var (callable(list<string>, ?string):?ExecResult)|null
+     */
+    public $execFn = null;
+
     public ExecResult $defaultExec;
 
     /** @var list<array<string,mixed>> */
@@ -85,6 +94,12 @@ final class FakeRuntime implements Runtime
         $this->execLog[] = ['command' => $command, 'stdin' => $stdin];
         if ($this->execHook !== null) {
             ($this->execHook)($command, $stdin);
+        }
+        if ($this->execFn !== null) {
+            $answer = ($this->execFn)($command, $stdin);
+            if ($answer !== null) {
+                return $answer;
+            }
         }
         $key = implode("\0", $command);
         return $this->execResponses[$key] ?? $this->defaultExec;
