@@ -25,6 +25,7 @@ final class VhostFilesAction
             'vhost.files.chmod' => 'chmod',
             'vhost.files.search' => 'search',
             'vhost.files.zip' => 'zip',
+            'vhost.files.extract' => 'extract',
             'vhost.files.delete' => 'delete',
             default => throw new BrokerException('Unknown file manager action.', 2),
         };

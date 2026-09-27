@@ -14,7 +14,7 @@ final class VhostFileOp
      * No archive extract/unzip in v1 — zip-slip is out of scope rather than
      * a naive ZipArchive loop.
      */
-    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'search', 'zip', 'delete'];
+    public const OPS = ['list', 'read', 'write', 'mkdir', 'rename', 'move', 'copy', 'chmod', 'search', 'zip', 'extract', 'delete'];
 
     /**
      * @param  array<string, mixed>  $req
@@ -41,6 +41,7 @@ final class VhostFileOp
             'rename', 'move' => self::rename($root, $path, (string) ($req['dest'] ?? '')),
             'copy' => self::copy($root, $path, (string) ($req['dest'] ?? '')),
             'chmod' => self::chmod($root, $path, (string) ($req['mode'] ?? '')),
+            'extract' => self::extract($root, $path, (string) ($req['dest'] ?? '')),
             'zip' => self::zip(
                 $root,
                 is_array($req['paths'] ?? null) ? $req['paths'] : [],
@@ -255,6 +256,163 @@ final class VhostFileOp
             'path' => VhostPath::relativeToRoot($rootReal, $real),
             'renamed' => true,
         ];
+    }
+
+    /**
+     * Extract a zip inside the vhost (A40, B3 / request #10).
+     *
+     * Every entry is inspected before anything is written (ZipExtractGuard), and then each written
+     * path is verified to be inside the target directory afterwards. The second check is not
+     * redundant: the guard reads *declared* metadata, and an archive can lie — its central
+     * directory can disagree with its local headers. Declared data is trusted to refuse, never to
+     * accept.
+     *
+     * Existing files are **not** overwritten. An archive that quietly replaces a site's own code
+     * is the same accident as an unnoticed overwrite in copy, with more files. The operator moves
+     * or deletes what is in the way, or extracts somewhere else.
+     *
+     * Modes are set by the panel — 0644 for files, 0755 for directories — rather than taken from
+     * the archive. The archive's modes are attacker-controlled input, and the guard already
+     * refuses the dangerous ones; there is no reason to let a zip decide what is executable.
+     *
+     * @return array<string, mixed>
+     */
+    private static function extract(string $root, string $rel, string $destRel): array
+    {
+        $archive = VhostPath::resolveExisting($root, trim($rel));
+        $rootReal = (string) realpath(VhostPath::normalizeRoot($root));
+        if (is_dir($archive)) {
+            throw new VhostFileException('That is a directory, not an archive.', 2);
+        }
+        // Checked at the *unresolved* path. resolveExisting() returns the realpath, so the link
+        // has already been followed by the time we hold $archive and is_link() on it is always
+        // false — the same dead guard this file had in chmod. Extracting through a link means the
+        // operator acts on a file other than the one they clicked.
+        if (is_link(rtrim($rootReal, '/') . '/' . trim(trim($rel), '/'))) {
+            throw new VhostFileException('Refusing to extract through a symlink.', 3);
+        }
+
+        // Default: extract beside the archive, which is what an operator expects from a file
+        // manager and keeps the blast radius to the directory they were already looking at.
+        $destRel = trim($destRel);
+        if ($destRel === '') {
+            $destRel = (string) dirname(VhostPath::relativeToRoot($rootReal, $archive));
+            if ($destRel === '.') {
+                $destRel = '';
+            }
+        }
+        $dest = $destRel === '' ? $rootReal : VhostPath::resolveExisting($root, $destRel);
+        if (!is_dir($dest)) {
+            throw new VhostFileException('The destination must be an existing directory.', 2);
+        }
+
+        $inspected = ZipExtractGuard::inspect($archive);
+
+        $zip = new \ZipArchive();
+        if ($zip->open($archive) !== true) {
+            throw new VhostFileException('The archive could not be reopened for extraction.', 1);
+        }
+
+        $written = [];
+        $bytes = 0;
+        try {
+            foreach ($inspected['names'] as $name) {
+                $isDir = str_ends_with($name, '/');
+                $target = rtrim($dest, '/') . '/' . $name;
+
+                // Belt and braces: the name passed the guard, but the *resolved* location is what
+                // matters, and a parent directory created earlier in this same extraction could
+                // in principle be a link.
+                $parent = $isDir ? rtrim($target, '/') : dirname($target);
+                self::makeContainedDirectory($rootReal, $dest, $parent);
+                if ($isDir) {
+                    $written[] = $name;
+                    continue;
+                }
+
+                if (file_exists($target) || is_link($target)) {
+                    throw new VhostFileException(
+                        'Refusing to overwrite ' . $name . '. Move or remove it first, or extract '
+                        . 'into an empty directory.',
+                        3
+                    );
+                }
+
+                $stream = $zip->getStream($name);
+                if ($stream === false) {
+                    throw new VhostFileException('Entry ' . $name . ' could not be read.', 1);
+                }
+                $out = @fopen($target, 'xb');
+                if ($out === false) {
+                    fclose($stream);
+                    throw new VhostFileException('Unable to write ' . $name . '.', 1);
+                }
+                $copied = stream_copy_to_stream($stream, $out);
+                fclose($stream);
+                fclose($out);
+
+                $real = realpath($target);
+                if ($real === false || !VhostPath::isUnder($rootReal, $real) || !VhostPath::isUnder($dest, $real)) {
+                    @unlink($target);
+                    throw new VhostFileException(
+                        'Entry ' . $name . ' resolved outside the destination; extraction was stopped.',
+                        3
+                    );
+                }
+                @chmod($target, 0644);
+                $bytes += $copied === false ? 0 : $copied;
+                $written[] = $name;
+            }
+        } catch (\Throwable $e) {
+            $zip->close();
+            // Leave nothing half-extracted: a partial tree is harder to reason about than none,
+            // and the operator cannot tell which files came from the archive.
+            foreach (array_reverse($written) as $name) {
+                $path = rtrim($dest, '/') . '/' . $name;
+                if (is_dir($path)) {
+                    @rmdir($path);
+                } elseif (is_file($path)) {
+                    @unlink($path);
+                }
+            }
+            throw $e;
+        }
+        $zip->close();
+
+        return [
+            'path' => VhostPath::relativeToRoot($rootReal, $archive),
+            'destination' => VhostPath::relativeToRoot($rootReal, (string) realpath($dest)),
+            'entries' => count($written),
+            'bytes' => $bytes,
+            'extracted' => true,
+        ];
+    }
+
+    /**
+     * Create a directory, refusing to follow a link or leave the destination. Each level is
+     * checked as it is made, because a single realpath() at the end cannot tell which component
+     * was the link.
+     */
+    private static function makeContainedDirectory(string $rootReal, string $dest, string $dir): void
+    {
+        if (is_dir($dir) && !is_link($dir)) {
+            return;
+        }
+        if (is_link($dir)) {
+            throw new VhostFileException('A destination path component is a symlink.', 3);
+        }
+        $parent = dirname($dir);
+        if ($parent !== $dir && !is_dir($parent)) {
+            self::makeContainedDirectory($rootReal, $dest, $parent);
+        }
+        if (!@mkdir($dir, 0755) && !is_dir($dir)) {
+            throw new VhostFileException('Unable to create ' . basename($dir) . '.', 1);
+        }
+        $real = realpath($dir);
+        if ($real === false || !VhostPath::isUnder($rootReal, $real) || !VhostPath::isUnder($dest, $real)) {
+            @rmdir($dir);
+            throw new VhostFileException('A created directory resolved outside the destination.', 3);
+        }
     }
 
     private const ZIP_MAX_BYTES = 52428800;
