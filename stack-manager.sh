@@ -2,7 +2,7 @@
 #
 # stack-manager.sh — AZERIOID Stack Manager bootstrap entrypoint.
 # Self-contained install: Caddy + PHP 8.4 FPM + SQLite panel.
-# No lcmp/lamp prerequisite.
+# https://github.com/azerioid/azerioid-stack-manager
 #
 set -euo pipefail
 
