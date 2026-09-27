@@ -438,14 +438,19 @@ implementation:
 
 - The goal of A39 is identity and privilege separation: a distinct system account, a distinct sudoers
   grant, a distinct pool, and a php.ini the site pools do not share. The master/config separation
-  achieves all of it. A separate binary adds no isolation. The kernel sees the same executable image
-  either way, and privilege comes from the account the pool runs as.
+  achieves all of it. A separate binary adds no isolation: privilege comes from the account the pool
+  runs as and the grant that account holds, not from which executable file the master was started from.
 - A vendored binary would trade automatic distro security patches for a manual patch burden the panel
   would have to carry for every PHP CVE. That cuts against this project's rule of not adding
   maintenance burden without a real security gain.
 - Accepted consequence: a distro PHP 8.4.x update reaches the panel the next time its master restarts,
   like any other php-fpm service. A distro PHP *minor* change (8.4 → 8.5) is still a separate panel
   step, because the pin selects the `php-fpm8.4` binary by name.
+- **Known gap, EL only:** the EL panel master runs from the `bin_t` copy that `deploy/lib/fpm.sh` makes
+  once at install time (`PREFIX/sbin/php-fpm`). Nothing refreshes it (not self-update, not the A39
+  migration), so on EL the panel's PHP does **not** pick up distro PHP patches until a reinstall. The
+  reasoning above holds on apt only. Tracked in `docs/KNOWN-ISSUES.md` (KI-3). The fix is for
+  self-update to re-copy and relabel the binary when the distro one has changed.
 
 **Found while building this — Part B defect:** `PanelHardener::rewriteSchedulerCron()` used a pattern
 whose `\s` crossed newlines. On the installer's cron file it rewrote a word of the header comment and
