@@ -242,8 +242,10 @@ if id -u caddy >/dev/null 2>&1; then
         echo "CHECK_CADDY_CANNOT_READ_PANEL_ENV=pass"
     fi
 fi
-# The distro php.ini carries the operator's own disable_functions again.
-for ini in /etc/php/*/fpm/php.ini /etc/php.ini; do
+# The distro php.ini carries the operator's own disable_functions again. Only
+# the FPM-only ini of Debian/Ubuntu: on EL/Remi the file also serves the CLI
+# (queue worker, scheduler), so the migrator deliberately leaves it alone.
+for ini in /etc/php/*/fpm/php.ini; do
     [[ -f "${ini}.azerioid-panel.bak" ]] || continue
     if [[ "$(grep -m1 '^disable_functions' "${ini}")" == "$(grep -m1 '^disable_functions' "${ini}.azerioid-panel.bak")" ]]; then
         echo "CHECK_DISTRO_PHPINI_RESTORED=pass"

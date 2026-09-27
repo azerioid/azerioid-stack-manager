@@ -180,6 +180,14 @@ fi
 
 echo "==> AZERIOID Stack Manager bootstrap into ${PREFIX}"
 
+# While this runs, the panel scheduler's identity converge (ADR A39) must stay
+# out: the cron line exists long before install finishes, and the migration
+# would race this script for the same pool, unit and sudoers files. This script
+# runs the migration itself at the end (migrate_panel_identity).
+install -d -m 0755 /run
+: > /run/azerioid-panel-installing
+trap 'rm -f /run/azerioid-panel-installing' EXIT
+
 setup_repos
 bootstrap_packages
 

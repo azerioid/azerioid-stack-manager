@@ -58,6 +58,9 @@ final class PanelIdentityMigrator
 
     public const TMPFILES = '/etc/tmpfiles.d/azerioid-panel.conf';
 
+    /** Present while install.sh runs (removed by its EXIT trap; /run clears on reboot). */
+    public const INSTALLING_MARKER = '/run/azerioid-panel-installing';
+
     /** Ordered rollback journal: each entry undoes one mutation. */
     private array $journal = [];
 
@@ -157,6 +160,11 @@ final class PanelIdentityMigrator
      */
     public function converge(bool $now): array
     {
+        // install.sh runs the migration itself as its last step; a scheduled
+        // run in the middle of it would race the installer for the same files.
+        if ($this->runtime->fileExists(self::INSTALLING_MARKER)) {
+            return ['started' => false, 'reason' => 'install.sh is running; it migrates the panel itself when it finishes'];
+        }
         $status = $this->status();
         if ($status['migrated']) {
             return ['started' => false, 'reason' => 'already migrated'];
@@ -351,8 +359,8 @@ final class PanelIdentityMigrator
                 ? 'restart ' . self::UNIT
                 : "remove the panel pool from {$plan['distro_unit']}, reload it, start " . self::UNIT,
             'broker.json panel_user + fpm_unit, runtime.json fpm_unit',
-            'restore the distro php.ini disable_functions line the installer had loosened, if it did',
-            'verify: unit active, socket owner, broker call as ' . self::USER . ', HTTP /login through Caddy, queue active',
+            'restore the distro php.ini disable_functions line the installer had loosened, if it did and the ini is FPM-only',
+            'verify: unit active, socket owner, broker call as ' . self::USER . ', HTTP /login through Caddy, queue active, CLI proc_open',
             'rewrite sudoers to grant ' . self::USER . ' only',
         ];
     }
@@ -443,13 +451,19 @@ final class PanelIdentityMigrator
         throw new BrokerException('No php-fpm binary found for PHP ' . $ver . '.', 3);
     }
 
+    /**
+     * The php.ini the installer's fpm.sh edited: same candidates in the same
+     * order as fpm_ini() in deploy/lib/os-paths.sh. Diverging from it means
+     * seeding the panel ini from, and looking for the backup next to, a file
+     * the installer never touched.
+     */
     private function distroIni(): ?string
     {
         $ver = $this->config->panelPhpVersion;
         foreach ([
             '/etc/php/' . $ver . '/fpm/php.ini',
-            '/etc/opt/remi/php' . str_replace('.', '', $ver) . '/php.ini',
             '/etc/php.ini',
+            '/etc/opt/remi/php' . str_replace('.', '', $ver) . '/php.ini',
         ] as $path) {
             if ($this->runtime->fileExists($path)) {
                 return $path;
@@ -822,11 +836,22 @@ final class PanelIdentityMigrator
      * <ini>.azerioid-panel.bak. The panel no longer needs that, so the site
      * pools get back the disable_functions line the operator had. Hosts whose
      * php.ini never disabled them have no backup and nothing changes.
+     *
+     * Only for an FPM-only ini (Debian/Ubuntu /etc/php/X/fpm/php.ini). On EL
+     * and Remi the same file also serves the PHP CLI, which runs the queue
+     * worker and the scheduler — both reach the broker through proc_open, so
+     * restoring the line there would cut the panel off from its own broker.
      */
     private function restoreDistroIni(array $plan): void
     {
         $ini = $plan['distro_ini'];
         if ($ini === null || !$this->runtime->fileExists($ini . '.azerioid-panel.bak')) {
+            return;
+        }
+        if (!self::isFpmOnlyIni($ini)) {
+            $this->note("left {$ini} as it is: it is shared with the PHP CLI (queue worker, scheduler), "
+                . 'which needs proc_open to reach the broker');
+
             return;
         }
         $pattern = '/^disable_functions\s*=.*$/m';
@@ -847,6 +872,11 @@ final class PanelIdentityMigrator
         $this->runtime->writeFile($ini, $patched, 0644);
         Systemd::control($this->runtime, 'reload', $plan['distro_unit']);
         $this->note("restored {$ini} disable_functions from the pre-install backup; reloaded {$plan['distro_unit']}");
+    }
+
+    public static function isFpmOnlyIni(string $path): bool
+    {
+        return preg_match('#^/etc/php/[0-9.]+/fpm/php\.ini$#', $path) === 1;
     }
 
     private function restartQueue(): void
@@ -911,6 +941,18 @@ final class PanelIdentityMigrator
             throw new BrokerException('Queue worker is not active as ' . $user . ' (' . trim($queue->stdout) . ').', 1);
         }
         $this->note('queue worker active');
+
+        // The queue worker and scheduler are CLI processes; an active unit says
+        // nothing about whether they can still spawn the broker.
+        $cli = $this->runtime->exec([
+            $this->runuser(), '-u', $user, '--', $this->phpCli(), '-r',
+            'exit(function_exists("proc_open") && function_exists("proc_get_status") ? 0 : 3);',
+        ], null, 30);
+        if (!$cli->ok()) {
+            throw new BrokerException('The PHP CLI cannot use proc_open as ' . $user
+                . '; the queue worker and scheduler would lose the broker.', 1);
+        }
+        $this->note('PHP CLI can spawn processes as ' . $user);
     }
 
     private function socketOwner(): ?string
@@ -927,6 +969,13 @@ final class PanelIdentityMigrator
         }
 
         return null;
+    }
+
+    private function phpCli(): string
+    {
+        $versioned = '/usr/bin/php' . $this->config->panelPhpVersion;
+
+        return $this->runtime->fileExists($versioned) ? $versioned : '/usr/bin/php';
     }
 
     private function runuser(): string

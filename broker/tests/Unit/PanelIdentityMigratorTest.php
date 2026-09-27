@@ -364,6 +364,101 @@ final class PanelIdentityMigratorTest extends TestCase
         $this->assertSame('caddy', $loaded->phpUser, 'site PHP identity is unaffected by the panel identity');
     }
 
+    /** Turns the seeded apt host into an EL one: dedicated master already, one shared /etc/php.ini. */
+    private function seedElHost(string $ini, ?string $bak): void
+    {
+        $this->seedAptHost();
+        unset($this->rt->files[self::DISTRO_POOL], $this->rt->files[self::DISTRO_INI], $this->rt->files[self::DISTRO_INI . '.azerioid-panel.bak']);
+        $this->rt->files[M::POOL] = "[azerioid-panel]\nuser = caddy\ngroup = caddy\nlisten.owner = caddy\nlisten.group = caddy\n";
+        $this->rt->files[M::UNIT_FILE] = "[Service]\nExecStart=/usr/local/lib/azerioid-panel/sbin/php-fpm --nodaemonize --fpm-config /etc/azerioid-panel/php-fpm.conf\n";
+        $this->rt->files['/usr/local/lib/azerioid-panel/sbin/php-fpm'] = '';
+        $this->rt->files['/etc/php.ini'] = $ini;
+        if ($bak !== null) {
+            $this->rt->files['/etc/php.ini.azerioid-panel.bak'] = $bak;
+        }
+        $this->config->panelFpmUnit = M::UNIT;
+        $this->rt->script(['/usr/bin/systemctl', 'cat', 'php8.4-fpm.service'], 1, '');
+        $this->rt->script(['/usr/bin/systemctl', 'cat', 'php84-php-fpm.service'], 1, '');
+        $this->rt->script(['/usr/bin/systemctl', 'cat', 'php-fpm.service'], 0, '');
+    }
+
+    /**
+     * Review finding: on EL /etc/php.ini also serves the PHP CLI, so putting the
+     * operator's proc_open ban back would cut the queue worker and scheduler off
+     * from the broker. The migrator must leave that file alone.
+     */
+    public function test_el_shared_php_ini_is_not_restored(): void
+    {
+        $this->seedElHost("disable_functions = pcntl_fork\n", "disable_functions = pcntl_fork,proc_open,proc_get_status\n");
+        $this->scriptHealthyCutOver();
+
+        $out = $this->migrator()->apply('MIGRATE-PANEL-IDENTITY');
+
+        $this->assertSame("disable_functions = pcntl_fork\n", $this->rt->files['/etc/php.ini']);
+        $this->assertNotEmpty(array_filter($out['log'], static fn (string $l): bool => str_contains($l, 'shared with the PHP CLI')));
+        $this->assertFalse(M::isFpmOnlyIni('/etc/php.ini'));
+        $this->assertFalse(M::isFpmOnlyIni('/etc/opt/remi/php84/php.ini'));
+        $this->assertTrue(M::isFpmOnlyIni('/etc/php/8.4/fpm/php.ini'));
+    }
+
+    /** Review finding: an active queue unit does not prove the CLI can still reach the broker. */
+    public function test_cli_without_proc_open_fails_the_migration_and_rolls_back(): void
+    {
+        $this->seedAptHost();
+        $this->scriptHealthyCutOver();
+        $this->rt->script([
+            '/usr/sbin/runuser', '-u', M::USER, '--', '/usr/bin/php', '-r',
+            'exit(function_exists("proc_open") && function_exists("proc_get_status") ? 0 : 3);',
+        ], 3, '');
+        $sudoersBefore = $this->rt->files['/etc/sudoers.d/azerioid-panel'];
+
+        try {
+            $this->migrator()->apply('MIGRATE-PANEL-IDENTITY');
+            $this->fail('a CLI that cannot spawn the broker must fail the migration');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('cannot use proc_open', $e->getMessage());
+        }
+        $this->assertSame($sudoersBefore, $this->rt->files['/etc/sudoers.d/azerioid-panel'], 'the old grant is back');
+        $this->assertSame('failed', json_decode($this->rt->files[M::STATE_FILE], true)['result']);
+    }
+
+    /** Review finding: the scheduler must not start a migration while install.sh is running. */
+    public function test_converge_stays_out_while_install_sh_runs(): void
+    {
+        $this->seedAptHost();
+        $this->rt->files[M::INSTALLING_MARKER] = '';
+
+        $out = $this->migrator()->converge(false);
+        $this->assertFalse($out['started']);
+        $this->assertStringContainsString('install.sh', $out['reason']);
+        $this->assertFalse($this->migrator()->converge(true)['started'], 'nor the unit it would have started');
+    }
+
+    public function test_installer_own_migration_is_not_blocked_by_its_marker(): void
+    {
+        $this->seedAptHost();
+        $this->scriptHealthyCutOver();
+        $this->rt->files[M::INSTALLING_MARKER] = '';
+
+        $this->assertTrue($this->migrator()->apply('MIGRATE-PANEL-IDENTITY')['changed']);
+    }
+
+    /**
+     * Review finding: the migrator must pick the php.ini the installer edited
+     * (fpm_ini() order: /etc/php.ini before the Remi ini), not a sibling.
+     */
+    public function test_panel_ini_is_seeded_from_the_ini_the_installer_edited(): void
+    {
+        $this->seedElHost("memory_limit = 128M\n", null);
+        $this->rt->files['/etc/opt/remi/php84/php.ini'] = "memory_limit = 999M\n";
+        $this->scriptHealthyCutOver();
+
+        $this->migrator()->apply('MIGRATE-PANEL-IDENTITY');
+
+        $this->assertStringContainsString('Seeded from /etc/php.ini', $this->rt->files[M::INI]);
+        $this->assertStringContainsString('memory_limit = 128M', $this->rt->files[M::INI]);
+    }
+
     public function test_allow_proc_open_only_touches_the_two_functions(): void
     {
         $this->assertSame(
