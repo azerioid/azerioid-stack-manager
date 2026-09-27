@@ -42,6 +42,15 @@ final class VhostFiles
             'dest' => $dest,
             'content_base64' => (string) ($input['content_base64'] ?? ''),
             'recursive' => (bool) ($input['recursive'] ?? false),
+            // Operation-specific inputs VhostFileOp::execute() reads. These were never
+            // forwarded, so chmod, search and zip failed on every real host from the
+            // release that added them, while their unit tests (which fake the helper's
+            // reply) passed.
+            'mode' => (string) ($input['mode'] ?? ''),
+            'query' => (string) ($input['query'] ?? ''),
+            'contains' => (string) ($input['contains'] ?? ''),
+            'paths' => is_array($input['paths'] ?? null) ? array_values(array_map('strval', $input['paths'])) : [],
+            'out' => (string) ($input['out'] ?? ''),
             'max_bytes' => $this->config->vhostFilesMaxBytes,
             'drop_user' => $identity['username'],
         ];

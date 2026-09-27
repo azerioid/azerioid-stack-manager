@@ -202,4 +202,27 @@ class PanelMaintenanceTest extends TestCase
 
         $this->assertSame('completed', $op->refresh()->status);
     }
+
+    /** File Manager zips a dead download left behind are copies of a site; they must not linger. */
+    public function test_sweeps_abandoned_zip_handovers_only(): void
+    {
+        $dir = storage_path('framework/tmp');
+        @mkdir($dir, 0777, true);
+        $old = $dir.'/azerioid-zip-old000000000000.zip';
+        $fresh = $dir.'/azerioid-zip-new000000000000.zip';
+        $other = $dir.'/unrelated-old.zip';
+        foreach ([$old, $fresh, $other] as $f) {
+            file_put_contents($f, 'PK');
+        }
+        touch($old, time() - 7200);
+        touch($other, time() - 7200);
+
+        $this->artisan('azerioid:maintenance')->assertSuccessful();
+
+        $this->assertFileDoesNotExist($old);
+        $this->assertFileExists($fresh, 'a download may still be streaming it');
+        $this->assertFileExists($other, 'only the handover prefix is swept');
+        @unlink($fresh);
+        @unlink($other);
+    }
 }
