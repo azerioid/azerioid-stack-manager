@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Tests;
 
+use AzerioidPanel\Broker\Actions\PanelFpmRefresh;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\FakeRuntime;
@@ -113,5 +114,44 @@ final class PanelFpmBinaryTest extends TestCase
         }
         $this->assertTrue($this->ran(['/bin/mv', '-f', self::COPY . '.previous', self::COPY]));
         $this->assertFalse($this->ran(['/usr/bin/systemctl', 'restart', M::UNIT]), 'nothing restarts onto a bad binary');
+    }
+
+    /** The scheduled action (v2.0.2): refreshes when idle, never under an update or a migration. */
+    public function test_scheduled_action_refreshes_a_stale_copy_when_idle(): void
+    {
+        $this->seedEl();
+        $this->rt->script(['/usr/bin/cmp', '-s', self::DISTRO, self::COPY], 1);
+        $this->rt->script(['/usr/bin/pgrep', '-f', 'panel\.update\.apply'], 1, '');
+        $this->rt->script(['/usr/bin/systemctl', 'is-active', M::CONVERGE_UNIT . '.service'], 3, "inactive\n");
+
+        $out = (new PanelFpmRefresh())->handle('panel.fpm.refresh', [], [], $this->rt, $this->config);
+
+        $this->assertTrue($out['refreshed']);
+        $this->assertNull($out['skipped']);
+        $this->assertTrue($this->ran(['/usr/bin/systemctl', 'restart', M::UNIT]));
+    }
+
+    public function test_scheduled_action_waits_for_a_running_self_update(): void
+    {
+        $this->seedEl();
+        $this->rt->script(['/usr/bin/cmp', '-s', self::DISTRO, self::COPY], 1);
+        $this->rt->script(['/usr/bin/pgrep', '-f', 'panel\.update\.apply'], 0, "4242\n");
+
+        $out = (new PanelFpmRefresh())->handle('panel.fpm.refresh', [], [], $this->rt, $this->config);
+
+        $this->assertFalse($out['refreshed']);
+        $this->assertStringContainsString('self-update', $out['skipped']);
+        $this->assertFalse($this->ran(['/usr/bin/cmp', '-s', self::DISTRO, self::COPY]), 'nothing is even compared');
+    }
+
+    public function test_scheduled_action_waits_for_a_running_identity_migration(): void
+    {
+        $this->seedEl();
+        $this->rt->script(['/usr/bin/pgrep', '-f', 'panel\.update\.apply'], 1, '');
+        $this->rt->script(['/usr/bin/systemctl', 'is-active', M::CONVERGE_UNIT . '.service'], 0, "active\n");
+
+        $out = (new PanelFpmRefresh())->handle('panel.fpm.refresh', [], [], $this->rt, $this->config);
+
+        $this->assertStringContainsString('migration', $out['skipped']);
     }
 }

@@ -48,6 +48,7 @@ use AzerioidPanel\Broker\Actions\MetricsSystem;
 use AzerioidPanel\Broker\Actions\PanelDefaultSite;
 use AzerioidPanel\Broker\Actions\PanelDomainSet;
 use AzerioidPanel\Broker\Actions\PanelHarden;
+use AzerioidPanel\Broker\Actions\PanelFpmRefresh;
 use AzerioidPanel\Broker\Actions\PanelIdentity;
 use AzerioidPanel\Broker\Actions\PanelRuntime;
 use AzerioidPanel\Broker\Actions\PanelUpdateApply;
@@ -101,6 +102,7 @@ final class Kernel
         'panel.identity.status' => PanelIdentity::class,
         'panel.identity.apply' => PanelIdentity::class,
         'panel.identity.converge' => PanelIdentity::class,
+        'panel.fpm.refresh' => PanelFpmRefresh::class,
         'panel.update.check' => PanelUpdateCheck::class,
         'panel.update.apply' => PanelUpdateApply::class,
         'panel.update.operation.log' => PanelUpdateOperationLog::class,

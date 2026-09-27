@@ -473,6 +473,22 @@ final class PanelIdentityMigrator
         return null;
     }
 
+    /**
+     * Why the panel's runtime must not be touched right now, or null when it may be.
+     * Shared with the scheduled php-fpm refresh (KI-3), which restarts the same master.
+     */
+    public function busyReason(): ?string
+    {
+        if ($this->updateInProgress()) {
+            return 'a panel self-update is in progress';
+        }
+        if ($this->convergeRunning()) {
+            return 'a panel identity migration is running';
+        }
+
+        return null;
+    }
+
     private function convergeRunning(): bool
     {
         $r = $this->runtime->exec(['/usr/bin/systemctl', 'is-active', self::CONVERGE_UNIT . '.service'], null, 10);

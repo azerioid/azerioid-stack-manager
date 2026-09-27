@@ -452,8 +452,12 @@ implementation:
   reasoning above holds on apt only. **Fixed in v2.0.1 (was KI-3):** every self-update now compares
   the copy with the distro binary (`PanelFpmBinary`). When they differ it re-copies, relabels
   (`restorecon`), config-tests with the unit's own arguments and restarts the panel master, putting the
-  previous binary back if either step fails. A failed refresh is logged and never fails the update. The
-  first patch reaches an EL panel at the first self-update after the distro one.
+  previous binary back if either step fails. A failed refresh is logged and never fails the update.
+  **Corrected in v2.0.2:** self-update alone was not enough. It runs the updater that is already
+  installed, so the v2.0.0 → v2.0.1 update could not run the refresh it introduced (confirmed on Rocky 9:
+  the copy stayed stale). The panel scheduler now also calls `panel.fpm.refresh` hourly. It holds off
+  while operations, a self-update or an identity migration are running. That covers the first hop and a
+  `dnf update` landing between two self-updates; the self-update step stays as a second path.
 
 **Found while building this — Part B defect:** `PanelHardener::rewriteSchedulerCron()` used a pattern
 whose `\s` crossed newlines. On the installer's cron file it rewrote a word of the header comment and
