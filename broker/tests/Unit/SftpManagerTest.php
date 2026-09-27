@@ -31,6 +31,13 @@ final class SftpManagerTest extends TestCase
         // be scripted explicitly — otherwise `getent passwd` "finds" every user and the refusal
         // below cannot be tested at all.
         $rt->script(['/usr/bin/getent', 'passwd', 'az-vh-missing-example-com'], 2, '');
+        // fail2ban present, with the shipped templates where the installer puts them.
+        $rt->dirs['/etc/fail2ban/jail.d'] = true;
+        $rt->files['/usr/bin/fail2ban-client'] = '';
+        $rt->files['/usr/local/lib/azerioid-panel/deploy/fail2ban/filter.d/azerioid-sftp.conf'] =
+            "[Definition]\nfailregex = ^.*Connection closed by authenticating user az-vh-\\S+ <HOST>.*$\n";
+        $rt->files['/usr/local/lib/azerioid-panel/deploy/fail2ban/jail.d/azerioid-sftp.conf'] =
+            "[azerioid-sftp]\nenabled = true\nfilter = azerioid-sftp\nmaxretry = 3\n";
 
         return $rt;
     }
@@ -284,6 +291,102 @@ final class SftpManagerTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertFalse($json['data']['configured']);
         $this->assertArrayNotHasKey(SftpManager::DROP_IN, $rt->files);
+    }
+
+    // ------------------------------------------------------------------ fail2ban
+
+    /**
+     * The stock sshd jail does not see these failures: the accounts are key-only, so a refused
+     * attempt never logs "Failed password". Without a jail of its own, the account type most likely
+     * to be probed is the one nothing watches.
+     */
+    public function test_configuring_installs_a_jail_and_filter(): void
+    {
+        $rt = $this->runtime();
+
+        [$code, $json] = $this->call($rt, ['sftp.configure']);
+
+        $this->assertSame(0, $code);
+        $this->assertTrue($json['data']['jail']['installed']);
+        $this->assertArrayHasKey(SftpManager::JAIL, $rt->files);
+        $this->assertArrayHasKey(SftpManager::FILTER, $rt->files);
+        $this->assertContains(['/usr/bin/fail2ban-client', 'reload'], $this->commands($rt));
+    }
+
+    /** Scoped to site identities, so a mistake in the filter cannot ban an operator. */
+    public function test_the_filter_only_matches_site_identities(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.configure']);
+
+        $this->assertStringContainsString('az-vh-', $rt->files[SftpManager::FILTER]);
+    }
+
+    public function test_the_jail_is_installed_after_sshd_not_before(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.configure']);
+
+        $reloadAt = null;
+        $jailAt = null;
+        foreach ($this->commands($rt) as $i => $command) {
+            if (($command[0] ?? '') === '/usr/bin/systemctl' && ($command[1] ?? '') === 'reload') {
+                $reloadAt = $i;
+            }
+            if (($command[0] ?? '') === '/usr/bin/fail2ban-client') {
+                $jailAt = $i;
+            }
+        }
+        // A jail watching a service that was not reconfigured is noise; if the sshd reload had
+        // failed there would be nothing to watch.
+        $this->assertNotNull($reloadAt);
+        $this->assertNotNull($jailAt);
+        $this->assertLessThan($jailAt, $reloadAt);
+    }
+
+    /** SFTP works without fail2ban; refusing to configure sshd over a monitoring package would not. */
+    public function test_a_host_without_fail2ban_still_gets_sftp(): void
+    {
+        $rt = $this->runtime();
+        unset($rt->dirs['/etc/fail2ban/jail.d']);
+
+        [$code, $json] = $this->call($rt, ['sftp.configure']);
+
+        $this->assertSame(0, $code);
+        $this->assertTrue($json['data']['configured']);
+        $this->assertFalse($json['data']['jail']['installed']);
+        $this->assertStringContainsString('not installed', (string) $json['data']['jail']['reason']);
+    }
+
+    /**
+     * sshd is already configured by the time the jail is touched, so a jail that fails to load is
+     * reported rather than thrown — undoing working SFTP to report a fail2ban problem is the wrong
+     * trade.
+     */
+    public function test_a_jail_that_fails_to_load_is_reported_not_fatal(): void
+    {
+        $rt = $this->runtime();
+        $rt->script(['/usr/bin/fail2ban-client', 'reload'], 1, '', 'Failed during configuration');
+
+        [$code, $json] = $this->call($rt, ['sftp.configure']);
+
+        $this->assertSame(0, $code);
+        $this->assertTrue($json['data']['configured']);
+        $this->assertFalse($json['data']['jail']['reloaded']);
+        $this->assertStringContainsString('Failed during configuration', (string) $json['data']['jail']['detail']);
+    }
+
+    public function test_removing_sftp_removes_the_jail_too(): void
+    {
+        $rt = $this->runtime();
+        $this->call($rt, ['sftp.configure']);
+
+        [$code, $json] = $this->call($rt, ['sftp.unconfigure']);
+
+        $this->assertSame(0, $code);
+        $this->assertTrue($json['data']['jail']['removed']);
+        $this->assertArrayNotHasKey(SftpManager::JAIL, $rt->files);
+        $this->assertArrayNotHasKey(SftpManager::FILTER, $rt->files);
     }
 
     // --------------------------------------------------------------------- keys

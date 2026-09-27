@@ -55,6 +55,10 @@ final class SftpManager
      */
     public const KEY_DIR = '/etc/ssh/azerioid-authorized-keys';
 
+    public const JAIL = '/etc/fail2ban/jail.d/azerioid-sftp.conf';
+
+    public const FILTER = '/etc/fail2ban/filter.d/azerioid-sftp.conf';
+
     /** Accounts that must never end up in the SFTP group, whatever else happens. */
     private const NEVER = ['root'];
 
@@ -75,6 +79,7 @@ final class SftpManager
             'group' => self::GROUP,
             'sites' => $this->members(),
             'include_present' => $this->includePresent(),
+            'jail' => $this->runtime->fileExists(self::JAIL),
             'service' => $this->serviceName(),
         ];
     }
@@ -118,7 +123,12 @@ final class SftpManager
             throw $e;
         }
 
-        return ['configured' => true, 'reloaded' => $this->reload()] + $this->status();
+        $reloaded = $this->reload();
+        // After sshd, never before: a jail watching for failures on a service that was not
+        // reconfigured is noise, and if the reload had failed there would be nothing to watch.
+        $jail = $this->installJail();
+
+        return ['configured' => true, 'reloaded' => $reloaded, 'jail' => $jail] + $this->status();
     }
 
     /** @return array<string,mixed> */
@@ -136,7 +146,66 @@ final class SftpManager
             throw $e;
         }
 
-        return ['configured' => false, 'reloaded' => $this->reload()] + $this->status();
+        $reloaded = $this->reload();
+        $jail = $this->removeJail();
+
+        return ['configured' => false, 'reloaded' => $reloaded, 'jail' => $jail] + $this->status();
+    }
+
+    /**
+     * Ban repeated failed key attempts against site identities.
+     *
+     * A jail of its own rather than leaning on the stock `sshd` one: these accounts are key-only,
+     * so a refused attempt does not log "Failed password" and the sshd filter does not see it. The
+     * account type most likely to be probed would otherwise be the one nothing watches.
+     *
+     * Scoped to `az-vh-*`, so a mistake in the filter cannot ban an operator. fail2ban being absent
+     * is reported, not fatal — SFTP works without it, and refusing to configure sshd because a
+     * monitoring package is missing would be the wrong trade.
+     *
+     * @return array<string,mixed>
+     */
+    private function installJail(): array
+    {
+        if (!$this->runtime->isDir('/etc/fail2ban/jail.d')) {
+            return ['installed' => false, 'reason' => 'fail2ban is not installed on this host'];
+        }
+        $source = rtrim($this->config->panelRoot, '/') . '/deploy/fail2ban';
+        foreach ([[self::FILTER, 'filter.d/azerioid-sftp.conf'], [self::JAIL, 'jail.d/azerioid-sftp.conf']] as [$target, $rel]) {
+            $path = $source . '/' . $rel;
+            if (!$this->runtime->fileExists($path)) {
+                return ['installed' => false, 'reason' => 'template missing: ' . $path];
+            }
+            $this->runtime->writeFile($target, $this->runtime->readFile($path), 0644);
+        }
+        $reload = $this->runtime->exec(['/usr/bin/fail2ban-client', 'reload'], null, 60);
+
+        return [
+            'installed' => true,
+            'jail' => 'azerioid-sftp',
+            // A jail that failed to load is reported rather than thrown: sshd is already
+            // configured correctly at this point, and undoing that to report a fail2ban problem
+            // would trade a working feature for a tidy error.
+            'reloaded' => $reload->ok(),
+            'detail' => $reload->ok() ? null : trim($reload->stderr !== '' ? $reload->stderr : $reload->stdout),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function removeJail(): array
+    {
+        $removed = false;
+        foreach ([self::JAIL, self::FILTER] as $path) {
+            if ($this->runtime->fileExists($path)) {
+                $this->runtime->deleteFile($path);
+                $removed = true;
+            }
+        }
+        if ($removed && $this->runtime->fileExists('/usr/bin/fail2ban-client')) {
+            $this->runtime->exec(['/usr/bin/fail2ban-client', 'reload'], null, 60);
+        }
+
+        return ['installed' => false, 'removed' => $removed];
     }
 
     /** @return array<string,mixed> */
