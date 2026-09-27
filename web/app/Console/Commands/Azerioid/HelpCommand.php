@@ -86,6 +86,13 @@ Usage:
   azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]
   azerioid backup verify  --file=<path|key> [--local|--spaces] [--json]
 
+  azerioid sftp status [--json]
+  azerioid sftp configure | unconfigure
+  azerioid sftp enable|disable <domain>
+  azerioid sftp keys <domain> [--json]
+  azerioid sftp key-add <domain> --key="ssh-ed25519 …"   (or pipe the .pub on stdin)
+  azerioid sftp key-del <domain> --fingerprint=SHA256:…
+
   azerioid cron list [--owner=<domain|root>] [--json]
   azerioid cron add --owner=<domain|root> --schedule='*/5 * * * *' --command='...' [--note=] [--confirm=RUN-AS-ROOT]
   azerioid cron enable|disable|del|run|log <job-id> [--lines=200] [--json]
@@ -101,6 +108,13 @@ Usage:
   azerioid totp confirm --email=<admin>
 
   azerioid audit tail [--follow] [--lines=50] [--json]
+
+SFTP:
+  File transfer only, keys only, no shell — the account's shell exists for the panel's Terminal,
+  which the panel brokers. Keys live in /etc/ssh/azerioid-authorized-keys/<identity>, owned by
+  root, so a site cannot install its own key and keep access after a hole is closed.
+  sshd is configured through a drop-in, validated with `sshd -t`, and reloaded — never restarted.
+  Your own SSH access is untouched: the Match block cannot match root.
 
 Cron:
   A job belongs to a vhost and runs as that vhost's own identity (az-vh-*), not as root.
