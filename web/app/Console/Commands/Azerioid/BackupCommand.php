@@ -129,7 +129,8 @@ class BackupCommand extends Command
             if ((bool) $this->option('local')) {
                 $dest = 'local';
             }
-            $stdin = $this->stdinFor($dest);
+            // Listing reads no archive contents, so it never needs the passphrase (KI-1).
+            $stdin = $this->stdinFor($dest, withPassphrase: false);
             $stdin['destination'] = $dest;
             $data = $this->brokerData('backup.list', [], $stdin, 60, false);
         } catch (\Throwable $e) {
@@ -201,11 +202,11 @@ class BackupCommand extends Command
     }
 
     /** @return array<string, mixed> */
-    private function stdinFor(string $destination): array
+    private function stdinFor(string $destination, bool $withPassphrase = true): array
     {
-        $pass = $this->passphrase();
+        $pass = $withPassphrase ? ['passphrase' => $this->passphrase()] : [];
         if ($destination === 'local') {
-            return ['passphrase' => $pass, 'destination' => 'local'];
+            return $pass + ['destination' => 'local'];
         }
 
         $spaces = RunScheduledBackup::spacesStdin();
@@ -215,7 +216,7 @@ class BackupCommand extends Command
             );
         }
 
-        return ['spaces' => $spaces, 'passphrase' => $pass, 'destination' => 'spaces'];
+        return ['spaces' => $spaces] + $pass + ['destination' => 'spaces'];
     }
 
     private function passphrase(): string
