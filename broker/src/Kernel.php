@@ -58,6 +58,7 @@ use AzerioidPanel\Broker\Actions\PhpOpcache;
 use AzerioidPanel\Broker\Actions\PhpTimeoutsEnsure;
 use AzerioidPanel\Broker\Actions\PhpVersions;
 use AzerioidPanel\Broker\Actions\SchedulerInstall;
+use AzerioidPanel\Broker\Actions\SftpManage;
 use AzerioidPanel\Broker\Actions\ServiceControl;
 use AzerioidPanel\Broker\Actions\ServiceStatus;
 use AzerioidPanel\Broker\Actions\SpacesTest;
@@ -207,6 +208,12 @@ final class Kernel
         'backup.restore.check' => BackupRestoreCheck::class,
         'spaces.test' => SpacesTest::class,
         'auth.audit' => AuthAudit::class,
+        // A48: per-vhost SFTP. Drop-in only, sshd -t before every reload, reload never restart.
+        'sftp.status' => SftpManage::class,
+        'sftp.configure' => SftpManage::class,
+        'sftp.unconfigure' => SftpManage::class,
+        'sftp.enable' => SftpManage::class,
+        'sftp.disable' => SftpManage::class,
         'firewall.status' => FirewallStatus::class,
         // B2: management, not just reporting. Guards and the revert window live in
         // the broker (Network\FirewallGuard, Network\FirewallRevertWindow).
