@@ -38,6 +38,7 @@
                         ['security', 'Security', '/security'],
                         ['firewall', 'Firewall', '/firewall'],
                         ['cron', 'Cron', '/cron'],
+                        ['sftp', 'SFTP', '/sftp'],
                         ['audit', 'Audit', '/audit'],
                         ['settings', 'Settings', '/settings'],
                     ];

@@ -15,6 +15,7 @@ use App\Livewire\OperationsPage;
 use App\Livewire\MailPage;
 use App\Livewire\ProcessesPage;
 use App\Livewire\CronPage;
+use App\Livewire\SftpPage;
 use App\Livewire\FirewallPage;
 use App\Livewire\SecurityPage;
 use App\Livewire\ServicesPage;
@@ -77,6 +78,7 @@ Route::middleware(['auth', '2fa'])->group(function () {
     Route::get('/security', SecurityPage::class)->name('security');
     Route::get('/firewall', FirewallPage::class)->name('firewall');
     Route::get('/cron', CronPage::class)->name('cron');
+    Route::get('/sftp', SftpPage::class)->name('sftp');
     Route::get('/components', ComponentsPage::class)->name('components');
     Route::get('/settings', SettingsPage::class)->name('settings');
     Route::get('/audit', AuditLogPage::class)->name('audit');

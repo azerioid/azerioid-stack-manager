@@ -7,6 +7,7 @@ use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Files\VhostPath;
 use AzerioidPanel\Broker\Files\ZipExtractGuard;
+use AzerioidPanel\Broker\Sftp\SftpManager;
 use AzerioidPanel\Broker\Network\FirewallGuard;
 use AzerioidPanel\Broker\Cron\CronJob;
 use AzerioidPanel\Broker\Cron\CronRenderer;
@@ -482,6 +483,14 @@ final class FakeBroker
                 'backup.restore.check' => $this->restoreCheck($args, $stdin),
                 'spaces.test' => ['ok' => true, 'bucket' => 'azerioid', 'region' => 'fra1'],
                 'auth.audit' => ['path' => '/var/log/auth.log', 'missing' => false, 'success' => [['user' => 'root', 'ip' => '127.0.0.1', 'method' => 'publickey', 'line' => 'Accepted publickey for root from 127.0.0.1']], 'failed' => [], 'failed_count' => 0, 'new_root_ips' => []],
+                'sftp.status' => $this->sftpStatus(),
+                'sftp.configure' => $this->sftpConfigure(true),
+                'sftp.unconfigure' => $this->sftpConfigure(false),
+                'sftp.enable' => $this->sftpToggle($args, $stdin, true),
+                'sftp.disable' => $this->sftpToggle($args, $stdin, false),
+                'sftp.key.list' => $this->sftpKeyList($args, $stdin),
+                'sftp.key.add' => $this->sftpKeyAdd($args, $stdin),
+                'sftp.key.del' => $this->sftpKeyDel($args, $stdin),
                 'firewall.rules' => $this->firewallList(),
                 'firewall.rule.add' => $this->firewallAdd($stdin),
                 'firewall.rule.delete' => $this->firewallDelete($stdin),
@@ -851,6 +860,146 @@ final class FakeBroker
             'missing' => $lines === [],
             'lines' => $lines,
         ];
+    }
+
+    /** SFTP state for the local/test panel (A48). */
+    public bool $sftpConfigured = false;
+
+    /** @var list<string> domains with SFTP enabled */
+    public array $sftpSites = [];
+
+    /** @var array<string, list<array{fingerprint:string,type:string,comment:string}>> */
+    public array $sftpKeys = [];
+
+    /** @return array<string,mixed> */
+    private function sftpStatus(): array
+    {
+        return [
+            'configured' => $this->sftpConfigured,
+            'drop_in' => SftpManager::DROP_IN,
+            'group' => SftpManager::GROUP,
+            'sites' => array_map(
+                static fn (string $d): string => 'az-vh-' . str_replace('.', '-', $d),
+                $this->sftpSites
+            ),
+            'include_present' => true,
+            'service' => 'ssh',
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function sftpConfigure(bool $on): array
+    {
+        $this->sftpConfigured = $on;
+        if (! $on) {
+            $this->sftpSites = [];
+        }
+
+        return ['configured' => $on, 'reloaded' => true] + $this->sftpStatus();
+    }
+
+    /**
+     * @param  list<string>  $args
+     * @param  array<string,mixed>  $stdin
+     */
+    private function sftpDomain(array $args, array $stdin): string
+    {
+        $domain = trim((string) ($args[0] ?? $stdin['domain'] ?? ''));
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $domain) {
+                return $domain;
+            }
+        }
+        throw new BrokerCallException(
+            'There is no system identity for ' . $domain . '. Create the vhost first.',
+            3
+        );
+    }
+
+    /** @return array<string,mixed> */
+    private function sftpToggle(array $args, array $stdin, bool $on): array
+    {
+        $domain = $this->sftpDomain($args, $stdin);
+        if ($on) {
+            $this->sftpConfigured = true;
+            if (! in_array($domain, $this->sftpSites, true)) {
+                $this->sftpSites[] = $domain;
+            }
+        } else {
+            $this->sftpSites = array_values(array_filter(
+                $this->sftpSites,
+                static fn (string $d): bool => $d !== $domain
+            ));
+        }
+
+        return [
+            'domain' => $domain,
+            'user' => 'az-vh-' . str_replace('.', '-', $domain),
+            'enabled' => $on,
+            'sites' => $this->sftpSites,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function sftpKeyList(array $args, array $stdin): array
+    {
+        $domain = $this->sftpDomain($args, $stdin);
+
+        return [
+            'domain' => $domain,
+            'user' => 'az-vh-' . str_replace('.', '-', $domain),
+            'path' => SftpManager::KEY_DIR . '/az-vh-' . str_replace('.', '-', $domain),
+            'keys' => $this->sftpKeys[$domain] ?? [],
+        ];
+    }
+
+    /**
+     * Validates through the real SftpManager::parseKey, so a key the broker would refuse — an
+     * option-bearing line, a pasted private key, a type that does not match its body — is refused
+     * here for the same reason.
+     *
+     * @return array<string,mixed>
+     */
+    private function sftpKeyAdd(array $args, array $stdin): array
+    {
+        $domain = $this->sftpDomain($args, $stdin);
+        try {
+            [$type, $blob, $comment] = SftpManager::parseKey((string) ($stdin['key'] ?? ''));
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        $fingerprint = SftpManager::fingerprint($blob);
+        foreach ($this->sftpKeys[$domain] ?? [] as $row) {
+            if ($row['fingerprint'] === $fingerprint) {
+                throw new BrokerCallException('That key is already installed for ' . $domain . '.', 3);
+            }
+        }
+        $this->sftpKeys[$domain][] = ['fingerprint' => $fingerprint, 'type' => $type, 'comment' => $comment];
+
+        return [
+            'domain' => $domain,
+            'user' => 'az-vh-' . str_replace('.', '-', $domain),
+            'fingerprint' => $fingerprint,
+            'keys' => count($this->sftpKeys[$domain]),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function sftpKeyDel(array $args, array $stdin): array
+    {
+        $domain = $this->sftpDomain($args, $stdin);
+        $fingerprint = trim((string) ($args[1] ?? $stdin['fingerprint'] ?? ''));
+        $before = $this->sftpKeys[$domain] ?? [];
+        $kept = array_values(array_filter(
+            $before,
+            static fn (array $r): bool => $r['fingerprint'] !== $fingerprint
+        ));
+        if (count($kept) === count($before)) {
+            throw new BrokerCallException('No key with that fingerprint for ' . $domain . '.', 3);
+        }
+        $this->sftpKeys[$domain] = $kept;
+
+        return ['domain' => $domain, 'removed' => $fingerprint, 'keys' => count($kept)];
     }
 
     /** A second window would snapshot the unconfirmed state as if it were good. */
