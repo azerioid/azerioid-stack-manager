@@ -798,6 +798,32 @@ have credentials.
 | Validation | **`sshd -t` before every reload**, and **reload, never restart** | A restart with a bad config drops existing sessions *and* fails to come back — locking the operator out of the machine entirely. A reload with a config that fails validation is never applied |
 | Admin SSH | Any change that would affect the administrator's own access is **refused** | This is the single most lockout-prone change in the roadmap; a test asserting admin SSH survives is part of the definition of done |
 
+**Amendment (2026-09-27), before implementation: the `Match` group must be a new one.**
+
+The obvious choice was `Match Group azerioid-vhosts`, the group A25 already puts every vhost
+identity in. Checked against the live host first, and it is wrong:
+
+```
+azerioid-vhosts:x:986:www-data,caddy,azerioid-supervised
+```
+
+`az-vh-*` accounts have that group as their **primary** group, so they do not appear in the member
+list at all — while `www-data`, `caddy` and `azerioid-supervised` are **supplementary** members and
+do. `Match Group azerioid-vhosts` therefore covers the panel's own pool user and the web user, and
+would quietly apply `ForceCommand internal-sftp` plus a shell denial to accounts that have nothing
+to do with SFTP. sshd would accept the configuration; the damage would only appear the next time
+something used one of those accounts.
+
+**Decision:** a dedicated group, `azerioid-sftp`, containing only the vhost identities an operator
+has explicitly enabled. This also gives per-vhost enable/disable its natural implementation —
+`gpasswd -a` / `gpasswd -d` on one group — instead of overloading the identity group A25 owns for a
+different purpose.
+
+**Also confirmed on the host:** `/etc/ssh/sshd_config` carries
+`Include /etc/ssh/sshd_config.d/*.conf`, so the drop-in approach works there, alongside the
+distro's own `50-cloud-init.conf` and `60-cloudimg-settings.conf`. The panel's file must sort
+**after** those to win on `Match`-block ordering, and must never edit them.
+
 **Build order for B3 (agreed):** file operations (copy, chmod presets, recursive search,
 multi-upload) → ZIP download moved out of panel PHP into the broker (G12) → archive extract
 behind the mandatory adversarial suite (A40) → SFTP last, on its own.
