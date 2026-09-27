@@ -36,6 +36,18 @@ final class DefaultSite
 
     public const ROOT = '/var/lib/azerioid-panel/default-site';
 
+    /**
+     * A *named* host, because a hostless `https://:443` block provisions no certificate at
+     * all — which is why the original implementation completed no TLS handshake for an
+     * unmatched SNI. `tls internal` signs names Caddy knows about; it does not invent one.
+     * `.invalid` is reserved (RFC 2606), so this can never collide with a real site.
+     */
+    public const SNI_HOST = 'default.azerioid.invalid';
+
+    public const GLOBAL_BEGIN = '# BEGIN azerioid-panel default-site SNI fallback';
+
+    public const GLOBAL_END = '# END azerioid-panel default-site SNI fallback';
+
     public const MODE_PAGE = 'page';
 
     public const MODE_404 = '404';
@@ -101,11 +113,16 @@ final class DefaultSite
 
         $path = $this->snippetPath();
         $previous = $this->runtime->fileExists($path) ? $this->runtime->readFile($path) : null;
+        // The global option lives in the main Caddyfile, which every site on the host shares,
+        // so it is snapshotted too and restored on any failure. Rolling back only the snippet
+        // would leave a default_sni pointing at a site that no longer exists.
+        $previousGlobal = $this->runtime->readFile($this->config->caddyfile);
 
         if ($mode === self::MODE_PAGE) {
             $this->writeDocument($customHtml);
         }
         $this->runtime->writeFile($path, $this->render($mode), 0644);
+        $this->writeGlobalSni(true);
 
         try {
             $applied = CaddyApply::run($this->runtime, $this->config, 'auto');
@@ -118,6 +135,7 @@ final class DefaultSite
             } else {
                 $this->runtime->writeFile($path, $previous, 0644);
             }
+            $this->runtime->writeFile($this->config->caddyfile, $previousGlobal, 0644);
             try {
                 CaddyApply::run($this->runtime, $this->config, 'auto');
             } catch (\Throwable) {
@@ -137,15 +155,95 @@ final class DefaultSite
             return $this->status() + ['applied' => null];
         }
         $previous = $this->runtime->readFile($path);
+        $previousGlobal = $this->runtime->readFile($this->config->caddyfile);
         $this->runtime->deleteFile($path);
+        $this->writeGlobalSni(false);
         try {
             $applied = CaddyApply::run($this->runtime, $this->config, 'auto');
         } catch (\Throwable $e) {
             $this->runtime->writeFile($path, $previous, 0644);
+            $this->runtime->writeFile($this->config->caddyfile, $previousGlobal, 0644);
             throw new BrokerException('Could not remove the default site: ' . $e->getMessage(), 1);
         }
 
         return $this->status() + ['applied' => $applied];
+    }
+
+    /**
+     * Add or remove `default_sni` inside the main Caddyfile's global block.
+     *
+     * Marker-delimited (A30) and idempotent: the block is always removed first, so repeated
+     * applies cannot accumulate duplicates, and a partially written block cannot be mistaken
+     * for operator content. Everything outside the markers is reproduced untouched — this is
+     * the file every site on the host depends on.
+     */
+    private function writeGlobalSni(bool $enabled): void
+    {
+        $path = $this->config->caddyfile;
+        $body = $this->runtime->readFile($path);
+        $stripped = $this->withoutGlobalBlock($body);
+
+        if (!$enabled) {
+            $this->runtime->writeFile($path, $stripped, 0644);
+
+            return;
+        }
+
+        $lines = explode("\n", $stripped);
+        $insertAt = null;
+        foreach ($lines as $index => $line) {
+            // The global block is the first `{` at the start of the file; anything else is a
+            // site block, where this option is not valid.
+            if (trim($line) === '{') {
+                $insertAt = $index + 1;
+                break;
+            }
+            if (trim($line) !== '' && !str_starts_with(trim($line), '#')) {
+                break;
+            }
+        }
+        if ($insertAt === null) {
+            throw new BrokerException(
+                'The main Caddyfile has no global options block, so the HTTPS catch-all cannot be '
+                . 'configured. Add an empty `{ }` block at the top of ' . $path . ' and retry.',
+                3
+            );
+        }
+
+        $block = [
+            "\t" . self::GLOBAL_BEGIN,
+            "\t# Hands one static internal certificate to any SNI no vhost claims, so the",
+            "\t# handshake completes and the default site can answer. Removed by",
+            "\t# `azerioid panel default-site disable`.",
+            "\tdefault_sni " . self::SNI_HOST,
+            "\t" . self::GLOBAL_END,
+        ];
+        array_splice($lines, $insertAt, 0, $block);
+        $this->runtime->writeFile($path, implode("\n", $lines), 0644);
+    }
+
+    private function withoutGlobalBlock(string $body): string
+    {
+        $out = [];
+        $inside = false;
+        foreach (explode("\n", $body) as $line) {
+            $trimmed = trim($line);
+            if ($trimmed === self::GLOBAL_BEGIN) {
+                $inside = true;
+
+                continue;
+            }
+            if ($trimmed === self::GLOBAL_END) {
+                $inside = false;
+
+                continue;
+            }
+            if (!$inside) {
+                $out[] = $line;
+            }
+        }
+
+        return implode("\n", $out);
     }
 
     private function snippetPath(): string
@@ -165,18 +263,43 @@ final class DefaultSite
         // `tls internal` mirrors the proven :3169 catch-all (A22): without a
         // certificate for an arbitrary SNI the handshake fails and the visitor sees
         // nothing at all, which is the behaviour being fixed.
+        $sni = self::SNI_HOST;
+
         return <<<CADDY
 # AZERIOID Stack Manager — default site for unmatched hostnames (broker-managed).
 #
-# Caddy resolves site blocks by specificity, so these hostless blocks are beaten by
-# every named vhost. They only answer names no vhost claims. Do not edit: rewritten
-# by `azerioid panel default-site`.
+# Caddy resolves site blocks by specificity, so the hostless :80 block is beaten by every
+# named vhost. It only answers names no vhost claims. Do not edit: rewritten by
+# `azerioid panel default-site`.
 http://:80 {
 {$body}}
 
+# HTTPS takes three parts, because two different mechanisms were conflated in the first
+# version of this feature and each one alone leaves it broken. Measured on a live host:
+#
+#  1. This hostless block does the *routing*: Caddy matches site blocks on the HTTP Host
+#     header, so only a hostless address answers a name no vhost claims. On its own it
+#     provisions no certificate, and every unmatched SNI failed the handshake outright.
+#  2. The named block below exists only so Caddy has a name to issue an internal
+#     certificate for. `tls internal` signs names Caddy knows about; it does not invent
+#     one. On its own this fixes the handshake and serves nothing, because a visitor's Host
+#     header never matches it.
+#  3. The global `default_sni` (written into the main Caddyfile by writeGlobalSni(), since
+#     globals cannot live in an imported file) hands that certificate to any unknown SNI.
+#
+# Deliberately not on-demand TLS: this page is a static neutral notice, identical for every
+# hostname, so one certificate serves all of them. On-demand issuance would let anyone mint
+# certificates by requesting arbitrary names.
 https://:443 {
 	tls internal
 {$body}}
+
+# Certificate provisioning only — never routed to, since no visitor sends this Host.
+# `.invalid` is reserved (RFC 2606), so it cannot collide with a real site.
+https://{$sni} {
+	tls internal
+	respond 204
+}
 
 CADDY;
     }

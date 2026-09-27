@@ -77,20 +77,38 @@ final class DefaultSiteTest extends TestCase
 
     // ------------------------------------------------------------- specificity
 
-    public function test_blocks_are_hostless_so_named_vhosts_still_win(): void
+    /**
+     * The original form of this test asserted every block was *hostless*, treating that as
+     * the safety property. It was the wrong property, and asserting it is part of why the
+     * :443 catch-all shipped unable to complete a handshake: a hostless `https://:443` block
+     * provisions no certificate.
+     *
+     * The real property is that the catch-all must never match a name a vhost could claim.
+     * A block named under `.invalid` — reserved by RFC 2606, so unresolvable and
+     * unregistrable — satisfies that more strongly than a hostless block does, because it
+     * cannot collide even in principle.
+     */
+    public function test_the_catch_all_cannot_match_any_real_hostname(): void
     {
         $this->site()->apply(DefaultSite::MODE_PAGE);
         $body = $this->snippet();
 
-        // Hostless site addresses only. A hostname here would make this block
-        // compete with a real vhost instead of losing to it.
         $this->assertStringContainsString('http://:80 {', $body);
+        // Routing: only a hostless address answers a Host no vhost claims.
         $this->assertStringContainsString('https://:443 {', $body);
-        $this->assertDoesNotMatchRegularExpression(
-            '/^(https?:\/\/)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(:\d+)?\s*\{/mi',
-            $body,
-            'the catch-all must never name a hostname'
-        );
+        // Provisioning: a name for Caddy to issue an internal certificate for.
+        $this->assertStringContainsString('https://' . DefaultSite::SNI_HOST . ' {', $body);
+        $this->assertStringEndsWith('.invalid', DefaultSite::SNI_HOST, 'the SNI host must be unregistrable');
+
+        // Any site address in the snippet is either hostless or under .invalid.
+        preg_match_all('/^(\S+)\s*\{$/m', $body, $matches);
+        foreach ($matches[1] as $address) {
+            $host = preg_replace('#^https?://#', '', $address);
+            $this->assertTrue(
+                $host === '' || str_starts_with($host, ':') || str_ends_with($host, '.invalid'),
+                'site address ' . $address . ' could compete with a real vhost'
+            );
+        }
     }
 
     /** Without a cert for an arbitrary SNI the handshake fails — the bug being fixed. */
