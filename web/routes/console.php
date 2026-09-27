@@ -3,6 +3,7 @@
 use App\Console\Commands\ConvergePanelIdentity;
 use App\Console\Commands\EvaluateAlerts;
 use App\Console\Commands\PanelMaintenance;
+use App\Console\Commands\RefreshPanelFpmBinary;
 use App\Console\Commands\RunScheduledBackup;
 use App\Console\Commands\SampleMetrics;
 use Illuminate\Foundation\Inspiring;
@@ -25,6 +26,10 @@ Schedule::command(PanelMaintenance::class)->everyTenMinutes()->withoutOverlappin
 // A39 Part A: finish moving the panel onto its own account after a self-update
 // deploys the release that introduces it. A no-op broker call once migrated.
 Schedule::command(ConvergePanelIdentity::class)->everyFiveMinutes()->withoutOverlapping();
+
+// KI-3: an EL panel runs a private php-fpm copy (SELinux, A3). Keep it on the distro's
+// patched binary. A cmp and nothing else unless it has changed.
+Schedule::command(RefreshPanelFpmBinary::class)->hourly()->withoutOverlapping();
 
 Schedule::call(function () {
     app(\App\Services\Broker\BrokerClient::class)->call('terminal.session.cleanup', [], [], null, false);

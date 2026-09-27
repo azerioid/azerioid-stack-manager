@@ -2,11 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Models\BackupJob;
-use App\Models\ComponentOperation;
-use App\Models\Operation;
-use App\Models\PanelUpdateOperation;
 use App\Services\Broker\BrokerClient;
+use App\Support\PanelActivity;
 use Illuminate\Console\Command;
 
 /**
@@ -32,7 +29,7 @@ class ConvergePanelIdentity extends Command
 
     public function handle(BrokerClient $broker): int
     {
-        if ($this->busy()) {
+        if (PanelActivity::busy()) {
             $this->line('Operations in progress; not now.');
 
             return self::SUCCESS;
@@ -51,19 +48,5 @@ class ConvergePanelIdentity extends Command
             : 'Nothing started: '.($data['reason'] ?? 'not due').'.');
 
         return self::SUCCESS;
-    }
-
-    /**
-     * Only rows touched recently count: a row stranded at `running` by a dead
-     * worker (BackupJob has no reaper yet) must not hold the migration off forever.
-     */
-    private function busy(): bool
-    {
-        $since = now()->subMinutes(PanelMaintenance::STUCK_AFTER_MINUTES);
-
-        return Operation::query()->whereIn('status', Operation::ACTIVE)->where('updated_at', '>=', $since)->exists()
-            || ComponentOperation::query()->whereIn('status', ['queued', 'running'])->where('updated_at', '>=', $since)->exists()
-            || PanelUpdateOperation::query()->whereIn('status', ['queued', 'running'])->where('updated_at', '>=', $since)->exists()
-            || BackupJob::query()->where('status', 'running')->where('updated_at', '>=', $since)->exists();
     }
 }

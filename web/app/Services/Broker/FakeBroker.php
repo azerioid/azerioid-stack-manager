@@ -340,6 +340,7 @@ final class FakeBroker
                 'panel.identity.status' => $this->panelIdentityStatus(),
                 'panel.identity.apply' => $this->panelIdentityApply($stdin),
                 'panel.identity.converge' => $this->panelIdentityConverge(),
+                'panel.fpm.refresh' => ['refreshed' => false, 'skipped' => null, 'log' => []],
                 'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'panel.update.check' => [
                     'channel' => 'tags',
