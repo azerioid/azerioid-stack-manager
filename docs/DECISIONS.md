@@ -383,7 +383,8 @@ remediation is needed.
    PHP pin (**A1**: 8.4) becomes genuinely independent of the distro php-fpm version on every family,
    not only EL. Accepted tradeoff: panel PHP upgrades become a separate operational step rather than
    arriving with a distro update — which is the point, because a distro PHP upgrade can then no longer
-   break the panel unexpectedly.
+   break the panel unexpectedly. *(Refined by Amendment A39-A1 below: independent master, config and
+   pin; the distro binary is shared on purpose, so patch releases still arrive with distro updates.)*
 3. **Migration model: hybrid.** Part A's migration runs **automatically during self-update** (matching
    the "in place, at upgrade" decision), but with a **full rollback guarantee**: create the new identity
    → chown → write **additive** sudoers covering both old and new identity → switch the pool → verify a
@@ -426,6 +427,30 @@ One implementation, `PanelIdentityMigrator` (broker), produces the end state; no
 | Failure | "Fail loudly": the state file `/etc/azerioid-panel/panel-identity.json` (root-only, so the panel cannot clear it) records `failed` with the error and log; automatic retries stop; `azerioid panel identity status` exits non-zero and says so; an operator retries with `azerioid panel identity apply --confirm` (`--dry-run` shows the plan). An attempt that died without rolling back (`running` with nothing running) is reported as interrupted and also waits for an operator. The installer exits non-zero. |
 | Downgrade | Self-update refuses to move a migrated host below `v2.0.0`: older updaters would hand the broker grant back to `web_user` while the pool still runs as `azerioid-panel`, leaving the panel with no broker. |
 | Uninstall | Removes the unit, master config and php.ini. The account goes only with `--drop-db`, because it owns the retained database. |
+
+**Amendment A39-A1 (2026-09-27) — the shared PHP binary is the final state.** Part A decision 2
+asked for a panel PHP "genuinely independent of the distro php-fpm version". As built, the panel has its
+own php-fpm master, its own `php-fpm.conf`, pool and `php.ini`, and its own version pin
+(`panel_runtime.php_version`), but on apt hosts that master **deliberately runs the distro's
+`php-fpm8.4` binary** rather than a vendored or separately packaged build (EL keeps its SELinux `bin_t`
+copy for A3's reason, not for independence). This is accepted as the final state, not a partial
+implementation:
+
+- The goal of A39 is identity and privilege separation: a distinct system account, a distinct sudoers
+  grant, a distinct pool, and a php.ini the site pools do not share. The master/config separation
+  achieves all of it. A separate binary adds no isolation: privilege comes from the account the pool
+  runs as and the grant that account holds, not from which executable file the master was started from.
+- A vendored binary would trade automatic distro security patches for a manual patch burden the panel
+  would have to carry for every PHP CVE. That cuts against this project's rule of not adding
+  maintenance burden without a real security gain.
+- Accepted consequence: a distro PHP 8.4.x update reaches the panel the next time its master restarts,
+  like any other php-fpm service. A distro PHP *minor* change (8.4 → 8.5) is still a separate panel
+  step, because the pin selects the `php-fpm8.4` binary by name.
+- **Known gap, EL only:** the EL panel master runs from the `bin_t` copy that `deploy/lib/fpm.sh` makes
+  once at install time (`PREFIX/sbin/php-fpm`). Nothing refreshes it (not self-update, not the A39
+  migration), so on EL the panel's PHP does **not** pick up distro PHP patches until a reinstall. The
+  reasoning above holds on apt only. Tracked in `docs/KNOWN-ISSUES.md` (KI-3). The fix is for
+  self-update to re-copy and relabel the binary when the distro one has changed.
 
 **Found while building this — Part B defect:** `PanelHardener::rewriteSchedulerCron()` used a pattern
 whose `\s` crossed newlines. On the installer's cron file it rewrote a word of the header comment and
