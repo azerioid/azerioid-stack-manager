@@ -331,6 +331,102 @@ else
     echo "CRON_LOG_DIR=absent (no scheduled jobs have run yet)"
 fi
 
+echo "=== spot-check: SFTP (A48) ==="
+SFTP_OUT="$("${PREFIX}/broker" sftp.status </dev/null 2>&1)" || true
+if printf '%s' "${SFTP_OUT}" | grep -q '"ok":true'; then
+    echo "CHECK_SFTP_READS=pass"
+else
+    echo "CHECK_SFTP_READS=fail"
+fi
+
+# The panel must never edit sshd_config itself — the distro owns it, and an upgrade replacing it
+# must not carry panel changes away. Asserted whether or not SFTP is configured, because this is
+# the property that keeps the host upgradeable.
+if grep -qiE 'azerioid|ForceCommand internal-sftp' /etc/ssh/sshd_config 2>/dev/null; then
+    echo "CHECK_SFTP_NO_SSHD_CONFIG_EDIT=fail"
+    echo "SFTP_SSHD_CONFIG_TOUCHED=yes"
+else
+    echo "CHECK_SFTP_NO_SSHD_CONFIG_EDIT=pass"
+fi
+
+# sshd's own configuration must remain valid at all times; a host that cannot reload sshd is one
+# reboot away from being unreachable.
+if /usr/sbin/sshd -t 2>/dev/null; then
+    echo "CHECK_SFTP_SSHD_CONFIG_VALID=pass"
+else
+    echo "CHECK_SFTP_SSHD_CONFIG_VALID=fail"
+fi
+
+if printf '%s' "${SFTP_OUT}" | grep -q '"configured":true'; then
+    # Ask sshd what it actually resolved for an enabled identity, rather than reading the file the
+    # panel wrote. The file saying the right thing and sshd applying it are different claims, and
+    # the difference is what let a TLS defect ship earlier in this project.
+    SFTP_USER="$(printf '%s' "${SFTP_OUT}" | python3 -c 'import sys,json
+try:
+    sites=json.load(sys.stdin)["data"]["sites"]
+except Exception:
+    sys.exit(0)
+print(sites[0] if sites else "")' 2>/dev/null || true)"
+    if [[ -n "${SFTP_USER}" ]]; then
+        RESOLVED="$(/usr/sbin/sshd -T -C "user=${SFTP_USER}" 2>/dev/null || true)"
+        MISSING=""
+        for directive in "forcecommand internal-sftp" "permittty no" "passwordauthentication no" \
+                         "allowtcpforwarding no" "authorizedkeysfile /etc/ssh/azerioid-authorized-keys/%u"; do
+            printf '%s' "${RESOLVED}" | grep -qi "^${directive}$" || MISSING="${MISSING}${directive}; "
+        done
+        if [[ -z "${MISSING}" ]]; then
+            echo "CHECK_SFTP_RESTRICTIONS_APPLY=pass"
+        else
+            echo "CHECK_SFTP_RESTRICTIONS_APPLY=fail"
+            echo "SFTP_MISSING_DIRECTIVES=${MISSING}"
+        fi
+        echo "SFTP_ENABLED_IDENTITY=${SFTP_USER}"
+
+        # The administrator must never be caught by the Match block. This is the check that would
+        # have failed loudly if the block had matched the group every site identity already belongs
+        # to, which was the first design and would have restricted the panel's own accounts.
+        ROOT_RESOLVED="$(/usr/sbin/sshd -T -C user=root 2>/dev/null || true)"
+        if printf '%s' "${ROOT_RESOLVED}" | grep -qi '^forcecommand none$' \
+            && printf '%s' "${ROOT_RESOLVED}" | grep -qi '^permittty yes$'; then
+            echo "CHECK_SFTP_ADMIN_UNRESTRICTED=pass"
+        else
+            echo "CHECK_SFTP_ADMIN_UNRESTRICTED=fail"
+        fi
+    else
+        echo "SFTP=configured but no site enabled; restriction checks not applicable"
+    fi
+
+    # Keys must not live where the account can rewrite them: a site that owns its key file can
+    # install its own key and keep access after the hole that let it in is closed.
+    KEY_DIR=/etc/ssh/azerioid-authorized-keys
+    if [[ -d "${KEY_DIR}" ]]; then
+        BAD_KEYS=0
+        for f in "${KEY_DIR}"/*; do
+            [[ -e "${f}" ]] || continue
+            OWNER="$(stat -c '%U' "${f}" 2>/dev/null)"
+            MODE="$(stat -c '%a' "${f}" 2>/dev/null)"
+            if [[ "${OWNER}" != "root" ]] || [[ "${MODE}" =~ [2367]$ ]] || [[ "${MODE}" =~ ^.[2367] ]]; then
+                BAD_KEYS=1
+                echo "SFTP_KEY_FILE_UNSAFE=${f} owner=${OWNER} mode=${MODE}"
+            fi
+        done
+        if [[ "${BAD_KEYS}" == "0" ]]; then
+            echo "CHECK_SFTP_KEYS_ROOT_OWNED=pass"
+        else
+            echo "CHECK_SFTP_KEYS_ROOT_OWNED=fail"
+        fi
+    fi
+
+    if [[ -f /etc/fail2ban/jail.d/azerioid-sftp.conf ]]; then
+        echo "CHECK_SFTP_JAIL_PRESENT=pass"
+    else
+        # fail2ban may simply not be installed; reported rather than failed.
+        echo "SFTP_JAIL=absent (fail2ban not installed, or jail removed)"
+    fi
+else
+    echo "SFTP=not configured (opt-in; azerioid sftp enable <domain>)"
+fi
+
 echo "VERIFY_REMOTE_DONE"
 EOS
 )
