@@ -217,6 +217,44 @@ if printf '%s' "${ID_OUT}" | grep -q '"migrated":true'; then
 else
     echo "CHECK_PANEL_IDENTITY=fail"
 fi
+echo "=== spot-check: vhost isolation (ADR A49) ==="
+# Same timing as the identity migration: the scheduler starts it within ~5 minutes.
+ISO_OUT=""
+for _ in $(seq 1 45); do
+    ISO_OUT="$("${PREFIX}/broker" vhost.isolation.status </dev/null 2>&1)" || true
+    printf '%s' "${ISO_OUT}" | grep -q '"migrated":true' && break
+    [[ "${APPLY}" == "1" ]] || break
+    printf '%s' "${ISO_OUT}" | grep -q '"result":"failed"' && break
+    sleep 10
+done
+printf '%s\n' "${ISO_OUT}" | head -c 400
+echo
+if printf '%s' "${ISO_OUT}" | grep -q '"migrated":true'; then
+    echo "CHECK_VHOST_ISOLATION=pass"
+else
+    echo "CHECK_VHOST_ISOLATION=fail"
+fi
+# Adversarial, not a status read: one site's identity must be refused another site's docroot.
+mapfile -t VH_IDS < <(getent passwd | awk -F: '$1 ~ /^az-vh-/ && $6 ~ /^\/data\/www\// {print $1":"$6}')
+CROSS_OPEN=""
+CROSS_TRIED=0
+for a in "${VH_IDS[@]}"; do
+    for b in "${VH_IDS[@]}"; do
+        [[ "${a}" == "${b}" ]] && continue
+        [[ -d "${b#*:}" ]] || continue
+        [[ "$(( $(stat -c '%a' "${b#*:}") % 10 & 4 ))" == "0" ]] || continue
+        CROSS_TRIED=$((CROSS_TRIED + 1))
+        runuser -u "${a%%:*}" -- test -r "${b#*:}" 2>/dev/null && CROSS_OPEN="${CROSS_OPEN} ${a%%:*}->${b#*:}"
+        [[ "${CROSS_TRIED}" -ge 40 ]] && break 2
+    done
+done
+echo "VHOST_CROSS_READS_TRIED=${CROSS_TRIED}"
+if [[ -z "${CROSS_OPEN}" ]]; then
+    echo "CHECK_VHOST_CROSS_READ_REFUSED=pass"
+else
+    echo "VHOST_CROSS_READ_OPEN=${CROSS_OPEN}"
+    echo "CHECK_VHOST_CROSS_READ_REFUSED=fail"
+fi
 if [[ "$(systemctl is-active azerioid-panel-php-fpm.service 2>/dev/null)" == "active" ]]; then
     echo "CHECK_PANEL_OWN_MASTER=pass"
 else
