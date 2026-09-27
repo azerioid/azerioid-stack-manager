@@ -55,7 +55,7 @@
 #
 # 14 days: long enough to answer "why did last night's job fail", short enough that a
 # chatty job cannot fill the disk.
-/var/log/azerioid-panel/cron/*/*.log {
+/var/log/azerioid-cron/*/*.log {
 	daily
 	rotate 14
 	compress
