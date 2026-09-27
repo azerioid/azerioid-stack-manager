@@ -34,10 +34,6 @@ final class SftpManagerTest extends TestCase
         // fail2ban present, with the shipped templates where the installer puts them.
         $rt->dirs['/etc/fail2ban/jail.d'] = true;
         $rt->files['/usr/bin/fail2ban-client'] = '';
-        $rt->files['/usr/local/lib/azerioid-panel/deploy/fail2ban/filter.d/azerioid-sftp.conf'] =
-            "[Definition]\nfailregex = ^.*Connection closed by authenticating user az-vh-\\S+ <HOST>.*$\n";
-        $rt->files['/usr/local/lib/azerioid-panel/deploy/fail2ban/jail.d/azerioid-sftp.conf'] =
-            "[azerioid-sftp]\nenabled = true\nfilter = azerioid-sftp\nmaxretry = 3\n";
 
         return $rt;
     }
@@ -319,7 +315,32 @@ final class SftpManagerTest extends TestCase
         $rt = $this->runtime();
         $this->call($rt, ['sftp.configure']);
 
-        $this->assertStringContainsString('az-vh-', $rt->files[SftpManager::FILTER]);
+        $body = $rt->files[SftpManager::FILTER];
+        $this->assertStringContainsString('az-vh-', $body);
+        $this->assertStringContainsString('Connection closed by authenticating user az-vh-', $body);
+        $this->assertStringContainsString('maxretry', $rt->files[SftpManager::JAIL]);
+    }
+
+    /**
+     * The first version read these from {panelRoot}/deploy/fail2ban — a directory the installer does
+     * not ship, so the jail could never install on a real host, and the fixture that created those
+     * files hid it. Nothing outside the broker may be required.
+     */
+    public function test_the_jail_needs_no_file_from_outside_the_broker(): void
+    {
+        $rt = $this->runtime();
+        // A host with no panel deploy tree at all, which is every host.
+        foreach (array_keys($rt->files) as $path) {
+            if (str_contains($path, '/deploy/')) {
+                unset($rt->files[$path]);
+            }
+        }
+
+        [$code, $json] = $this->call($rt, ['sftp.configure']);
+
+        $this->assertSame(0, $code);
+        $this->assertTrue($json['data']['jail']['installed'], 'the jail must not depend on shipped files');
+        $this->assertNotSame('', $rt->files[SftpManager::FILTER]);
     }
 
     public function test_the_jail_is_installed_after_sshd_not_before(): void

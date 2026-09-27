@@ -170,14 +170,14 @@ final class SftpManager
         if (!$this->runtime->isDir('/etc/fail2ban/jail.d')) {
             return ['installed' => false, 'reason' => 'fail2ban is not installed on this host'];
         }
-        $source = rtrim($this->config->panelRoot, '/') . '/deploy/fail2ban';
-        foreach ([[self::FILTER, 'filter.d/azerioid-sftp.conf'], [self::JAIL, 'jail.d/azerioid-sftp.conf']] as [$target, $rel]) {
-            $path = $source . '/' . $rel;
-            if (!$this->runtime->fileExists($path)) {
-                return ['installed' => false, 'reason' => 'template missing: ' . $path];
-            }
-            $this->runtime->writeFile($target, $this->runtime->readFile($path), 0644);
-        }
+        // Generated here rather than copied from deploy/, the way the cron wrapper is
+        // (CronRenderer::wrapperScript). The first version read template files from
+        // {panelRoot}/deploy/fail2ban — a directory the installer does not ship, so the jail could
+        // never install on a real host. The unit test passed only because its fixture created those
+        // files at a path production does not have, which made the defect invisible. Generating the
+        // content removes the dependency entirely: there is nothing to be missing.
+        $this->runtime->writeFile(self::FILTER, self::filterConfig(), 0644);
+        $this->runtime->writeFile(self::JAIL, self::jailConfig(), 0644);
         $reload = $this->runtime->exec(['/usr/bin/fail2ban-client', 'reload'], null, 60);
 
         return [
@@ -189,6 +189,77 @@ final class SftpManager
             'reloaded' => $reload->ok(),
             'detail' => $reload->ok() ? null : trim($reload->stderr !== '' ? $reload->stderr : $reload->stdout),
         ];
+    }
+
+    /** The fail2ban filter, as shipped. Single source: nothing on disk to drift from it. */
+    public static function filterConfig(): string
+    {
+        return <<<'CONF'
+# AZERIOID Stack Manager — SFTP authentication failures (A48).
+#
+# Why a filter of its own rather than relying on the stock `sshd` jail: these accounts are
+# key-only, and a failed key attempt does not produce "Failed password". sshd logs it as a
+# connection closed by an authenticating user, or as the authentication-attempt limit being
+# reached — lines the sshd filter either ignores or treats as normal churn. Without this, the
+# one account type most likely to be probed is the one nothing watches.
+#
+# Scoped to `az-vh-*` on purpose. Administrator logins stay the stock sshd jail's business, so
+# a mistake in this file cannot ban an operator who mistyped their own passphrase.
+
+[INCLUDES]
+before = common.conf
+
+[Definition]
+
+_daemon = sshd
+
+# `Connection closed by authenticating user az-vh-x 1.2.3.4 port N [preauth]` — a key that was
+# offered and refused, which is what a probe of one of these accounts looks like.
+# `maximum authentication attempts exceeded for az-vh-x from 1.2.3.4` — several in one session.
+# `Invalid user az-vh-x from 1.2.3.4` — a guessed site identity.
+failregex = ^%(__prefix_line)sConnection closed by authenticating user az-vh-\S+ <HOST> port \d+ \[preauth\]\s*$
+            ^%(__prefix_line)serror: maximum authentication attempts exceeded for az-vh-\S+ from <HOST> port \d+ ssh2\s*(?:\[preauth\])?\s*$
+            ^%(__prefix_line)sInvalid user az-vh-\S+ from <HOST> port \d+\s*$
+            ^%(__prefix_line)sUser az-vh-\S+ from <HOST> not allowed because not listed in AllowUsers\s*$
+
+# A successful transfer is not a failure, and neither is a clean disconnect after one. Both appear
+# near the failure lines above and would otherwise inflate counts.
+#
+# Unanchored and without %(__prefix_line)s, which an ignore rule does not need — fail2ban only
+# consults ignoreregex for lines a failregex already matched, so these exist purely as a brake in
+# case a failregex is ever widened to catch a line that is really a success.
+#
+# Note for anyone reading fail2ban-regex output: its "Ignoreregex: N total" counts *hits*, not
+# loaded patterns. Zero there means nothing needed ignoring, which is the normal result — not that
+# the section failed to load. Read the "Lines: … ignored … matched … missed" summary instead.
+ignoreregex = Accepted publickey for az-vh-\S+ from <HOST>
+              Disconnected from user az-vh-\S+ <HOST>
+
+[Init]
+journalmatch = _SYSTEMD_UNIT=sshd.service + _COMM=sshd
+CONF;
+    }
+
+    public static function jailConfig(): string
+    {
+        return <<<'CONF'
+# AZERIOID Stack Manager — SFTP jail (A48). Installed with panel-managed SFTP, removed with it.
+#
+# Separate from the stock `sshd` jail so the two can be tuned independently, and so a change here
+# can never affect how administrator logins are handled.
+#
+# maxretry is lower than the sshd jail's: a legitimate SFTP client presents one key and either
+# works or does not. Several failures in a row from one address is a probe, not a person
+# mistyping something — there is nothing to mistype.
+[azerioid-sftp]
+enabled  = true
+filter   = azerioid-sftp
+backend  = auto
+port     = ssh
+maxretry = 3
+findtime = 600
+bantime  = 3600
+CONF;
     }
 
     /** @return array<string,mixed> */
