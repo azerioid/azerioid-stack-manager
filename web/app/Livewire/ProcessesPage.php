@@ -41,9 +41,14 @@ class ProcessesPage extends Component
         $this->reload($broker);
     }
 
+    /**
+     * Does not clear $this->error. Every write on this page reloads afterwards, so clearing it here
+     * replaced the broker's refusal with silence — the operator saw nothing happen and no reason
+     * why, which is indistinguishable from the action having worked. Each action sets the error
+     * itself, to null on success, so there is nothing for this method to reset.
+     */
     public function reload(BrokerClient $broker): void
     {
-        $this->error = null;
         try {
             $status = $broker->call('component.status', ['supervisor']);
             $this->supervisorInstalled = ($status->data['status'] ?? '') === 'active'
