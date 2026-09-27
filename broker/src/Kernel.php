@@ -255,6 +255,8 @@ final class Kernel
         // Assembles the archive as the vhost identity and hands it to the panel user to
         // stream; see VhostFilesAction::zip() for the ownership handover (G12).
         'vhost.files.zip' => VhostFilesAction::class,
+        // A40: extract, behind ZipExtractGuard and its adversarial suite.
+        'vhost.files.extract' => VhostFilesAction::class,
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 

@@ -314,6 +314,12 @@ class DatabasesPage extends Component
         }
     }
 
+    /**
+     * Does not clear $this->error. Every write on this page reloads afterwards, so clearing it here
+     * replaced the broker's refusal with silence — the operator saw nothing happen and no reason
+     * why, which is indistinguishable from the action having worked. Each action sets the error
+     * itself, to null on success, so there is nothing for this method to reset.
+     */
     private function reload(BrokerClient $broker): void
     {
         if ($this->selectedEngine === '') {
@@ -324,7 +330,6 @@ class DatabasesPage extends Component
         try {
             $data = $broker->call('db.list', [], ['engine' => $this->selectedEngine])->dataOrFail();
             $this->databases = $data['databases'] ?? [];
-            $this->error = null;
         } catch (BrokerCallException $e) {
             $this->error = $e->getMessage();
         }

@@ -178,17 +178,31 @@ final class VhostFileOpTest extends TestCase
         $this->assertFileDoesNotExist($this->other . '/stolen.txt');
     }
 
-    public function test_no_archive_extract_operation(): void
+    /**
+     * Extract was excluded when the File Manager shipped, and this test asserted that exclusion.
+     * A40 reversed it by operator decision, conditional on ZipExtractGuard and its adversarial
+     * suite — so the assertion is replaced rather than deleted, and it now pins the condition the
+     * reversal was granted on. If the guard is ever bypassed, this fails.
+     */
+    public function test_extract_exists_only_behind_its_guard(): void
     {
-        $this->assertNotContains('extract', VhostFileOp::OPS);
+        $this->assertContains('extract', VhostFileOp::OPS);
+        $this->assertArrayHasKey('vhost.files.extract', Kernel::ACTIONS);
+
+        // Still no bare unzip alias: one entry point, one guard.
         $this->assertNotContains('unzip', VhostFileOp::OPS);
-        $this->assertArrayNotHasKey('vhost.files.extract', Kernel::ACTIONS);
         $this->assertArrayNotHasKey('vhost.files.unzip', Kernel::ACTIONS);
+
+        // The operation must refuse a file that is not an archive, which is the guard talking —
+        // if extraction ever ran without it, this would be a filesystem error instead.
+        file_put_contents($this->root . '/not-an-archive.zip', "just text\n");
         try {
-            VhostFileOp::execute(['op' => 'extract', 'root' => $this->root, 'path' => 'x.zip']);
-            $this->fail('extract must not exist');
+            VhostFileOp::execute([
+                'op' => 'extract', 'root' => $this->root, 'path' => 'not-an-archive.zip',
+            ]);
+            $this->fail('extract must go through ZipExtractGuard');
         } catch (VhostFileException $e) {
-            $this->assertSame(2, $e->errorCode);
+            $this->assertStringContainsString('zip archive', $e->getMessage());
         }
     }
 

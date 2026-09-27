@@ -302,6 +302,29 @@
                 </div>
             @endif
 
+            {{-- A40: extract. Every refusal — traversal, links, setuid bits, bombs, overwriting an
+                 existing file — comes from the broker's guard, not from this page. --}}
+            @if ($extractTarget !== null)
+                <div class="border-t border-white/10 bg-ink-900/60 px-4 py-3 text-sm">
+                    <p class="text-zinc-300">
+                        Extract <span class="font-mono text-brass-400">{{ basename($extractTarget) }}</span> into folder:
+                    </p>
+                    <input class="field mt-2 font-mono text-xs" wire:model="extractTo"
+                           placeholder="relative to the document root; empty means the root"
+                           x-init="$nextTick(() => { $el.focus(); $el.select() })"
+                           @keydown.enter.prevent="$wire.extract()"
+                           @keydown.escape.prevent="$wire.cancelExtract()">
+                    <p class="mt-2 text-[11px] text-zinc-500">
+                        Existing files are never replaced — if anything in the archive is already there,
+                        nothing is extracted and you are told which file is in the way.
+                    </p>
+                    <div class="mt-3 flex gap-2">
+                        <button type="button" class="btn-primary" wire:click="extract">Extract</button>
+                        <button type="button" class="btn-ghost" wire:click="cancelExtract">Cancel</button>
+                    </div>
+                </div>
+            @endif
+
             {{-- B3: chmod, presets only. A free-text mode field here is an invitation to type
                  777, which would let every other identity on the host write this site's files. --}}
             @if ($chmodTarget !== null)
@@ -373,6 +396,7 @@
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startMove(menu.rel); menu.open = false">Move…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped" @click="$wire.startCopy(menu.rel); menu.open = false">Copy…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.escaped" @click="$wire.startChmod(menu.rel, menu.dir); menu.open = false">Permissions…</button>
+            <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-ink-600" x-show="!menu.dir && !menu.escaped && /\.zip$/i.test(menu.rel)" @click="$wire.startExtract(menu.rel); menu.open = false">Extract…</button>
             <button type="button" class="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-ink-600" @click="$wire.askDelete(menu.rel, menu.dir); menu.open = false">Delete</button>
         </div>
     @endif
