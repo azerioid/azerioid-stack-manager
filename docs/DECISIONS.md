@@ -449,8 +449,11 @@ implementation:
 - **Known gap, EL only:** the EL panel master runs from the `bin_t` copy that `deploy/lib/fpm.sh` makes
   once at install time (`PREFIX/sbin/php-fpm`). Nothing refreshes it (not self-update, not the A39
   migration), so on EL the panel's PHP does **not** pick up distro PHP patches until a reinstall. The
-  reasoning above holds on apt only. Tracked in `docs/KNOWN-ISSUES.md` (KI-3). The fix is for
-  self-update to re-copy and relabel the binary when the distro one has changed.
+  reasoning above holds on apt only. **Fixed in v2.0.1 (was KI-3):** every self-update now compares
+  the copy with the distro binary (`PanelFpmBinary`). When they differ it re-copies, relabels
+  (`restorecon`), config-tests with the unit's own arguments and restarts the panel master, putting the
+  previous binary back if either step fails. A failed refresh is logged and never fails the update. The
+  first patch reaches an EL panel at the first self-update after the distro one.
 
 **Found while building this — Part B defect:** `PanelHardener::rewriteSchedulerCron()` used a pattern
 whose `\s` crossed newlines. On the installer's cron file it rewrote a word of the header comment and
