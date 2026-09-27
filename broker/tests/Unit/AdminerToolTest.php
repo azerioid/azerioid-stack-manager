@@ -71,9 +71,12 @@ final class AdminerToolTest extends TestCase
         return $rt;
     }
 
-    private function kernel(FakeRuntime $rt): Kernel
+    private function kernel(FakeRuntime $rt, ?string $panelFpmUnit = null): Kernel
     {
         $cfg = new Config();
+        if ($panelFpmUnit !== null) {
+            $cfg->panelFpmUnit = $panelFpmUnit;
+        }
         $cfg->registryComponentsPath = $this->registryPath;
         $cfg->stagingDir = sys_get_temp_dir() . '/azerioid-adminer-test-' . getmypid();
         $cfg->managedComponentsPath = $cfg->stagingDir . '/managed-components.json';
@@ -128,5 +131,29 @@ final class AdminerToolTest extends TestCase
         [$code, $json] = $this->capture($this->kernel($rt), ['broker', 'component.install', 'adminer'], ['operation_id' => 'op-adminer-bad']);
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('checksum', strtolower((string) ($json['error'] ?? '')));
+    }
+
+    /**
+     * KI-5 (A39 regression): on a migrated apt host panel_runtime.fpm_unit is the panel's own
+     * master, but the Adminer pool lives in the distro pool.d. Install and removal must reload
+     * the distro master, or they do not take effect.
+     */
+    public function test_migrated_apt_host_reloads_the_master_that_owns_the_pool(): void
+    {
+        $rt = $this->ubuntuRuntime();
+        $kernel = $this->kernel($rt, 'azerioid-panel-php-fpm');
+
+        [$code] = $this->capture($kernel, ['broker', 'component.install', 'adminer'], ['operation_id' => 'op-adminer-ki5a']);
+        $this->assertSame(0, $code);
+        [$code2] = $this->capture($kernel, ['broker', 'component.uninstall', 'adminer'], ['operation_id' => 'op-adminer-ki5b']);
+        $this->assertSame(0, $code2);
+
+        $reloads = array_values(array_filter(
+            array_map(static fn (array $e): array => $e['command'], $rt->execLog),
+            static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/systemctl' && in_array($c[1] ?? '', ['reload', 'restart'], true)
+        ));
+        $units = array_map(static fn (array $c): string => $c[2] ?? '', $reloads);
+        $this->assertSame(2, count(array_keys($units, 'php8.4-fpm', true)), 'install and uninstall each reload the distro master: ' . json_encode($units));
+        $this->assertNotContains('azerioid-panel-php-fpm', $units, 'the panel master does not hold the Adminer pool on apt');
     }
 }

@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\CaddyApply;
 use AzerioidPanel\Broker\Component\OperationLogger;
 use AzerioidPanel\Broker\Component\OsRelease;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Panel\PanelIdentityMigrator;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Web\PanelCaddy;
 
@@ -41,7 +42,7 @@ final class AdminerTool
             $this->ensureToolPathAccess();
             $this->downloadArtifact($artifact, $log);
             $this->writeFpmPool($log);
-            $this->reloadPanelPhpFpm($log);
+            $this->reloadPoolMaster($log);
             // Stub must exist before the panel snippet imports it (Caddy fails closed on missing imports).
             $this->writeCaddyRoutes(false);
             $this->ensurePanelSnippetImports();
@@ -64,7 +65,7 @@ final class AdminerTool
             if ($this->runtime->fileExists($poolFile)) {
                 $this->runtime->deleteFile($poolFile);
             }
-            $this->reloadPanelPhpFpm($log);
+            $this->reloadPoolMaster($log);
             if ($this->runtime->fileExists(self::ARTIFACT_PATH)) {
                 $this->runtime->deleteFile(self::ARTIFACT_PATH);
             }
@@ -209,11 +210,15 @@ POOL;
         return '/etc/php/' . $ver . '/fpm/pool.d/' . self::FPM_POOL . '.conf';
     }
 
-    private function reloadPanelPhpFpm(OperationLogger $log): void
+    /**
+     * Reload the php-fpm master that includes the Adminer pool file. That is decided by
+     * where fpmPoolFile() puts it, not by panel_runtime.fpm_unit. After A39 that unit is
+     * the panel's own master on every family, but on apt the pool still lives in the
+     * distro pool.d, so reloading the panel unit left installs and removals unapplied (KI-5).
+     */
+    private function reloadPoolMaster(OperationLogger $log): void
     {
-        $unit = $this->config->panelFpmUnit !== ''
-            ? $this->config->panelFpmUnit
-            : $this->config->phpFpmService($this->config->panelPhpVersion, $this->runtime);
+        $unit = $this->poolMasterUnit();
         $res = $this->runtime->exec(['/usr/bin/systemctl', 'reload', $unit], null, 30);
         if (!$res->ok()) {
             $log->warn('systemctl reload ' . $unit . ' failed; trying restart.');
@@ -221,7 +226,16 @@ POOL;
         }
     }
 
-    private function writeCaddyRoutes(bool $enabled): void
+    private function poolMasterUnit(): string
+    {
+        if (str_starts_with($this->fpmPoolFile(), '/etc/azerioid-panel/')) {
+            return $this->config->panelFpmUnit !== '' ? $this->config->panelFpmUnit : PanelIdentityMigrator::UNIT;
+        }
+
+        return $this->config->phpFpmService($this->config->panelPhpVersion, $this->runtime);
+    }
+
+        private function writeCaddyRoutes(bool $enabled): void
     {
         $path = $this->config->adminerCaddyRoutesPath;
         $this->runtime->mkdir(dirname($path), 0750);
