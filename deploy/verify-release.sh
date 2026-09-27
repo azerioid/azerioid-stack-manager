@@ -199,6 +199,59 @@ else
     echo "CHECK_SSHD=fail"
 fi
 
+echo "=== spot-check: panel identity (ADR A39 Part A) ==="
+# After an --apply the scheduler starts the migration within ~5 minutes of the
+# deploy; give it that long before calling a pending host a failure.
+ID_OUT=""
+for _ in $(seq 1 45); do
+    ID_OUT="$("${PREFIX}/broker" panel.identity.status </dev/null 2>&1)" || true
+    printf '%s' "${ID_OUT}" | grep -q '"migrated":true' && break
+    [[ "${APPLY}" == "1" ]] || break
+    printf '%s' "${ID_OUT}" | grep -q '"result":"failed"' && break
+    sleep 10
+done
+printf '%s\n' "${ID_OUT}" | head -c 600
+echo
+if printf '%s' "${ID_OUT}" | grep -q '"migrated":true'; then
+    echo "CHECK_PANEL_IDENTITY=pass"
+else
+    echo "CHECK_PANEL_IDENTITY=fail"
+fi
+if [[ "$(systemctl is-active azerioid-panel-php-fpm.service 2>/dev/null)" == "active" ]]; then
+    echo "CHECK_PANEL_OWN_MASTER=pass"
+else
+    echo "CHECK_PANEL_OWN_MASTER=fail"
+fi
+# Nobody but the panel account may reach the broker: not Caddy, not site PHP.
+GRANTED=""
+for u in caddy www-data apache nginx; do
+    id -u "${u}" >/dev/null 2>&1 || continue
+    sudo -l -U "${u}" 2>/dev/null | grep -q "${PREFIX}/broker" && GRANTED="${GRANTED} ${u}"
+done
+echo "BROKER_GRANT_OUTSIDE_PANEL=${GRANTED:-none}"
+if [[ -z "${GRANTED}" ]]; then
+    echo "CHECK_BROKER_GRANT_ONLY_PANEL=pass"
+else
+    echo "CHECK_BROKER_GRANT_ONLY_PANEL=fail"
+fi
+# Caddy serves the panel but must not be able to read its secrets.
+if id -u caddy >/dev/null 2>&1; then
+    if runuser -u caddy -- test -r "${PREFIX}/web/.env" 2>/dev/null; then
+        echo "CHECK_CADDY_CANNOT_READ_PANEL_ENV=fail"
+    else
+        echo "CHECK_CADDY_CANNOT_READ_PANEL_ENV=pass"
+    fi
+fi
+# The distro php.ini carries the operator's own disable_functions again.
+for ini in /etc/php/*/fpm/php.ini /etc/php.ini; do
+    [[ -f "${ini}.azerioid-panel.bak" ]] || continue
+    if [[ "$(grep -m1 '^disable_functions' "${ini}")" == "$(grep -m1 '^disable_functions' "${ini}.azerioid-panel.bak")" ]]; then
+        echo "CHECK_DISTRO_PHPINI_RESTORED=pass"
+    else
+        echo "CHECK_DISTRO_PHPINI_RESTORED=fail"
+    fi
+done
+
 echo "=== spot-check: database broker ==="
 DB_OUT="$("${PREFIX}/broker" db.engine </dev/null 2>&1)" || true
 if printf '%s' "${DB_OUT}" | grep -q '"ok":true'; then

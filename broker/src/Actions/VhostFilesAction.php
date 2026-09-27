@@ -82,7 +82,7 @@ final class VhostFilesAction
         }
 
         // Handover: the panel reads it, nobody else on the host does.
-        $runtime->chown($out, $config->webUser, $config->webUser);
+        $runtime->chown($out, $config->panelUser, $config->panelUser);
         $runtime->chmod($out, 0400);
         $runtime->chown($dir, 'root', 'root');
         $runtime->chmod($dir, 0710);
@@ -90,7 +90,7 @@ final class VhostFilesAction
         return $result + [
             'path' => $out,
             'directory' => $dir,
-            'owner' => $config->webUser,
+            'owner' => $config->panelUser,
             // The caller streams it and is responsible for removing the directory afterwards;
             // azerioid:maintenance sweeps anything left behind by a request that died.
             'cleanup' => $dir,

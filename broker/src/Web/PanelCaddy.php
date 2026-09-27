@@ -313,7 +313,7 @@ CADDY;
         if ($oldEnv !== null || $runtime->fileExists($envPath)) {
             $this->setEnvKey($runtime, $envPath, 'APP_URL', $appUrl);
             try {
-                $runtime->chown($envPath, $config->phpUser, $config->phpGroup);
+                $runtime->chown($envPath, $config->panelUser, $config->panelUser);
             } catch (\Throwable) {
             }
         }

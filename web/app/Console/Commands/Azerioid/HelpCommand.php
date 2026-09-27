@@ -69,6 +69,8 @@ Usage:
   azerioid panel update apply [--v=<tag>] --confirm
   azerioid panel harden status [--json]
   azerioid panel harden apply --confirm [--lockdown-site-pools] [--dry-run]
+  azerioid panel identity status [--json]              # A39: dedicated azerioid-panel account
+  azerioid panel identity apply --confirm [--dry-run]  # runs automatically after self-update
   azerioid panel default-site show [--json]
   azerioid panel default-site set --mode=page|404|421   # answer hostnames no vhost claims
   azerioid panel default-site clear

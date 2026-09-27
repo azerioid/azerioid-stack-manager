@@ -210,6 +210,12 @@ final class PanelHardener
 
     private function residualRisk(): string
     {
+        if ($this->config->panelUser === PanelIdentityMigrator::USER) {
+            return 'A39 Part A is in place: the panel runs as ' . PanelIdentityMigrator::USER
+                . ' on its own php-fpm master with its own php.ini, and that account is the only broker '
+                . 'sudo holder. Neither hosted-site PHP nor Caddy holds a grant.';
+        }
+
         return 'Closed by this change: hosted-site PHP (site pool user) no longer holds any sudo '
             . 'grant to the broker, so site code execution is not a path to root. '
             . 'NOT closed here: on apt hosts the panel pool still shares one php-fpm master (and '
@@ -289,39 +295,23 @@ final class PanelHardener
 
     private function sudoersPath(): string
     {
-        return '/etc/sudoers.d/azerioid-panel';
+        return PanelSudoers::PATH;
     }
 
     /** @return list<string> */
     private function sudoersUsers(): array
     {
-        $path = $this->sudoersPath();
-        if (!$this->runtime->fileExists($path)) {
-            return [];
-        }
-        try {
-            $body = $this->runtime->readFile($path);
-        } catch (BrokerException) {
-            return [];
-        }
-        $users = [];
-        $broker = preg_quote(rtrim($this->config->panelRoot, '/') . '/broker', '/');
-        foreach (explode("\n", $body) as $line) {
-            $line = trim($line);
-            if ($line === '' || str_starts_with($line, '#')) {
-                continue;
-            }
-            if (preg_match('/^(\S+)\s+ALL=\(root\)\s+NOPASSWD:\s*' . $broker . '\s*$/', $line, $m) === 1) {
-                $users[] = $m[1];
-            }
-        }
-
-        return array_values(array_unique($users));
+        return PanelSudoers::users($this->runtime, $this->config);
     }
 
     /** @param list<string> $siteUsers */
     private function resolveTarget(array $siteUsers, bool $strict): string
     {
+        // After A39 Part A the panel has its own account; hardening must never
+        // move it back onto a shared one.
+        if ($this->config->panelUser === PanelIdentityMigrator::USER && $this->userExists(PanelIdentityMigrator::USER)) {
+            return PanelIdentityMigrator::USER;
+        }
         // Prefer `caddy`: it is what detect_web_user() intends, what EL hosts
         // already run, and what the fixed installer produces — so hardened apt
         // hosts converge on the same state instead of forming a third variant.
@@ -395,43 +385,8 @@ final class PanelHardener
     /** @param list<string> $users */
     private function writeSudoers(array $users, string $stage): void
     {
-        if ($users === []) {
-            throw new BrokerException('Refusing to write an empty sudoers grant.', 3);
-        }
-        $path = $this->sudoersPath();
-        $this->backupFile($path);
-
-        $broker = rtrim($this->config->panelRoot, '/') . '/broker';
-        $body = "# AZERIOID Stack Manager — sudoers (panel hardening, R1)\n";
-        foreach ($users as $u) {
-            if (preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $u) !== 1) {
-                throw new BrokerException('Refusing to write an invalid user into sudoers: ' . $u, 2);
-            }
-            $body .= "Defaults:{$u} !requiretty\n";
-            $body .= "Defaults:{$u} umask=0022\n";
-        }
-        foreach ($users as $u) {
-            $body .= "{$u} ALL=(root) NOPASSWD: {$broker}\n";
-        }
-
-        // Validate BEFORE replacing the live file.
-        $tmp = rtrim($this->config->stagingDir, '/') . '/sudoers.azerioid-panel.check';
-        $this->runtime->mkdir($this->config->stagingDir, 0750);
-        $this->runtime->writeFile($tmp, $body, 0440);
-        $check = $this->runtime->exec(['/usr/sbin/visudo', '-c', '-f', $tmp], null, 15);
-        if (!$check->ok()) {
-            $this->runtime->deleteFile($tmp);
-            throw new BrokerException('Generated sudoers failed visudo validation: ' . trim($check->stderr . ' ' . $check->stdout), 1);
-        }
-        $this->runtime->deleteFile($tmp);
-
-        $this->runtime->writeFile($path, $body, 0440);
-        $this->runtime->chmod($path, 0440);
-
-        $post = $this->runtime->exec(['/usr/sbin/visudo', '-c'], null, 15);
-        if (!$post->ok()) {
-            throw new BrokerException('System sudoers invalid after write: ' . trim($post->stderr . ' ' . $post->stdout), 1);
-        }
+        $this->backupFile($this->sudoersPath());
+        PanelSudoers::install($this->runtime, $this->config, $users, 'panel hardening, R1');
         $this->note("sudoers ({$stage}): " . implode(', ', $users));
     }
 
@@ -550,6 +505,9 @@ final class PanelHardener
             throw new BrokerException('broker.json is not valid JSON; refusing to rewrite.', 1);
         }
         $data['web_user'] = $target;
+        if (array_key_exists('panel_user', $data)) {
+            $data['panel_user'] = $target;
+        }
         $this->runtime->writeFile(
             $path,
             json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
@@ -578,12 +536,8 @@ final class PanelHardener
         }
         $this->backupFile($path);
         $body = $this->runtime->readFile($path);
-        $patched = preg_replace(
-            '/^(\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+)\S+(\s+)/m',
-            '${1}' . $target . '${2}',
-            $body
-        );
-        if (!is_string($patched)) {
+        $patched = PanelSudoers::cronUser($body, $target);
+        if ($patched === null) {
             throw new BrokerException('Failed to rewrite the scheduler cron line.', 1);
         }
         $this->runtime->writeFile($path, $patched, 0644);

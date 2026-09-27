@@ -16,7 +16,7 @@ flush_panel_fail2ban_bans() {
 reset_panel_fail2ban_log() {
     install -d -m 0750 /var/log/azerioid-panel
     install -m 0640 /dev/null /var/log/azerioid-panel/auth-fail.log
-    chown "${WEB_USER}:${WEB_USER}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
+    chown "${PANEL_USER}:${PANEL_USER}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
 }
 
 
@@ -43,7 +43,7 @@ install_logrotate() {
     fi
     if [[ ! -f /var/log/azerioid-panel/auth-fail.log ]]; then
         install -m 0640 /dev/null /var/log/azerioid-panel/auth-fail.log
-        chown "${WEB_USER:-caddy}:${WEB_USER:-caddy}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
+        chown "${PANEL_USER:-${WEB_USER:-caddy}}:${PANEL_USER:-${WEB_USER:-caddy}}" /var/log/azerioid-panel/auth-fail.log 2>/dev/null || true
     fi
 }
 

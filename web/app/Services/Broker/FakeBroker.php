@@ -337,6 +337,9 @@ final class FakeBroker
                 'status.all' => $this->statusAll(),
                 'panel.runtime' => $this->panelRuntime(),
                 'panel.domain.show' => $this->panelDomainShow(),
+                'panel.identity.status' => $this->panelIdentityStatus(),
+                'panel.identity.apply' => $this->panelIdentityApply($stdin),
+                'panel.identity.converge' => $this->panelIdentityConverge(),
                 'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'panel.update.check' => [
                     'channel' => 'tags',
@@ -864,6 +867,70 @@ final class FakeBroker
 
     /** SFTP state for the local/test panel (A48). */
     public bool $sftpConfigured = false;
+
+    /** A39 Part A: whether the fake host already runs the panel as azerioid-panel. */
+    public bool $panelIdentityMigrated = false;
+
+    /** Last attempt outcome the fake reports: null, 'failed', 'succeeded'. */
+    public ?string $panelIdentityLastResult = null;
+
+    public int $panelIdentityConvergeStarts = 0;
+
+    /** @return array<string, mixed> */
+    private function panelIdentityStatus(): array
+    {
+        $failed = $this->panelIdentityLastResult === 'failed';
+
+        return [
+            'target_user' => 'azerioid-panel',
+            'migrated' => $this->panelIdentityMigrated,
+            'needs_migration' => ! $this->panelIdentityMigrated,
+            'panel_user' => $this->panelIdentityMigrated ? 'azerioid-panel' : 'caddy',
+            'panel_pool_user' => $this->panelIdentityMigrated ? 'azerioid-panel' : 'caddy',
+            'queue_user' => $this->panelIdentityMigrated ? 'azerioid-panel' : 'caddy',
+            'sudoers_users' => [$this->panelIdentityMigrated ? 'azerioid-panel' : 'caddy'],
+            'fpm_unit' => $this->panelIdentityMigrated ? 'azerioid-panel-php-fpm' : 'php8.4-fpm',
+            'last_attempt' => $this->panelIdentityLastResult === null ? null : ['result' => $this->panelIdentityLastResult, 'error' => 'fake failure'],
+            'running' => false,
+            'interrupted' => false,
+            'auto_eligible' => ! $this->panelIdentityMigrated && ! $failed,
+            'verdict' => $this->panelIdentityMigrated
+                ? 'OK: the panel runs as azerioid-panel on its own php-fpm master and is the only broker sudo holder.'
+                : ($failed ? 'FAILED: the last migration attempt was rolled back (fake failure).' : 'PENDING: the panel still runs as caddy.'),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function panelIdentityApply(array $stdin): array
+    {
+        if (($stdin['confirm'] ?? '') !== 'MIGRATE-PANEL-IDENTITY') {
+            throw new BrokerCallException('Type MIGRATE-PANEL-IDENTITY to confirm.', 3);
+        }
+        if ($this->panelIdentityMigrated) {
+            return ['changed' => false, 'already_migrated' => true, 'status' => $this->panelIdentityStatus()];
+        }
+        if (($stdin['dry_run'] ?? false) === true) {
+            return ['changed' => false, 'dry_run' => true, 'from_user' => 'caddy', 'to_user' => 'azerioid-panel', 'steps' => ['create system account azerioid-panel if missing']];
+        }
+        $this->panelIdentityMigrated = true;
+        $this->panelIdentityLastResult = 'succeeded';
+
+        return ['changed' => true, 'from_user' => 'caddy', 'to_user' => 'azerioid-panel', 'log' => ['fake migration'], 'status' => $this->panelIdentityStatus()];
+    }
+
+    /** @return array<string, mixed> */
+    private function panelIdentityConverge(): array
+    {
+        if ($this->panelIdentityMigrated) {
+            return ['started' => false, 'reason' => 'already migrated'];
+        }
+        if ($this->panelIdentityLastResult === 'failed') {
+            return ['started' => false, 'reason' => 'the last attempt failed and was rolled back'];
+        }
+        $this->panelIdentityConvergeStarts++;
+
+        return ['started' => true, 'unit' => 'azerioid-panel-identity.service'];
+    }
 
     /** @var list<string> domains with SFTP enabled */
     public array $sftpSites = [];

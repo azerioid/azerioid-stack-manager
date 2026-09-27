@@ -32,15 +32,18 @@ flowchart TB
 | Broker | `/usr/local/lib/azerioid-panel/broker` (`AzerioidPanel\Broker`) | Privileged host operations (sudo) |
 | Registry | `registry/components/*.json` | Component metadata (detect/install data) |
 | Panel DB | `/var/lib/azerioid-panel/panel.sqlite` | SQLite — panel state only |
-| Panel FPM | `/run/php/azerioid-panel.sock` | Isolated PHP 8.4 pool (user `caddy`) |
+| Panel FPM | `/run/php/azerioid-panel.sock` | Isolated PHP 8.4 pool on its own master `azerioid-panel-php-fpm.service` (user `azerioid-panel`, A39) |
 | Panel vhost | `/etc/caddy/conf.d/azerioid-panel.conf` | Localhost tunnel on `:3169`; optional `https://<IP>:3169` + 421 catch-all; optional white-label hostname on `:443` |
 
 ## Panel runtime isolation (A1)
 
 The panel runs on a **dedicated PHP-FPM pool** pinned to PHP **8.4**. This is a **system component** — visible in Settings and Components, non-removable. User-installed PHP versions are separate pools managed in later phases.
 
-- Socket: `/run/php/azerioid-panel.sock`
-- Pool user: `caddy` (matches Caddy service user)
+- Socket: `/run/php/azerioid-panel.sock` (owner `azerioid-panel`, group = Caddy's user, `0660`)
+- Pool user: `azerioid-panel`, a dedicated system account that is also the queue worker, the scheduler
+  and the **only** holder of the broker sudo grant (A39 Part A; revises the original `caddy`)
+- Own php-fpm master `azerioid-panel-php-fpm.service` with its own `/etc/azerioid-panel/php.ini`,
+  on every OS family; the distro php.ini serves sites only
 - Version pin: `PANEL_PHP_VERSION=8.4` recorded in `/etc/azerioid-panel/runtime.json`
 - Broker refuses removal of the pinned PHP version while the panel depends on it
 

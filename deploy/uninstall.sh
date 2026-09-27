@@ -292,7 +292,7 @@ purge_released_caddy_state
 systemctl stop azerioid-panel-php-fpm.service 2>/dev/null || true
 systemctl disable azerioid-panel-php-fpm.service 2>/dev/null || true
 rm -f /etc/systemd/system/azerioid-panel-php-fpm.service
-rm -f /etc/azerioid-panel/php-fpm.conf
+rm -f /etc/azerioid-panel/php-fpm.conf /etc/azerioid-panel/php.ini
 rm -rf /etc/azerioid-panel/php-fpm.d
 rm -f /run/azerioid-panel-php-fpm.pid
 semodule -r azerioid_panel_fpm 2>/dev/null || true
@@ -323,6 +323,9 @@ if [[ "${DROP_DB}" -eq 1 ]]; then
     rm -f /var/lib/azerioid-panel/panel.sqlite /var/lib/azerioid-panel/panel.sqlite-wal /var/lib/azerioid-panel/panel.sqlite-shm
     rm -rf /var/lib/azerioid-panel
     rm -rf /etc/azerioid-panel
+    # The dedicated panel account (ADR A39) owns the retained panel database, so
+    # it goes only with the database; a plain uninstall keeps both for reinstall.
+    userdel azerioid-panel 2>/dev/null || true
 fi
 
 if [[ "${PURGE_REPOS}" -eq 1 ]]; then

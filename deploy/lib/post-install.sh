@@ -10,7 +10,7 @@ _admin_create_manual_hint() {
     echo "  Create an admin account using either:"
     echo "    • Browser:  ${setup_url}"
     echo "    • CLI (password via env only — not argv):"
-    echo "        sudo -u ${WEB_USER} env PANEL_INSTALL_ADMIN_PASSWORD='your-password' \\"
+    echo "        sudo -u ${PANEL_USER} env PANEL_INSTALL_ADMIN_PASSWORD='your-password' \\"
     echo "          bash -c 'cd ${PREFIX}/web && $(php_bin) artisan panel:create-admin --email=you@example.com'"
 }
 
@@ -35,7 +35,7 @@ _invoke_create_panel_admin() {
     local allow_opt="${2:-}"
     local admin_password="$3"
 
-    sudo -u "${WEB_USER}" -H env \
+    sudo -u "${PANEL_USER}" -H env \
         COMPOSER_HOME="${COMPOSER_HOME:-/tmp}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
         PANEL_INSTALL_ADMIN_PASSWORD="${admin_password}" \

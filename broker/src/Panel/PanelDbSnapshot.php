@@ -111,8 +111,8 @@ final class PanelDbSnapshot
             }
         }
 
-        $webUser = $this->config->webUser;
-        $this->runtime->exec(['/usr/bin/chown', $webUser . ':' . $webUser, $db], null, 30);
+        $panelUser = $this->config->panelUser;
+        $this->runtime->exec(['/usr/bin/chown', $panelUser . ':' . $panelUser, $db], null, 30);
 
         $log?->info('Panel database restored from ' . $path . '; schema is back to its pre-update state.');
     }
