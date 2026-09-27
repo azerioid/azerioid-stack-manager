@@ -6,7 +6,6 @@ use App\Services\Broker\BrokerClient;
 use AzerioidPanel\Broker\Validator;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
-use ZipArchive;
 
 final class VhostFilesController
 {
@@ -51,88 +50,41 @@ final class VhostFilesController
         if (count($paths) > 50) {
             abort(422, 'Too many files (max 50).');
         }
-        if (! class_exists(ZipArchive::class)) {
-            abort(500, 'Zip support is not available on this panel.');
+        // Assembly happens in the broker, as the vhost's own identity (G12). It used to
+        // happen here: the panel asked for one file's contents at a time, base64-decoded them
+        // into its own memory and built the archive itself. That meant a selected *directory*
+        // contributed nothing — the operator got an archive silently missing it — and panel PHP
+        // buffered the site's bytes, which is what the per-vhost identity (A25) exists to stop.
+        $res = $broker->call('vhost.files.zip', [$domain], [
+            'paths' => $paths,
+            'admin_user_id' => (string) auth()->id(),
+        ], 300);
+        if (! $res->ok) {
+            $error = (string) $res->error;
+            $status = str_contains(strtolower($error), 'read-only') || str_contains(strtolower($error), 'not available')
+                ? 403
+                : 422;
+            abort($status, $error);
         }
 
-        $tmp = tempnam(sys_get_temp_dir(), 'azfm');
-        if ($tmp === false) {
-            abort(500, 'Unable to create archive.');
-        }
-        $zip = new ZipArchive();
-        if ($zip->open($tmp, ZipArchive::OVERWRITE) !== true) {
-            @unlink($tmp);
-            abort(500, 'Unable to create archive.');
-        }
-
-        $added = 0;
-        $bytesTotal = 0;
-        $maxTotal = 50 * 1024 * 1024;
-        $failStatus = null;
-        $failMessage = null;
-        try {
-            foreach ($paths as $path) {
-                if ($path === '' || str_contains($path, "\0")) {
-                    continue;
-                }
-                $res = $broker->call('vhost.files.read', [$domain], [
-                    'path' => $path,
-                    'admin_user_id' => (string) auth()->id(),
-                ]);
-                if (! $res->ok) {
-                    $err = strtolower((string) $res->error);
-                    if (str_contains($err, 'read-only') || str_contains($err, 'not available')) {
-                        $failStatus = 403;
-                        $failMessage = (string) $res->error;
-                        break;
-                    }
-
-                    continue;
-                }
-                $bytes = base64_decode((string) ($res->data['content_base64'] ?? ''), true);
-                if ($bytes === false) {
-                    continue;
-                }
-                $bytesTotal += strlen($bytes);
-                if ($bytesTotal > $maxTotal) {
-                    $failStatus = 422;
-                    $failMessage = 'Selected files exceed the zip size limit.';
-                    break;
-                }
-                $entry = str_replace('\\', '/', (string) ($res->data['path'] ?? $path));
-                if ($entry === '' || str_contains($entry, '..') || str_starts_with($entry, '/')) {
-                    continue;
-                }
-                $zip->addFromString($entry, $bytes);
-                $added++;
-            }
-            $zip->close();
-        } catch (\Throwable $e) {
-            try {
-                $zip->close();
-            } catch (\ValueError) {
-            }
-            @unlink($tmp);
-            throw $e;
-        }
-
-        if ($failStatus !== null) {
-            @unlink($tmp);
-            abort($failStatus, (string) $failMessage);
-        }
-
-        if ($added === 0) {
-            @unlink($tmp);
-            abort(422, 'No downloadable files in the selection.');
+        $tmp = (string) ($res->data['path'] ?? '');
+        $cleanup = (string) ($res->data['cleanup'] ?? '');
+        if ($tmp === '' || ! is_readable($tmp)) {
+            abort(500, 'The archive could not be read after it was written.');
         }
 
         $name = preg_replace('/[^a-zA-Z0-9._-]+/', '-', $domain) . '-files.zip';
 
-        return response()->streamDownload(static function () use ($tmp): void {
+        // The staging directory is removed whether or not the client finished reading: an
+        // abandoned download must not leave a copy of someone's site on disk.
+        return response()->streamDownload(static function () use ($tmp, $cleanup): void {
             try {
                 readfile($tmp);
             } finally {
                 @unlink($tmp);
+                if ($cleanup !== '' && is_dir($cleanup)) {
+                    @rmdir($cleanup);
+                }
             }
         }, $name, [
             'Content-Type' => 'application/zip',

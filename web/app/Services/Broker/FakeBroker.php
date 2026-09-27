@@ -526,6 +526,7 @@ final class FakeBroker
                 'vhost.files.copy' => $this->vhostFilesOp('copy', $args, $stdin),
                 'vhost.files.chmod' => $this->vhostFilesOp('chmod', $args, $stdin),
                 'vhost.files.search' => $this->vhostFilesOp('search', $args, $stdin),
+                'vhost.files.zip' => $this->vhostFilesOp('zip', $args, $stdin),
                 'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
                 'mail.status' => $this->mailStatus(),
                 'mail.probe.outbound25' => $this->mailProbe(),
@@ -3193,6 +3194,7 @@ final class FakeBroker
                 $path,
                 $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
             ),
+            'zip' => $this->filesZip($domain, is_array($stdin['paths'] ?? null) ? $stdin['paths'] : []),
             'chmod' => $this->filesChmod($domain, $path, (string) ($stdin['mode'] ?? '')),
             'search' => $this->filesSearch(
                 $domain,
@@ -3423,6 +3425,58 @@ final class FakeBroker
     /**
      * @return array<string, mixed>
      */
+    /**
+     * Builds a real archive from the in-memory tree, so the controller's streaming path is
+     * genuinely exercised rather than mocked away — including a selected *directory* bringing
+     * its tree, which is the behaviour G12 exists to fix.
+     *
+     * @param  list<string>  $paths
+     * @return array<string,mixed>
+     */
+    private function filesZip(string $domain, array $paths): array
+    {
+        if ($paths === []) {
+            throw new BrokerCallException('Nothing selected.', 2);
+        }
+        $tree = $this->vhostFiles[$domain] ?? [];
+        $selected = [];
+        foreach ($paths as $path) {
+            $path = trim((string) $path);
+            if ($path === '' || str_contains($path, '..') || str_starts_with($path, '/')) {
+                continue;
+            }
+            foreach ($tree as $rel => $node) {
+                if ($rel === $path || str_starts_with($rel, $path . '/')) {
+                    $selected[$rel] = $node;
+                }
+            }
+        }
+        $files = array_filter($selected, static fn (array $n): bool => ($n['type'] ?? '') !== 'dir');
+        if ($files === []) {
+            throw new BrokerCallException('Nothing in the selection could be archived.', 3);
+        }
+
+        $dir = sys_get_temp_dir() . '/az-fake-zip-' . bin2hex(random_bytes(6));
+        @mkdir($dir, 0700, true);
+        $out = $dir . '/' . preg_replace('/[^a-zA-Z0-9._-]+/', '-', $domain) . '-files.zip';
+        $zip = new \ZipArchive();
+        $zip->open($out, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        foreach ($files as $rel => $node) {
+            $zip->addFromString((string) $rel, (string) ($node['content'] ?? ''));
+        }
+        $zip->close();
+
+        return [
+            'path' => $out,
+            'directory' => $dir,
+            'cleanup' => $dir,
+            'entries' => count($files),
+            'bytes' => (int) @filesize($out),
+            'skipped' => [],
+            'truncated' => false,
+        ];
+    }
+
     /**
      * Mirrors VhostFileOp::resolveMode, including every refusal: the modes an operator
      * reaches for are 777 and 666, and a fake that accepted them would let the UI offer

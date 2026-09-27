@@ -252,10 +252,9 @@ final class Kernel
         'vhost.files.copy' => VhostFilesAction::class,
         'vhost.files.chmod' => VhostFilesAction::class,
         'vhost.files.search' => VhostFilesAction::class,
-        // vhost.files.zip is deliberately not registered yet: the op exists and is
-        // tested, but the archive it writes has to be handed to the panel user before the
-        // controller can stream it, and that plumbing is not built. A registered action
-        // that cannot complete is worse than one that is not there.
+        // Assembles the archive as the vhost identity and hands it to the panel user to
+        // stream; see VhostFilesAction::zip() for the ownership handover (G12).
+        'vhost.files.zip' => VhostFilesAction::class,
         'vhost.files.delete' => VhostFilesAction::class,
     ];
 
