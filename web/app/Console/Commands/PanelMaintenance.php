@@ -80,7 +80,12 @@ class PanelMaintenance extends Command
             ),
         ];
 
-        foreach ($reaped as $table => $count) {
+        $swept = $this->sweepZipHandovers($dryRun);
+        if ($swept > 0) {
+            $this->line(($dryRun ? '[dry-run] ' : '') . "removed {$swept} File Manager zip(s) left behind by an abandoned download");
+        }
+
+                foreach ($reaped as $table => $count) {
             if ($count > 0) {
                 $this->warn(($dryRun ? '[dry-run] ' : '') . "reaped {$count} stuck row(s) in {$table}");
             }
@@ -90,11 +95,32 @@ class PanelMaintenance extends Command
                 $this->line(($dryRun ? '[dry-run] ' : '') . "pruned {$count} row(s) from {$table}");
             }
         }
-        if (array_sum($reaped) === 0 && array_sum($pruned) === 0) {
+        if (array_sum($reaped) === 0 && array_sum($pruned) === 0 && $swept === 0) {
             $this->line('nothing to do');
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * File Manager zips the broker handed over (VhostFilesAction::HANDOVER_PREFIX) that a
+     * download never finished streaming. Each is a copy of a site; an hour is far longer than
+     * any real download.
+     */
+    private function sweepZipHandovers(bool $dryRun): int
+    {
+        $cutoff = time() - 3600;
+        $count = 0;
+        foreach (glob(storage_path('framework/tmp/'.\AzerioidPanel\Broker\Actions\VhostFilesAction::HANDOVER_PREFIX.'*.zip')) ?: [] as $file) {
+            if (is_file($file) && ! is_link($file) && filemtime($file) < $cutoff) {
+                $count++;
+                if (! $dryRun) {
+                    @unlink($file);
+                }
+            }
+        }
+
+        return $count;
     }
 
     /**

@@ -49,6 +49,13 @@ final class Config
     public string $panelGitRemote = 'https://github.com/azerioid/azerioid-stack-manager.git';
     public string $artisanPath = '/usr/local/lib/azerioid-panel/web/artisan';
     public string $stagingDir = '/var/lib/azerioid-panel/staging';
+
+    /**
+     * Where a vhost identity builds a File Manager zip. Outside /var/lib/azerioid-panel,
+     * which the vhost identities cannot traverse (A39); 0711 so every identity can reach
+     * its own per-request directory and none can list the others.
+     */
+    public string $vhostZipBuildDir = '/var/lib/azerioid-zip';
     public string $localBackupDir = '/var/lib/azerioid-panel/backups';
     public string $cronDPath = '/etc/cron.d/azerioid-panel';
     public string $webUser = 'caddy';

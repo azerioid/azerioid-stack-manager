@@ -68,23 +68,21 @@ final class VhostFilesController
         }
 
         $tmp = (string) ($res->data['path'] ?? '');
-        $cleanup = (string) ($res->data['cleanup'] ?? '');
         if ($tmp === '' || ! is_readable($tmp)) {
             abort(500, 'The archive could not be read after it was written.');
         }
 
         $name = preg_replace('/[^a-zA-Z0-9._-]+/', '-', $domain) . '-files.zip';
 
-        // The staging directory is removed whether or not the client finished reading: an
-        // abandoned download must not leave a copy of someone's site on disk.
-        return response()->streamDownload(static function () use ($tmp, $cleanup): void {
+        // The archive is removed whether or not the client finished reading: an abandoned
+        // download must not leave a copy of someone's site on disk. The broker handed it to
+        // the panel user in the panel's own temp dir, so the panel can delete it itself;
+        // azerioid:maintenance removes any a dead request left behind.
+        return response()->streamDownload(static function () use ($tmp): void {
             try {
                 readfile($tmp);
             } finally {
                 @unlink($tmp);
-                if ($cleanup !== '' && is_dir($cleanup)) {
-                    @rmdir($cleanup);
-                }
             }
         }, $name, [
             'Content-Type' => 'application/zip',
