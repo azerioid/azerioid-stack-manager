@@ -146,12 +146,24 @@ class VhostFilesTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_no_extract_action(): void
+    /**
+     * This asserted the original exclusion of extract. A40 reversed it, conditional on
+     * ZipExtractGuard and its adversarial suite, so the assertion is replaced rather than removed:
+     * the action now exists and must refuse a file that is not an archive. The fake runs real
+     * archives through the real guard, so this is the guard answering, not a stub.
+     */
+    public function test_extract_exists_and_refuses_a_file_that_is_not_an_archive(): void
     {
         $fake = $this->app->make(FakeBroker::class);
+        $fake->vhostFiles['shop.example.com'] = [
+            '' => ['type' => 'dir', 'mtime' => time()],
+            'x.zip' => ['type' => 'file', 'size' => 5, 'mtime' => time(), 'content' => "plain\n"],
+        ];
+
         $res = $fake->handle('vhost.files.extract', ['shop.example.com'], ['path' => 'x.zip']);
+
         $this->assertFalse($res->ok);
-        $this->assertStringContainsString('unknown action', strtolower((string) $res->error));
+        $this->assertStringContainsString('zip archive', strtolower((string) $res->error));
     }
 
     public function test_cli_list_read_and_same_validation(): void

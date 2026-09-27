@@ -41,6 +41,10 @@ class VhostFilesPage extends Component
     public ?string $moveFrom = null;
     public string $moveTo = '';
 
+    public ?string $extractTarget = null;
+
+    public string $extractTo = '';
+
     public ?string $chmodTarget = null;
 
     public bool $chmodTargetIsDir = false;
@@ -435,6 +439,52 @@ class VhostFilesPage extends Component
         return substr($name, 0, $dot) . '-copy' . substr($name, $dot);
     }
 
+    // ---------------------------------------------------------------- extract
+
+    public function startExtract(string $rel): void
+    {
+        $this->extractTarget = $rel;
+        // Beside the archive by default: the directory the operator is already looking at.
+        $this->extractTo = $this->path;
+        $this->error = null;
+    }
+
+    public function cancelExtract(): void
+    {
+        $this->extractTarget = null;
+        $this->extractTo = '';
+    }
+
+    /**
+     * Extraction is guarded in the broker (A40, ZipExtractGuard) — traversal, links, setuid bits,
+     * bombs and overwrites are all refused there. This method deliberately adds no checks of its
+     * own: a second, weaker copy of those rules in the panel would be the thing that drifts.
+     */
+    public function extract(BrokerClient $broker): void
+    {
+        if ($this->extractTarget === null) {
+            return;
+        }
+        $this->error = null;
+        $res = $broker->call('vhost.files.extract', [$this->domain], [
+            'path' => $this->extractTarget,
+            'dest' => trim(trim($this->extractTo), '/'),
+        ], 300);
+        $failed = ! $res->ok;
+        if ($failed) {
+            $this->error = (string) $res->error;
+            $this->flash = null;
+        } else {
+            $count = (int) ($res->data['entries'] ?? 0);
+            $where = (string) ($res->data['destination'] ?? '');
+            $this->flash = 'Extracted ' . $count . ' ' . ($count === 1 ? 'entry' : 'entries')
+                . ' into ' . ($where === '' ? 'the document root' : $where) . '.';
+        }
+        $this->extractTarget = null;
+        $this->extractTo = '';
+        $this->reload($broker, $failed);
+    }
+
     // ------------------------------------------------------------------ chmod
 
     public function startChmod(string $rel, bool $isDir): void
@@ -518,12 +568,24 @@ class VhostFilesPage extends Component
         ]);
     }
 
-    private function reload(BrokerClient $broker): void
+    /**
+     * Refreshing the listing must not discard the error from the action that just ran: every write
+     * on this page reloads afterwards, and clearing it here replaced the broker's refusal with
+     * silence — the operator saw nothing happen and no reason why.
+     *
+     * The caller says so explicitly rather than this method preserving whatever it finds. Livewire
+     * rehydrates component state on every request, so `$this->error` may hold a message from a
+     * previous interaction, and keeping that would let a stale error outrank a fresh one — which
+     * is exactly what happened when this was first written the other way round.
+     */
+    private function reload(BrokerClient $broker, bool $keepError = false): void
     {
-        $this->error = null;
+        if (! $keepError) {
+            $this->error = null;
+        }
         try {
             $res = $broker->call('vhost.files.list', [$this->domain], $this->payload(['path' => $this->path]), null, false);
-            if (! $res->ok) {
+            if (! $res->ok && $this->error === null) {
                 $this->error = (string) $res->error;
                 $this->entries = [];
 

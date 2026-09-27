@@ -6,6 +6,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Database\DbAccessPolicy;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Files\VhostPath;
+use AzerioidPanel\Broker\Files\ZipExtractGuard;
 use AzerioidPanel\Broker\Network\FirewallGuard;
 use AzerioidPanel\Broker\Cron\CronJob;
 use AzerioidPanel\Broker\Cron\CronRenderer;
@@ -527,6 +528,7 @@ final class FakeBroker
                 'vhost.files.chmod' => $this->vhostFilesOp('chmod', $args, $stdin),
                 'vhost.files.search' => $this->vhostFilesOp('search', $args, $stdin),
                 'vhost.files.zip' => $this->vhostFilesOp('zip', $args, $stdin),
+                'vhost.files.extract' => $this->vhostFilesOp('extract', $args, $stdin),
                 'vhost.files.delete' => $this->vhostFilesOp('delete', $args, $stdin),
                 'mail.status' => $this->mailStatus(),
                 'mail.probe.outbound25' => $this->mailProbe(),
@@ -3194,6 +3196,7 @@ final class FakeBroker
                 $path,
                 $this->filesRel($root, (string) ($stdin['dest'] ?? ''))
             ),
+            'extract' => $this->filesExtract($domain, $path, (string) ($stdin['dest'] ?? '')),
             'zip' => $this->filesZip($domain, is_array($stdin['paths'] ?? null) ? $stdin['paths'] : []),
             'chmod' => $this->filesChmod($domain, $path, (string) ($stdin['mode'] ?? '')),
             'search' => $this->filesSearch(
@@ -3425,6 +3428,75 @@ final class FakeBroker
     /**
      * @return array<string, mixed>
      */
+    /**
+     * Extraction against the in-memory tree, mirroring the broker's refusals: a real archive is
+     * read with ZipExtractGuard, so an archive the broker would reject is rejected here too, and
+     * existing files are never overwritten.
+     *
+     * @return array<string,mixed>
+     */
+    private function filesExtract(string $domain, string $path, string $dest): array
+    {
+        $node = $this->vhostFiles[$domain][$path] ?? null;
+        if ($node === null) {
+            throw new BrokerCallException('Path not found.', 3);
+        }
+        if (($node['type'] ?? '') === 'dir') {
+            throw new BrokerCallException('That is a directory, not an archive.', 2);
+        }
+
+        // The fake stores uploaded archives as raw bytes, so the guard can read them for real.
+        $tmp = tempnam(sys_get_temp_dir(), 'azfake');
+        file_put_contents((string) $tmp, (string) ($node['content'] ?? ''));
+        try {
+            $inspected = ZipExtractGuard::inspect((string) $tmp);
+        } catch (\AzerioidPanel\Broker\Files\VhostFileException $e) {
+            @unlink((string) $tmp);
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+
+        $destDir = trim($dest, '/');
+        if ($destDir === '') {
+            $destDir = dirname($path) === '.' ? '' : dirname($path);
+        }
+        if ($destDir !== '' && ($this->vhostFiles[$domain][$destDir]['type'] ?? '') !== 'dir') {
+            @unlink((string) $tmp);
+            throw new BrokerCallException('The destination must be an existing directory.', 2);
+        }
+
+        $zip = new \ZipArchive();
+        $zip->open((string) $tmp);
+        $written = 0;
+        foreach ($inspected['names'] as $name) {
+            $target = $destDir === '' ? $name : $destDir . '/' . rtrim($name, '/');
+            $target = rtrim($target, '/');
+            if (str_ends_with($name, '/')) {
+                $this->vhostFiles[$domain][$target] = ['type' => 'dir', 'mtime' => time()];
+                continue;
+            }
+            if (isset($this->vhostFiles[$domain][$target])) {
+                $zip->close();
+                @unlink((string) $tmp);
+                throw new BrokerCallException('Refusing to overwrite ' . $name . '.', 3);
+            }
+            $content = (string) $zip->getFromName($name);
+            $this->vhostFiles[$domain][$target] = [
+                'type' => 'file', 'size' => strlen($content), 'mtime' => time(), 'content' => $content,
+            ];
+            $written++;
+        }
+        $zip->close();
+        @unlink((string) $tmp);
+
+        return [
+            'path' => $path,
+            'destination' => $destDir,
+            'entries' => $written,
+            'bytes' => $inspected['bytes'],
+            'extracted' => true,
+        ];
+    }
+
     /**
      * Builds a real archive from the in-memory tree, so the controller's streaming path is
      * genuinely exercised rather than mocked away — including a selected *directory* bringing
