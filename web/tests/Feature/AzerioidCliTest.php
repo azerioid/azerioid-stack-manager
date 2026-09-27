@@ -536,4 +536,44 @@ class AzerioidCliTest extends TestCase
         $this->assertStringContainsString('Dry run', Artisan::output());
         $this->assertFalse($fake->panelIdentityMigrated);
     }
+
+    /** KI-1: listing reads no archive contents, so it must neither need nor send the passphrase. */
+    public function test_backup_list_needs_no_passphrase(): void
+    {
+        putenv('AZERIOID_BACKUP_PASSPHRASE');
+        $fake = $this->app->make(FakeBroker::class);
+
+        $this->assertSame(0, Artisan::call('azerioid:backup', ['action' => 'list', '--local' => true, '--json' => true]), Artisan::output());
+
+        $this->assertSame('local', $fake->stdinLog['backup.list']['destination'] ?? null);
+        $this->assertArrayNotHasKey('passphrase', $fake->stdinLog['backup.list']);
+    }
+
+    public function test_backup_create_still_requires_the_passphrase(): void
+    {
+        putenv('AZERIOID_BACKUP_PASSPHRASE');
+
+        $this->assertNotSame(0, Artisan::call('azerioid:backup', ['action' => 'create', '--local' => true]));
+        $this->assertStringContainsString('passphrase', strtolower(Artisan::output()));
+    }
+
+    /** KI-2: `cron add --json` must return JSON a script can read the new id from. */
+    public function test_cron_add_json_returns_the_job(): void
+    {
+        $code = Artisan::call('azerioid:cron', [
+            'action' => 'add',
+            '--owner' => 'shop.example.com',
+            '--schedule' => '*/5 * * * *',
+            '--command' => 'php artisan schedule:run',
+            '--json' => true,
+        ]);
+        $out = Artisan::output(); // reading it clears the buffer
+        $this->assertSame(0, $code, $out);
+        $decoded = json_decode($out, true);
+        $this->assertIsArray($decoded, 'output must be JSON');
+        $this->assertStringStartsWith('job-', (string) ($decoded['job']['id'] ?? ''));
+
+        Artisan::call('azerioid:cron', ['action' => 'del', 'id' => $decoded['job']['id'], '--json' => true]);
+        $this->assertIsArray(json_decode(Artisan::output(), true), 'del --json must be JSON too');
+    }
 }

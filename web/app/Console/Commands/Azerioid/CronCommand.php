@@ -96,6 +96,9 @@ class CronCommand extends Command
         if (! $res->ok) {
             $this->throwBrokerFailure($res);
         }
+        if ($this->wantsJson()) {
+            return $this->emitData(is_array($res->data) ? $res->data : []);
+        }
         $job = (array) ($res->data['job'] ?? []);
         $this->info('Added ' . (string) ($job['id'] ?? '') . '; runs as ' . (string) ($job['runs_as'] ?? '') . '.');
 
@@ -111,6 +114,9 @@ class CronCommand extends Command
         $res = $this->brokerCall($action, [$id], ['confirm' => (string) ($this->option('confirm') ?? '')], 60);
         if (! $res->ok) {
             $this->throwBrokerFailure($res);
+        }
+        if ($this->wantsJson()) {
+            return $this->emitData(is_array($res->data) ? $res->data : []);
         }
         $this->info($message);
 

@@ -322,9 +322,17 @@ final class FakeBroker
      */
     public array $callLog = [];
 
+    /**
+     * Last stdin each action received, so tests can assert what was (not) sent.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    public array $stdinLog = [];
+
     public function handle(string $action, array $args, array $stdin): BrokerResponse
     {
         $this->callLog[] = $action;
+        $this->stdinLog[$action] = $stdin;
 
         if ($this->failNextCall) {
             $this->failNextCall = false;
