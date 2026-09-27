@@ -587,7 +587,7 @@ final class PanelIdentityMigrator
 
     public static function allowProcOpen(string $ini): string
     {
-        $out = preg_replace_callback('/^disable_functions\s*=\s*(.*)$/m', static function (array $m): string {
+        $out = preg_replace_callback('/^disable_functions[ \t]*=[ \t]*(.*)$/m', static function (array $m): string {
             $keep = [];
             foreach (explode(',', $m[1]) as $f) {
                 $f = trim($f);

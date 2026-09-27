@@ -356,7 +356,7 @@ final class PanelHardener
             } catch (BrokerException) {
                 return false;
             }
-            if (!preg_match('/^\s*php_admin_value\[disable_functions\]\s*=.*\bproc_open\b/m', $body)) {
+            if (!preg_match('/^[ \t]*php_admin_value\[disable_functions\][ \t]*=.*\bproc_open\b/m', $body)) {
                 return false;
             }
         }
@@ -636,13 +636,13 @@ final class PanelHardener
         $blocked = 'passthru,exec,shell_exec,system,proc_open,proc_get_status,popen,pcntl_exec,pcntl_fork,dl,chroot';
         foreach ($this->sitePools() as $path => $_user) {
             $body = $this->runtime->readFile($path);
-            if (preg_match('/^\s*php_admin_value\[disable_functions\]\s*=.*\bproc_open\b/m', $body)) {
+            if (preg_match('/^[ \t]*php_admin_value\[disable_functions\][ \t]*=.*\bproc_open\b/m', $body)) {
                 continue;
             }
             $this->backupFile($path);
             $line = "php_admin_value[disable_functions] = {$blocked}\n";
-            if (preg_match('/^\s*php_admin_value\[disable_functions\]\s*=.*$/m', $body)) {
-                $patched = preg_replace('/^\s*php_admin_value\[disable_functions\]\s*=.*$/m', rtrim($line), $body, 1);
+            if (preg_match('/^[ \t]*php_admin_value\[disable_functions\][ \t]*=.*$/m', $body)) {
+                $patched = preg_replace('/^[ \t]*php_admin_value\[disable_functions\][ \t]*=.*$/m', rtrim($line), $body, 1);
             } else {
                 $patched = rtrim($body, "\n") . "\n" . $line;
             }

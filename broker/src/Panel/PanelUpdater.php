@@ -238,6 +238,7 @@ final class PanelUpdater
             $this->rebuildCaches($prefix, $log);
             $this->writeDeployedMarkers($target, $targetTag);
             $this->writeVersionFromSource($source, $prefix);
+            $this->refreshPanelFpmBinary($log);
             $this->reloadRuntime($log, deferQueueRestart: true);
 
             $pruned = $snapshots->prune();
@@ -810,7 +811,23 @@ final class PanelUpdater
         }
     }
 
-    private function reloadRuntime(OperationLogger $log, bool $deferQueueRestart): void
+    /**
+     * EL only: bring the panel master's private php-fpm copy up to the distro binary (KI-3).
+     * Never fails the update: the code update stands on its own, and a failed refresh has
+     * already put the previous binary back.
+     */
+    private function refreshPanelFpmBinary(OperationLogger $log): void
+    {
+        try {
+            foreach ((new PanelFpmBinary($this->runtime, $this->config))->refresh() as $line) {
+                $log->info($line);
+            }
+        } catch (\Throwable $e) {
+            $log->warn('Panel php-fpm copy not refreshed: ' . $e->getMessage());
+        }
+    }
+
+        private function reloadRuntime(OperationLogger $log, bool $deferQueueRestart): void
     {
         $fpmUnit = $this->config->panelFpmUnit;
         $log->info('Reloading PHP-FPM unit ' . $fpmUnit);
