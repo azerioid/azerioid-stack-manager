@@ -1257,3 +1257,35 @@ identity existed again, but its cron log directory was still quarantined `root 0
 jobs' output redirection would fail and they would never run. `VhostUser::ensure` now hands an existing
 `/var/log/azerioid-cron/<identity>` back to the identity (`0750`), and the cron manager sets the mode as
 well as the owner whenever it prepares a directory.
+
+## A53 — Git deploy, as built
+
+**Status:** Accepted, shipped in **v2.4.0** (B8, request #12). **Implements:** A41 (Proposition B only;
+provider-agnostic SSH; manual and schedule, no webhooks; in place; code-only rollback; the site's
+identity, never root or `azerioid-supervised`).
+
+**The key/identity split.** A41 wants the deploy key unreadable by the site's identity *and* the pull
+run as that identity. Both hold because the work is split at a local mirror:
+
+1. root fetches the branch into a bare mirror, `/var/lib/azerioid-deploy/<site>/mirror.git`, with the key
+   (`ssh -i … -o IdentitiesOnly=yes -o BatchMode=yes`, host keys trusted on first use into the site's own
+   `known_hosts`);
+2. the mirror is made `root:<site group>`, group-readable, so the identity can read it and not change it;
+3. the identity fetches from that local path and checks out the commit in the site's **top directory**
+   (the whole app, not `public/`), `umask 007` so what the site's PHP must write stays group-writable and
+   nothing is opened to other accounts; `safe.directory` for the root-owned mirror;
+4. the post-deploy command runs as the identity, in the same directory, with `php`/`composer` bound to the
+   site's own PHP version;
+5. the runtime reloads through the existing Octane/PM2 reload or Docker restart; PHP-FPM needs nothing.
+
+The key directory is `root:<site group> 0750` with the key `0600` root; `/var/lib/azerioid-deploy` is `0711`.
+
+| Aspect | Decision |
+|--------|----------|
+| Repository URL | `git@host:path`, `ssh://user@host[:port]/path`, or public `https://`; never credentials in a URL, never `file://`, `ext::`, a local path, an option (`--upload-pack=…`) or `..` |
+| Post-deploy command | Presets: none, `composer install --no-dev`, Laravel (composer, `migrate --force`, `optimize`), `npm ci && npm run build`. A custom command needs the typed `RUN-AS-SITE`: it is arbitrary code, acceptable only because it runs as the site (A41) |
+| Schedule | off / hourly / daily at an hour, evaluated by the panel scheduler; a scheduled deploy of the commit already deployed does nothing |
+| History | The last 20 deploys (commit, time, trigger, status, error) in the site's `state.json`; deploys and rollbacks are queued operations with their log on the Operations page |
+| Failure | Recorded, reported with "roll back or deploy again"; the checked-out files stay (in place, A41), `current` does not move |
+| Rollback | The previous deployed commit, checked out the same way, the command re-run. Code only: migrations are not undone |
+| Delete | Deleting the vhost removes its deploy settings, key and mirror |
