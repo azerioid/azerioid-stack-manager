@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\ConvergePanelIdentity;
+use App\Console\Commands\ConvergeProgramIdentity;
 use App\Console\Commands\ConvergeSitePhpPools;
 use App\Console\Commands\ConvergeVhostIsolation;
 use App\Console\Commands\DeployScheduled;
@@ -37,6 +38,9 @@ Schedule::command(ConvergeVhostIsolation::class)->everyFiveMinutes()->withoutOve
 // A55: move every PHP site onto a pool of its own, and take out pools no site uses.
 // A no-op broker call once every site is served by its own pool.
 Schedule::command(ConvergeSitePhpPools::class)->everyFiveMinutes()->withoutOverlapping();
+
+// A56: run every site-bound program (Octane, PM2, operator programs) as its own site.
+Schedule::command(ConvergeProgramIdentity::class)->everyFiveMinutes()->withoutOverlapping();
 
 // B8 / A41: scheduled git deploys (manual and schedule only, no webhooks).
 Schedule::command(DeployScheduled::class)->everyFiveMinutes()->withoutOverlapping();

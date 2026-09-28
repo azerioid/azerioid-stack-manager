@@ -289,6 +289,36 @@ else
     echo "SITE_POOL_USER_WRONG=${POOL_BAD}"
     echo "CHECK_SITE_POOL_USERS=fail"
 fi
+echo "=== spot-check: site programs run as their site (ADR A56) ==="
+PROG_OUT=""
+for _ in $(seq 1 45); do
+    PROG_OUT="$("${PREFIX}/broker" program.identity.status </dev/null 2>&1)" || true
+    printf '%s' "${PROG_OUT}" | grep -q '"migrated":true' && break
+    [[ "${APPLY}" == "1" ]] || break
+    printf '%s' "${PROG_OUT}" | grep -q '"auto_eligible":false' \
+        && ! printf '%s' "${PROG_OUT}" | grep -q '"running":true' && break
+    sleep 10
+done
+printf '%s\n' "${PROG_OUT}" | head -c 400
+echo
+if printf '%s' "${PROG_OUT}" | grep -q '"migrated":true'; then
+    echo "CHECK_PROGRAM_IDENTITY=pass"
+else
+    echo "CHECK_PROGRAM_IDENTITY=fail"
+fi
+# Octane and PM2 workers must never run as the shared account again.
+PROG_SHARED=""
+for f in /etc/supervisor/conf.d/azerioid-octane-*.conf /etc/supervisor/conf.d/azerioid-pm2-*.conf \
+    /etc/supervisord.d/azerioid-octane-*.ini /etc/supervisord.d/azerioid-pm2-*.ini; do
+    [[ -f "${f}" ]] || continue
+    grep -Eq '^user=az-vh-' "${f}" || PROG_SHARED="${PROG_SHARED} ${f}"
+done
+if [[ -z "${PROG_SHARED}" ]]; then
+    echo "CHECK_SITE_WORKERS_AS_SITE=pass"
+else
+    echo "SITE_WORKERS_SHARED=${PROG_SHARED}"
+    echo "CHECK_SITE_WORKERS_AS_SITE=fail"
+fi
 if [[ "$(systemctl is-active azerioid-panel-php-fpm.service 2>/dev/null)" == "active" ]]; then
     echo "CHECK_PANEL_OWN_MASTER=pass"
 else

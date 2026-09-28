@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Validator;
@@ -95,11 +96,12 @@ final class OctaneManager
             $port = $this->allocatePort($reserved);
         }
 
-        // Composer / octane:install write vendor + the FrankenPHP binary — grant the
-        // supervised user recursive access on the full Laravel app (docroot may be …/public).
-        $this->ensureAppWritable($appDir, VhostUser::docrootGroup($this->runtime, $domain));
-        $this->installOctanePackage($appDir, $php);
-        $this->installFrankenPhpServer($appDir, $php);
+        // Composer / octane:install write vendor + the FrankenPHP binary, and the worker writes
+        // storage: the account it runs as (the site's own, A56) needs the full Laravel app.
+        $user = ProgramIdentity::userFor($this->runtime, $domain, self::programName($domain));
+        $this->ensureAppWritable($appDir, VhostUser::docrootGroup($this->runtime, $domain), $user);
+        $this->installOctanePackage($appDir, $php, $user);
+        $this->installFrankenPhpServer($appDir, $php, $user);
 
         $program = self::programName($domain);
         $this->upsertProgram($supervisor, $program, [
@@ -198,7 +200,7 @@ final class OctaneManager
         $php = $this->phpBin((string) ($vhost['php_version'] ?? ''));
         $program = self::programName($domain);
 
-        $reload = $this->runAsSupervised([$php, 'artisan', 'octane:reload'], $appDir, 120);
+        $reload = $this->runAs(ProgramIdentity::userFor($this->runtime, $domain, $program), [$php, 'artisan', 'octane:reload'], $appDir, 120);
         if ($reload->ok()) {
             return [
                 'domain' => $domain,
@@ -460,9 +462,17 @@ final class OctaneManager
         ]));
     }
 
-    private function ensureAppWritable(string $appDir, string $group): void
+    private function ensureAppWritable(string $appDir, string $group, string $runAs): void
     {
         if ($this->runtime->getuid() !== 0) {
+            return;
+        }
+        if (ProgramIdentity::isSiteIdentity($runAs)) {
+            // The site's own files: whatever another account left in them becomes the site's,
+            // group write kept (A55 does the same when a site gets its PHP pool).
+            $this->runtime->exec(['/usr/bin/chown', '-R', '-h', $runAs . ':' . $group, $appDir], null, 600);
+            $this->runtime->exec(['/usr/bin/chmod', '-R', 'g+rwX', $appDir], null, 600);
+
             return;
         }
         SupervisedUser::ensure($this->runtime);
@@ -536,7 +546,7 @@ final class OctaneManager
         }
     }
 
-    private function installOctanePackage(string $appDir, string $php): void
+    private function installOctanePackage(string $appDir, string $php, string $user): void
     {
         if ($this->runtime->isDir($appDir . '/vendor/laravel/octane')) {
             return;
@@ -544,9 +554,9 @@ final class OctaneManager
         $composer = $this->composerBin();
         $composerHome = '/tmp/azerioid-octane-composer-' . getmypid();
         $this->runtime->mkdir($composerHome, 0750);
-        $this->runtime->chown($composerHome, SupervisedUser::USERNAME, SupervisedUser::USERNAME);
+        $this->runtime->chown($composerHome, $user, VhostUser::primaryGroup($this->runtime, $user) ?? $user);
 
-        $result = $this->runAsSupervised([
+        $result = $this->runAs($user, [
             '/usr/bin/env',
             'COMPOSER_HOME=' . $composerHome,
             $php,
@@ -562,7 +572,7 @@ final class OctaneManager
         }
 
         // Ensure the octane:* artisan commands are registered even if scripts were skipped.
-        $discover = $this->runAsSupervised([$php, 'artisan', 'package:discover', '--ansi', '--no-interaction'], $appDir, 120);
+        $discover = $this->runAs($user, [$php, 'artisan', 'package:discover', '--ansi', '--no-interaction'], $appDir, 120);
         if (!$discover->ok()) {
             throw new BrokerException(
                 'artisan package:discover failed after installing laravel/octane: ' . self::execDetail($discover),
@@ -571,9 +581,9 @@ final class OctaneManager
         }
     }
 
-    private function installFrankenPhpServer(string $appDir, string $php): void
+    private function installFrankenPhpServer(string $appDir, string $php, string $user): void
     {
-        $result = $this->runAsSupervised([
+        $result = $this->runAs($user, [
             $php,
             'artisan',
             'octane:install',
@@ -660,14 +670,16 @@ final class OctaneManager
     }
 
     /** @param  list<string>  $command */
-    private function runAsSupervised(array $command, string $cwd, int $timeout): ExecResult
+    private function runAs(string $user, array $command, string $cwd, int $timeout): ExecResult
     {
-        SupervisedUser::ensure($this->runtime);
+        if ($user === SupervisedUser::USERNAME) {
+            SupervisedUser::ensure($this->runtime);
+        }
         $runuser = $this->runuserBin();
         $shell = 'cd ' . escapeshellarg($cwd) . ' && exec ' . implode(' ', array_map('escapeshellarg', $command));
 
         return $this->runtime->exec(
-            [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
+            [$runuser, '-u', $user, '--', '/bin/bash', '-lc', $shell],
             null,
             $timeout
         );

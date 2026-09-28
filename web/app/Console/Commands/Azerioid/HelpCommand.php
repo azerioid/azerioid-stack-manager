@@ -90,6 +90,7 @@ Usage:
   azerioid process create --command=<cmd> (--vhost=<domain>|--freeform) [--name=<n>] [--directory=<path>]
   azerioid process start|stop|restart|del <name>
   azerioid process logs <name> [--follow] [--lines=100]
+  azerioid process identity status|apply [--confirm] [--domain=] [--json]   # A56: site programs run as their site
 
   azerioid updates check [--json]
   azerioid updates apply [--security] --confirm
