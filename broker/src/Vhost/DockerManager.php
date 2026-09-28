@@ -42,6 +42,9 @@ final class DockerManager
     /** Installed by DockerRootlessSetup / deploy broker-setup for container shell (ttyd). */
     public const DOCKER_EXEC_WRAPPER = '/usr/local/lib/azerioid-panel/sbin/azerioid-docker-exec';
 
+    /** Clears a stale same-named container before `docker run` (see DockerRootlessSetup). */
+    public const DOCKER_RUN_WRAPPER = '/usr/local/lib/azerioid-panel/sbin/azerioid-docker-run';
+
     public function __construct(
         private readonly Config $config,
         private readonly Runtime $runtime,
@@ -1366,7 +1369,9 @@ final class DockerManager
             return Validator::supervisorCommand(implode(' ', $parts));
         }
 
+        (new DockerRootlessSetup($this->config, $this->runtime))->installDockerRunWrapper();
         $parts = [
+            self::DOCKER_RUN_WRAPPER, self::containerName($spec['domain']),
             '/usr/bin/env', $env, $docker, 'run', '--rm',
             '--name', self::containerName($spec['domain']),
             '-p', '127.0.0.1:' . $spec['port'] . ':' . $spec['internal_port'],
