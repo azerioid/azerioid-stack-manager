@@ -1289,3 +1289,10 @@ The key directory is `root:<site group> 0750` with the key `0600` root; `/var/li
 | Failure | Recorded, reported with "roll back or deploy again"; the checked-out files stay (in place, A41), `current` does not move |
 | Rollback | The previous deployed commit, checked out the same way, the command re-run. Code only: migrations are not undone |
 | Delete | Deleting the vhost removes its deploy settings, key and mirror |
+
+**v2.4.1 addendum.** The first real deploy on the Ubuntu host failed at the checkout: `git -c
+safe.directory=<mirror> fetch <mirror>` as the site's identity still hit "dubious ownership", because for
+a local path git removes `-c` settings from upload-pack's environment. The setting now goes on
+upload-pack's own command line (`--upload-pack='git -c safe.directory=… upload-pack'`). Making the mirror
+the site's instead was rejected: a site could then plant hooks or config in it that root would run on
+the next fetch. The failure message now says whether the files were changed at all.

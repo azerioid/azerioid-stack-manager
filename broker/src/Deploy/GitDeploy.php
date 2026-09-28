@@ -221,8 +221,10 @@ final class GitDeploy
         $state = $this->state($domain);
         $status = 'failed';
         $error = null;
+        $checkedOut = false;
         try {
             $this->checkout($domain, $top, $commit, $log);
+            $checkedOut = true;
             $command = $cfg['preset'] === 'custom' ? (string) $cfg['command'] : self::PRESETS[$cfg['preset']] ?? null;
             if ($command !== null) {
                 $this->runAsSite($domain, $top, $command, $vhost, $log);
@@ -246,7 +248,9 @@ final class GitDeploy
         $this->runtime->writeFile($this->dir($domain) . '/state.json', json_encode($next, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", 0600);
         if ($status !== 'ok') {
             throw new BrokerException('Deploy of ' . substr($commit, 0, 12) . ' failed: ' . $error
-                . ' The site now has the checked-out files; roll back or deploy again.', 1);
+                . ($checkedOut
+                    ? ' The new files are in place (deploys are not atomic); roll back or deploy again.'
+                    : ' The site\'s files were not changed.'), 1);
         }
 
         return ['domain' => $domain, 'deployed' => true, 'commit' => $commit, 'trigger' => $trigger, 'log' => $log];
@@ -291,9 +295,12 @@ final class GitDeploy
             . '(test -d .git || git init --quiet) && '
             // Every branch head of the mirror: a rollback target from an earlier deploy is
             // already in this .git, and fetching refs (not a bare SHA) needs no upload-pack
-            // allowance. safe.directory: the mirror is root's, the fetch is the site's.
-            . 'git -c safe.directory=' . escapeshellarg($mirror) . ' fetch --quiet --no-tags ' . escapeshellarg($mirror)
-            . " '+refs/heads/*:refs/remotes/deploy/*' && "
+            // allowance. The mirror is root's and the fetch is the site's, so upload-pack must
+            // trust it — and for a local path git strips `-c` from upload-pack's environment,
+            // so the setting goes on upload-pack's own command line. (Giving the mirror to the
+            // site instead would let it plant hooks that root runs on the next fetch.)
+            . 'git fetch --quiet --no-tags --upload-pack=' . escapeshellarg('git -c safe.directory=' . $mirror . ' upload-pack')
+            . ' ' . escapeshellarg($mirror) . " '+refs/heads/*:refs/remotes/deploy/*' && "
             . 'git checkout --quiet --force --detach ' . escapeshellarg($commit);
         $r = $this->runtime->exec(['/usr/sbin/runuser', '-u', $user, '--', '/bin/bash', '-c', $git], null, 600);
         if (!$r->ok()) {
