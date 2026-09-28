@@ -298,6 +298,7 @@ final class Validator
 
     public const MIGRATE_PANEL_IDENTITY_CONFIRM = 'MIGRATE-PANEL-IDENTITY';
     public const ISOLATE_VHOSTS_CONFIRM = 'ISOLATE-VHOSTS';
+    public const ISOLATE_PHP_CONFIRM = 'ISOLATE-PHP';
 
     public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
 

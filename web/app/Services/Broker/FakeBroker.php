@@ -357,6 +357,10 @@ final class FakeBroker
                 'vhost.isolation.status' => $this->vhostIsolationStatus(),
                 'vhost.isolation.apply' => $this->vhostIsolationApply($stdin),
                 'vhost.isolation.converge' => $this->vhostIsolationConverge(),
+                'vhost.phppool.status' => $this->phpPoolStatus(),
+                'vhost.phppool.apply' => $this->phpPoolApply($stdin),
+                'vhost.phppool.converge' => $this->phpPoolConverge(),
+                'vhost.phppool.set' => $this->phpPoolSet($args, $stdin),
                 'panel.fpm.refresh' => ['refreshed' => false, 'skipped' => null, 'log' => []],
                 'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'panel.update.check' => [
@@ -1039,6 +1043,79 @@ final class FakeBroker
         $this->vhostIsolationConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
+    }
+
+    public bool $phpPoolsMigrated = false;
+
+    public int $phpPoolConvergeStarts = 0;
+
+    /** @var array<string, bool> open_basedir per domain (A55); absent = on */
+    public array $phpPoolOpenBasedir = [];
+
+    /** @return array<string, mixed> */
+    private function phpPoolStatus(): array
+    {
+        $sites = [];
+        foreach ($this->vhosts as $v) {
+            if (($v['type'] ?? '') !== 'php' || ($v['runtime'] ?? 'fpm') !== 'fpm') {
+                continue;
+            }
+            $domain = (string) $v['domain'];
+            $sites[] = [
+                'domain' => $domain, 'root' => (string) ($v['root'] ?? ''), 'php_version' => (string) ($v['php_version'] ?? ''),
+                'state' => $this->phpPoolsMigrated ? 'isolated' : 'pending', 'pool' => 'azv-'.str_replace('.', '-', $domain),
+                'open_basedir' => $this->phpPoolOpenBasedir[$domain] ?? true, 'reason' => null,
+            ];
+        }
+
+        return [
+            'migrated' => $this->phpPoolsMigrated,
+            'sites' => $sites,
+            'pending' => $this->phpPoolsMigrated ? [] : array_column($sites, 'domain'),
+            'shared' => [],
+            'stale' => [],
+            'last_attempt' => [],
+            'running' => false,
+            'auto_eligible' => ! $this->phpPoolsMigrated,
+            'verdict' => $this->phpPoolsMigrated
+                ? 'OK: every PHP site runs in a pool of its own; no site\'s PHP can open another site\'s files.'
+                : 'PENDING: '.count($sites).' site(s) to move to a pool of their own.',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function phpPoolApply(array $stdin): array
+    {
+        if (($stdin['confirm'] ?? '') !== 'ISOLATE-PHP') {
+            throw new BrokerCallException('Type ISOLATE-PHP to confirm.', 3);
+        }
+        $moved = [];
+        foreach ($this->phpPoolsMigrated ? [] : $this->phpPoolStatus()['sites'] as $site) {
+            $moved[$site['domain']] = ['result' => 'isolated', 'before' => 200, 'after' => 200];
+        }
+        $this->phpPoolsMigrated = true;
+
+        return ['changed' => $moved !== [], 'result' => 'ok', 'trigger' => 'operator', 'sites' => $moved, 'removed_pools' => []];
+    }
+
+    /** @return array<string, mixed> */
+    private function phpPoolConverge(): array
+    {
+        if ($this->phpPoolsMigrated) {
+            return ['started' => false, 'reason' => 'nothing to do'];
+        }
+        $this->phpPoolConvergeStarts++;
+
+        return ['started' => true, 'unit' => 'azerioid-site-php-pools.service'];
+    }
+
+    /** @return array<string, mixed> */
+    private function phpPoolSet(array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $this->phpPoolOpenBasedir[$domain] = (bool) ($stdin['open_basedir'] ?? true);
+
+        return ['domain' => $domain, 'open_basedir' => $this->phpPoolOpenBasedir[$domain], 'isolated' => true, 'reason' => null];
     }
 
     /** @var array<string, array<string,mixed>> git deploy config + state per domain (A53) */

@@ -119,7 +119,7 @@ CONF;
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
         $conf = $rt->files['/etc/caddy/conf.d/shop.example.com.conf'];
-        $this->assertStringContainsString('php_fastcgi unix//run/php/php8.4-fpm.sock', $conf);
+        $this->assertStringContainsString('php_fastcgi unix//run/php/azv-shop-example-com-8.4.sock', $conf);
         $this->assertStringContainsString('read_timeout 35s', $conf);
     }
 

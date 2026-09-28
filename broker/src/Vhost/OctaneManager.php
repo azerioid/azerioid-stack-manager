@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Vhost;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
+use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
@@ -170,7 +171,7 @@ final class OctaneManager
             VhostUser::ensure($this->runtime, $this->config, $domain, $root);
             $appDir = self::detectLaravel($this->runtime, $root)['app_dir'] ?? null;
             if (is_string($appDir) && $appDir !== '') {
-                $this->ensureFpmWritableLaravelDirs($appDir, VhostUser::docrootGroup($this->runtime, $domain));
+                $this->ensureFpmWritableLaravelDirs($appDir, $domain);
             }
         }
 
@@ -499,7 +500,7 @@ final class OctaneManager
      * After Octane disable, ensure Laravel writable dirs remain usable by the site FPM pool
      * (group bits + SELinux httpd_sys_rw_content_t when enforcing).
      */
-    private function ensureFpmWritableLaravelDirs(string $appDir, string $phpGroup): void
+    private function ensureFpmWritableLaravelDirs(string $appDir, string $domain): void
     {
         if ($this->runtime->getuid() !== 0) {
             return;
@@ -509,7 +510,12 @@ final class OctaneManager
             $appDir . '/bootstrap/cache',
             $appDir . '/database',
         ];
-        $phpUser = $this->config->phpUser !== '' ? $this->config->phpUser : 'caddy';
+        $phpGroup = VhostUser::docrootGroup($this->runtime, $domain);
+        // The site's own pool runs as its identity (A55); only a site kept on the shared pool
+        // (legacy group, or put back by a failed migration) is served by the shared account.
+        $phpUser = $phpGroup !== VhostUser::LEGACY_GROUP && (new SitePool($this->config, $this->runtime))->settings($domain)['isolated']
+            ? VhostUser::username($domain)
+            : ($this->config->phpUser !== '' ? $this->config->phpUser : 'caddy');
         foreach ($dirs as $writable) {
             if (!$this->runtime->isDir($writable)) {
                 continue;

@@ -5,9 +5,11 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\AppRuntime;
 use AzerioidPanel\Broker\Web\WebServers;
 
 final class VhostEdit
@@ -96,6 +98,11 @@ final class VhostEdit
         }
 
         $result = WebServers::for($config)->updateVhost($runtime, $config, $domain, $changes);
+        // The web server has moved off any pool the edit left behind (another PHP version, or
+        // no PHP-FPM at all): take it out (A55).
+        $after = $result['after'] ?? [];
+        $keep = ($after['type'] ?? null) === 'php' && ($after['runtime'] ?? AppRuntime::FPM) === AppRuntime::FPM ? ($after['php_version'] ?? null) : null;
+        (new SitePool($config, $runtime))->prune($domain, is_string($keep) && $keep !== '' ? $keep : null);
 
         // TLS is always terminated by Caddy; auto uses native HTTP-01 regardless of backend engine.
         if ($mode === TlsMode::AUTO) {

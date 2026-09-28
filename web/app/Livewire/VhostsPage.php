@@ -76,6 +76,11 @@ class VhostsPage extends Component
     public ?string $editingDomain = null;
     public string $editRoot = '';
     public string $editPhpVersion = '';
+
+    /** A55: open_basedir for the site's own PHP pool (null = not a PHP-FPM site, or unknown). */
+    public ?bool $editOpenBasedir = null;
+
+    public ?bool $editOpenBasedirWas = null;
     public bool $editTls = false;
     public string $editTlsMode = 'off';
     public string $editDnsProvider = '';
@@ -379,6 +384,8 @@ class VhostsPage extends Component
             $this->editDnsToken = '';
             $this->editAcmeStaging = false;
             $this->editWildcard = false;
+            $this->editOpenBasedir = $this->editType === 'php' ? $this->openBasedirOf($domain) : null;
+            $this->editOpenBasedirWas = $this->editOpenBasedir;
 
             return;
         }
@@ -387,7 +394,23 @@ class VhostsPage extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine', 'editOpenBasedir', 'editOpenBasedirWas');
+    }
+
+    /** The site's open_basedir switch from the A55 pool status; null when the broker has no answer. */
+    private function openBasedirOf(string $domain): ?bool
+    {
+        $res = app(BrokerClient::class)->call('vhost.phppool.status', [], [], 60, false);
+        if (! $res->ok || ! is_array($res->data)) {
+            return null;
+        }
+        foreach ((array) ($res->data['sites'] ?? []) as $site) {
+            if (($site['domain'] ?? '') === $domain) {
+                return (bool) ($site['open_basedir'] ?? true);
+            }
+        }
+
+        return null;
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -440,6 +463,14 @@ class VhostsPage extends Component
                 $this->error = $this->operatorMessage((string) $res->error);
 
                 return;
+            }
+            if ($this->editType === 'php' && $this->editOpenBasedir !== null && $this->editOpenBasedir !== $this->editOpenBasedirWas) {
+                $set = $broker->call('vhost.phppool.set', [$domain], ['open_basedir' => $this->editOpenBasedir]);
+                if (! $set->ok) {
+                    $this->error = 'Updated '.$domain.', but open_basedir was not changed: '.$this->operatorMessage((string) $set->error);
+
+                    return;
+                }
             }
             $this->flash = "Updated {$domain}.";
             $this->cancelEdit();

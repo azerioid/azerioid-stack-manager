@@ -526,7 +526,7 @@ PROXY;
 PROXY;
         } else {
             if ($type === 'php' && $phpVersion !== null) {
-                $sock = $config->phpFpmSocket($phpVersion, $runtime);
+                $sock = $config->phpFpmSocket($phpVersion, $runtime, $domain, $root);
                 $phpBlock = SitePhpTimeouts::caddyPhpFastcgiBlock($sock);
             }
             if ($type === 'proxy' && $upstream !== null) {

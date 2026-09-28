@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\ConvergePanelIdentity;
+use App\Console\Commands\ConvergeSitePhpPools;
 use App\Console\Commands\ConvergeVhostIsolation;
 use App\Console\Commands\DeployScheduled;
 use App\Console\Commands\EvaluateAlerts;
@@ -32,6 +33,10 @@ Schedule::command(ConvergePanelIdentity::class)->everyFiveMinutes()->withoutOver
 // A49: move every vhost identity off the shared azerioid-vhosts group after a
 // self-update deploys the release that introduces it. A no-op once isolated.
 Schedule::command(ConvergeVhostIsolation::class)->everyFiveMinutes()->withoutOverlapping();
+
+// A55: move every PHP site onto a pool of its own, and take out pools no site uses.
+// A no-op broker call once every site is served by its own pool.
+Schedule::command(ConvergeSitePhpPools::class)->everyFiveMinutes()->withoutOverlapping();
 
 // B8 / A41: scheduled git deploys (manual and schedule only, no webhooks).
 Schedule::command(DeployScheduled::class)->everyFiveMinutes()->withoutOverlapping();

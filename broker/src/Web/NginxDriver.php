@@ -562,7 +562,7 @@ final class NginxDriver implements WebServerDriver
         $logs = rtrim($config->webLogDir, '/');
         $location = '';
         if ($type === 'php' && $phpVersion !== null) {
-            $sock = $config->phpFpmUnixPath($phpVersion, $runtime);
+            $sock = $config->phpFpmUnixPath($phpVersion, $runtime, $domain, $root);
             $timeouts = SitePhpTimeouts::nginxFastcgiTimeouts();
             $location = <<<PHP
     location / {

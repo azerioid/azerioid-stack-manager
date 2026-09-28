@@ -99,7 +99,7 @@ final class FrontRouterTest extends TestCase
         $backend = $rt->files['/etc/apache2/sites-available/abc.az.conf'];
         $this->assertStringContainsString('<VirtualHost 127.0.0.1:8081>', $backend);
         $this->assertStringContainsString('ServerName abc.az', $backend);
-        $this->assertStringContainsString('php8.4-fpm.sock', $backend);
+        $this->assertStringContainsString('/run/php/azv-abc-az-8.4.sock', $backend);
         $this->assertStringContainsString('SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on', $backend);
         $this->assertStringContainsString("ProxyFCGISetEnvIf \"req('X-Forwarded-Proto') == 'https'\" HTTPS on", $backend);
         $this->assertStringContainsString("ProxyFCGISetEnvIf \"req('X-Forwarded-Proto') == 'https'\" REQUEST_SCHEME https", $backend);

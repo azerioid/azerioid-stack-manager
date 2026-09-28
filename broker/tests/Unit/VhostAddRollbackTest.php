@@ -34,7 +34,7 @@ final class VhostAddRollbackTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertArrayHasKey('/etc/caddy/conf.d/shop.example.com.conf', $this->rt->files);
         $conf = $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf'];
-        $this->assertStringContainsString('php_fastcgi unix//run/php/php8.4-fpm.sock', $conf);
+        $this->assertStringContainsString('php_fastcgi unix//run/php/azv-shop-example-com-8.4.sock', $conf);
         $this->assertStringContainsString('root * /data/www/shop.example.com', $conf);
         $this->assertTrue($this->rt->isDir('/data/www/shop.example.com'));
         $decoded = json_decode($out, true);
@@ -138,7 +138,7 @@ final class VhostAddRollbackTest extends TestCase
         ob_end_clean();
         $this->assertSame(0, $code);
         $conf = $this->rt->files['/etc/caddy/conf.d/pool.example.com.conf'];
-        $this->assertStringContainsString('php_fastcgi unix//run/php/php-fpm.sock', $conf);
+        $this->assertStringContainsString('php_fastcgi unix//run/php/azv-pool-example-com-8.4.sock', $conf);
         $this->assertStringNotContainsString('azerioid-panel.sock', $conf);
     }
 

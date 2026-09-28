@@ -64,6 +64,7 @@ use AzerioidPanel\Broker\Actions\PhpTimeoutsEnsure;
 use AzerioidPanel\Broker\Actions\PhpVersions;
 use AzerioidPanel\Broker\Actions\SchedulerInstall;
 use AzerioidPanel\Broker\Actions\SftpManage;
+use AzerioidPanel\Broker\Actions\SitePhpPool;
 use AzerioidPanel\Broker\Actions\ServiceControl;
 use AzerioidPanel\Broker\Actions\ServiceStatus;
 use AzerioidPanel\Broker\Actions\SpacesTest;
@@ -110,6 +111,10 @@ final class Kernel
         'vhost.isolation.status' => VhostIsolation::class,
         'vhost.isolation.apply' => VhostIsolation::class,
         'vhost.isolation.converge' => VhostIsolation::class,
+        'vhost.phppool.status' => SitePhpPool::class,
+        'vhost.phppool.apply' => SitePhpPool::class,
+        'vhost.phppool.converge' => SitePhpPool::class,
+        'vhost.phppool.set' => SitePhpPool::class,
         'panel.fpm.refresh' => PanelFpmRefresh::class,
         'panel.update.check' => PanelUpdateCheck::class,
         'panel.update.apply' => PanelUpdateApply::class,

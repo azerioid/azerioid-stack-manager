@@ -590,7 +590,7 @@ final class ApacheDriver implements WebServerDriver
         $proxyBlock = '';
         $dirBlock = '';
         if ($type === 'php' && $phpVersion !== null) {
-            $sock = $config->phpFpmUnixPath($phpVersion, $runtime);
+            $sock = $config->phpFpmUnixPath($phpVersion, $runtime, $domain, $root);
             $phpBlock = SitePhpTimeouts::apacheProxyTimeouts() . <<<PHP
     <FilesMatch \\.php\$>
         SetHandler "proxy:unix:{$sock}|fcgi://localhost"

@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Deploy\GitDeploy;
 use AzerioidPanel\Broker\Mail\MailManager;
 use AzerioidPanel\Broker\Mail\MailState;
+use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Terminal\TerminalManager;
@@ -69,6 +70,9 @@ final class VhostDel
         $terminal->stopForVhost($domain);
         $root = self::vhostRoot($domain, $runtime, $config);
         $username = VhostUser::username($domain);
+        // The site's pool runs as the identity deprovision removes, and php-fpm will not reload
+        // with a pool whose user is gone (A55).
+        (new SitePool($config, $runtime))->remove($domain);
         VhostUser::deprovision($runtime, $config, $domain);
 
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);

@@ -443,8 +443,15 @@ final class Config
         return null;
     }
 
-    public function phpFpmSocket(string $version, ?Runtime $runtime = null): string
+    /**
+     * With a domain and a runtime: the site's own pool (A55), created on first use. Without:
+     * the version's shared pool (panel views, legacy callers).
+     */
+    public function phpFpmSocket(string $version, ?Runtime $runtime = null, ?string $domain = null, ?string $root = null): string
     {
+        if ($domain !== null && $root !== null && $runtime !== null) {
+            return 'unix/' . (new \AzerioidPanel\Broker\Php\SitePool($this, $runtime))->socketFor($domain, $version, $root);
+        }
         $layout = DistroPaths::for($runtime ?? new FakeRuntime(), $this);
         if ($runtime !== null) {
             return 'unix/' . $layout->phpFpmUnixSocket($version);
@@ -458,9 +465,9 @@ final class Config
         return 'unix/' . $layout->phpFpmUnixSocket($version);
     }
 
-    public function phpFpmUnixPath(string $version, ?Runtime $runtime = null): string
+    public function phpFpmUnixPath(string $version, ?Runtime $runtime = null, ?string $domain = null, ?string $root = null): string
     {
-        $sock = $this->phpFpmSocket($version, $runtime);
+        $sock = $this->phpFpmSocket($version, $runtime, $domain, $root);
 
         return preg_replace('#^unix/+#', '/', $sock) ?? DistroPaths::for($runtime ?? new FakeRuntime(), $this)->phpFpmUnixSocket($version);
     }

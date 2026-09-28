@@ -259,6 +259,36 @@ else
     echo "VHOST_CROSS_READ_OPEN=${CROSS_OPEN}"
     echo "CHECK_VHOST_CROSS_READ_REFUSED=fail"
 fi
+echo "=== spot-check: per-site PHP pools (ADR A55) ==="
+# Started by the scheduler like A49; a site put back on the shared pool is reported, not waited on.
+POOL_OUT=""
+for _ in $(seq 1 45); do
+    POOL_OUT="$("${PREFIX}/broker" vhost.phppool.status </dev/null 2>&1)" || true
+    printf '%s' "${POOL_OUT}" | grep -q '"migrated":true' && break
+    [[ "${APPLY}" == "1" ]] || break
+    printf '%s' "${POOL_OUT}" | grep -q '"auto_eligible":false' \
+        && ! printf '%s' "${POOL_OUT}" | grep -q '"running":true' && break
+    sleep 10
+done
+printf '%s\n' "${POOL_OUT}" | head -c 400
+echo
+if printf '%s' "${POOL_OUT}" | grep -q '"migrated":true'; then
+    echo "CHECK_SITE_PHP_POOLS=pass"
+else
+    echo "CHECK_SITE_PHP_POOLS=fail"
+fi
+# Every site pool must run as a site identity, never as a shared or privileged account.
+POOL_BAD=""
+for f in /etc/php/*/fpm/pool.d/azv-*.conf /etc/php-fpm.d/azv-*.conf /etc/opt/remi/php*/php-fpm.d/azv-*.conf; do
+    [[ -f "${f}" ]] || continue
+    grep -Eq '^user = az-vh-' "${f}" || POOL_BAD="${POOL_BAD} ${f}"
+done
+if [[ -z "${POOL_BAD}" ]]; then
+    echo "CHECK_SITE_POOL_USERS=pass"
+else
+    echo "SITE_POOL_USER_WRONG=${POOL_BAD}"
+    echo "CHECK_SITE_POOL_USERS=fail"
+fi
 if [[ "$(systemctl is-active azerioid-panel-php-fpm.service 2>/dev/null)" == "active" ]]; then
     echo "CHECK_PANEL_OWN_MASTER=pass"
 else
