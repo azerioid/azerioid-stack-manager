@@ -1069,3 +1069,10 @@ writable by Adminer's PHP. Cron log directories of deleted identities had the sa
 | Verification | Added: each identity can still open its own top directory and docroot; each orphan is `0:0 700`; the cross-identity check targets top directories |
 
 The same migrator and the same trigger as A49: hosts already on v2.0.6 converge again automatically.
+
+**v2.0.8 correction.** v2.0.7 quarantined with `chmod 0700`. GNU `chmod` keeps a directory's setuid and
+setgid bits when given a numeric mode, so a `2770` directory became `2700`, verification refused it and
+the migration rolled back cleanly on the first host it ran on. The quarantine mode is now symbolic
+(`u=rwx,go=,ug-s`), checked on Ubuntu and Rocky. A failure recorded by an older release no longer
+blocks automatic convergence: a new release tries once on its own, and only a failure of the running
+release waits for an operator.
