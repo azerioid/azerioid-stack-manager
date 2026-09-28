@@ -173,6 +173,21 @@ final class ArchiveGuardTest extends TestCase
         self::inspect(self::archive(self::entry('site/gidshell', 'x', '0', 02755)));
     }
 
+    public function test_accepts_a_setgid_directory(): void
+    {
+        // Every panel docroot is 2770 (A25/A49); a site backup is full of these.
+        $out = self::inspect(self::archive(self::entry('site/', '', '5', 02770), self::entry('site/index.php', '<?php', '0', 0660)));
+
+        $this->assertSame(2, $out['entries']);
+    }
+
+    public function test_still_rejects_a_setgid_directory_that_is_also_setuid(): void
+    {
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessageMatches('/setuid/');
+        self::inspect(self::archive(self::entry('site/', '', '5', 06770)));
+    }
+
     public function test_rejects_setuid_without_exec_bit(): void
     {
         $this->expectException(BrokerException::class);

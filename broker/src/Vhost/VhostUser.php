@@ -92,6 +92,7 @@ final class VhostUser
         }
 
         self::applyOwnership($runtime, $root, $username, $group);
+        self::claimTop($runtime, $config, $root, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
         if ($changed) {
             // The web server must not restart inside the request that created the vhost
@@ -139,6 +140,30 @@ final class VhostUser
             '/bin/sh', '-c',
             'find ' . escapeshellarg($root) . ' -type f -exec chmod 0660 {} +',
         ], null, 120);
+    }
+
+    /**
+     * A docroot like /data/www/app/public is created with its parent: root's, 0755. The
+     * site's identity could not write its own app (.env, storage) and the directory was
+     * open to every other site until the isolation converge closed it (A49-E1). Only a
+     * directory root still owns is taken — one another account owns may be shared.
+     */
+    private static function claimTop(Runtime $runtime, Config $config, string $root, string $username, string $group): void
+    {
+        $www = rtrim($config->wwwRoot, '/') . '/';
+        if ($runtime->getuid() !== 0 || !str_starts_with($root, $www)) {
+            return;
+        }
+        $top = $www . explode('/', substr($root, strlen($www)))[0];
+        if ($top === rtrim($root, '/') || !$runtime->isDir($top)) {
+            return;
+        }
+        $owner = trim($runtime->exec(['/usr/bin/stat', '-c', '%u', $top], null, 10)->stdout);
+        if ($owner !== '0') {
+            return;
+        }
+        $runtime->exec(['/usr/bin/chown', '-h', $username . ':' . $group, $top], null, 30);
+        $runtime->exec(['/usr/bin/chmod', '2770', $top], null, 30);
     }
 
     /**

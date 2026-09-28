@@ -1232,3 +1232,15 @@ part selection) and *Schedules per target* (with the default retention). Bundles
 panel-started verifications are queued operations. CLI `azerioid backup bundle|bundles|bundle-restore|
 bundle-dbs`, `azerioid backup verify --deep`. Queued bundle work has the queue's 30-minute ceiling;
 scheduled bundles run from cron with an hour.
+
+**v2.3.1 addendum — site file restore had never worked.** The first real bundle restore on the Ubuntu host
+failed with `Archive rejected: setgid entry (…/public/)`. `ArchiveGuard` refused every setgid entry, and
+every directory of every panel docroot has been `2770` — setgid — since the first Terminal commit
+(2026-09-02). So `backup.restore.files` could not restore a panel-managed site at all; no test built an
+archive the way a real docroot looks. setgid is now refused on files only (a privilege grant) and
+accepted on directories (group inheritance). Two more defects in the same path, fixed with it: tar runs as
+root with `--no-same-owner`, so a restored tree was root's — the site's identity could not write its own
+files, and a `0755` top directory reopened the site to every other one; the tree now takes the owner of
+the live tree it replaces (`chown -R --reference`) and the top directory its mode. And a vhost created
+with a nested docroot (`…/app/public`) left `…/app` root's `0755` until the isolation converge closed
+it; `VhostUser::ensure` now gives a root-owned top directory to the site's identity (`2770`).

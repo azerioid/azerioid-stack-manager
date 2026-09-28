@@ -175,6 +175,14 @@ final class BackupRestore
             }
             throw new BrokerException(trim($moved->stderr) !== '' ? trim($moved->stderr) : 'Failed to move staged files into place.', 1);
         }
+        // tar ran as root with --no-same-owner, so everything it wrote is root's. Give the
+        // tree back to whoever owned the live one, and the top directory its mode: the
+        // site's identity could not otherwise write its own files, and a 0755 top
+        // directory would open the site to every other one (A49-E1).
+        if ($hadLive) {
+            $runtime->exec(['/usr/bin/chown', '-R', '-h', '--reference=' . $backup, $dest], null, 600);
+            $runtime->exec(['/usr/bin/chmod', '--reference=' . $backup, $dest], null, 30);
+        }
         // Pre-restore snapshots were never pruned, so every restore left another
         // full copy of the site next to it until the disk filled (A2.5).
         $keepSnapshots = max(0, min(20, (int) ($input['keep_snapshots'] ?? 2)));
