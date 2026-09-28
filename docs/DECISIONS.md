@@ -1131,3 +1131,9 @@ daemon; restarting them again raced the old container's `--rm` removal ("name al
 seen on the test host). So after a daemon restart the broker waits, then starts only the Docker
 programs that are still down, after removing a stale container of the same name. The A49 migration
 restarts the daemon the same way instead of restarting Docker programs twice.
+
+**v2.1.2 addendum — data directories are 2775.** A data directory the panel creates was `2770`; a
+container's non-root process (nginx's worker, uid 101 inside the namespace, an unmapped subuid outside)
+is "other" to it and got `403`. It is now `2775`. That opens nothing on the host: a bind mount starts
+inside the site's top directory, which A49-E1 closes to everyone else — verified on the Ubuntu host,
+another site's identity is still refused the file.

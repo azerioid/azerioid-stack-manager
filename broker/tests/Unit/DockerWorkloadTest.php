@@ -201,6 +201,7 @@ final class DockerWorkloadTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertStringContainsString('-v ' . self::ROOT . '/data/pg:/var/lib/postgresql/data', $this->supervisorConf());
         $this->assertTrue($this->rt->isDir(self::ROOT . '/data/pg'));
+        $this->assertSame(02775, $this->rt->modes[self::ROOT . '/data/pg'] ?? null, 'readable by the container\'s non-root user');
     }
 
     /** @return iterable<string, array{0:array<string,mixed>}> */
