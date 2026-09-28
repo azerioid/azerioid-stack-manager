@@ -82,7 +82,7 @@ final class BackupVerify
             $restore = (new ScratchVerifier($config, $runtime))->verify(
                 $plain,
                 (string) ($input['name'] ?? $this->nameOf($key)),
-                isset($input['engine']) ? (string) $input['engine'] : null
+                isset($input['engine']) ? (string) $input['engine'] : $this->engineOf($key)
             );
         }
 
@@ -108,7 +108,17 @@ final class BackupVerify
     /** The database a db archive holds: the path segment after /db/. */
     private function nameOf(string $key): string
     {
+        if (preg_match('#/vhost/[^/]+/[^/]+/db-(?:mariadb|postgresql|mongodb)-([^/]+)\.lacmp2\.bin$#', $key, $m) === 1) {
+            return $m[1];
+        }
+
         return preg_match('#/db/([^/]+)/#', $key, $m) === 1 ? $m[1] : 'all';
+    }
+
+    /** A bundle's db part names its engine; a plain db archive leaves it to the host default. */
+    private function engineOf(string $key): ?string
+    {
+        return preg_match('#/db-(mariadb|postgresql|mongodb)-[^/]+$#', $key, $m) === 1 ? $m[1] : null;
     }
 
     /** @param array<string,mixed> $input */
@@ -119,6 +129,10 @@ final class BackupVerify
             if (in_array($kind, ['db', 'files', 'caddy'], true)) {
                 return $kind;
             }
+        }
+        // A bundle part (A52): vhost/<domain>/<stamp>/<part>.lacmp2.bin
+        if (preg_match('#/vhost/[^/]+/[^/]+/(db-|files|config)#', $key, $m) === 1) {
+            return $m[1] === 'db-' ? 'db' : 'files';
         }
         foreach (['/db/' => 'db', '/files/' => 'files', '/caddy/' => 'caddy'] as $needle => $kind) {
             if (str_contains($key, $needle)) {

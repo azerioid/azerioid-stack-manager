@@ -44,11 +44,31 @@ final class VhostBundleTest extends TestCase
             }
 
             return match ($c[0] ?? '') {
-                '/usr/bin/tar' => in_array('-czf', $c, true) ? new ExecResult($c, 0, 'TAR:' . implode(' ', $c), '') : null,
+                // The config part must be a real (empty) tar.gz so restore can inspect it; the
+                // files part carries its command line so tests can read what was archived.
+                '/usr/bin/tar' => in_array('-czf', $c, true)
+                    ? new ExecResult($c, 0, in_array('.', $c, true) ? self::tinyTarGz() : 'TAR:' . implode(' ', $c), '')
+                    : null,
                 '/usr/bin/mysqldump' => new ExecResult($c, 0, "CREATE TABLE t (id int);\n", ''),
                 default => null,
             };
         };
+    }
+
+    /** A real one-entry tar.gz, as the config part is. */
+    private static function tinyTarGz(): string
+    {
+        $dir = sys_get_temp_dir() . '/azv-bundle-' . bin2hex(random_bytes(4));
+        mkdir($dir);
+        file_put_contents($dir . '/vhost.conf', "x\n");
+        $tar = new \PharData($dir . '.tar');
+        $tar->addFile($dir . '/vhost.conf', 'vhost.conf');
+        $bytes = (string) file_get_contents($dir . '.tar');
+        unlink($dir . '.tar');
+        unlink($dir . '/vhost.conf');
+        rmdir($dir);
+
+        return (string) gzencode($bytes);
     }
 
     public function test_databases_that_belong_to_a_site_are_recorded_and_validated(): void
@@ -174,7 +194,54 @@ final class VhostBundleTest extends TestCase
         $this->assertArrayHasKey($base . '/vhost/shop.test/20260101T030000Z/files.lacmp2.bin', $this->rt->files);
     }
 
+    public function test_config_restore_brings_back_the_sites_cron_jobs_and_database_list(): void
+    {
+        $bundle = new VhostBundle($this->cfg, $this->rt);
+        $out = $bundle->run(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local']);
+        $this->rt->files['/etc/caddy/Caddyfile'] = "import /etc/caddy/conf.d/*.conf\n";
+        $this->rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
+        $this->rt->files['/etc/passwd'] = "az-vh-shop-test:x:990:990::/data/www/shop.test/public:/bin/bash\n";
+        // Stand in for tar -x: the staged config the bundle carried.
+        $previous = $this->rt->execFn;
+        $this->rt->execFn = function (array $c, ?string $stdin) use ($previous): ?ExecResult {
+            if (($c[0] ?? '') === '/usr/bin/tar' && in_array('-xzf', $c, true)) {
+                $dir = $c[array_search('-C', $c, true) + 1];
+                $this->rt->files[$dir . '/vhost.conf'] = $this->rt->files['/etc/caddy/conf.d/shop.test.conf'];
+                $this->rt->files[$dir . '/supervisor.json'] = '[]';
+                $this->rt->files[$dir . '/cron.json'] = json_encode([['schedule' => '0 4 * * *', 'command' => 'php artisan schedule:run', 'enabled' => true, 'note' => 'nightly']]);
+                $this->rt->files[$dir . '/databases.json'] = json_encode(['databases' => [['engine' => 'mariadb', 'name' => 'shop']]]);
+
+                return new ExecResult($c, 0, '', '');
+            }
+
+            return $previous($c, $stdin);
+        };
+
+        $result = $bundle->restore(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local', 'bundle' => $out['bundle'],
+            'parts' => ['config'], 'apply' => true, 'confirm' => 'SHOP.TEST']);
+
+        $this->assertStringContainsString('1 cron job(s) added', implode('; ', $result['results']['config']['restored']));
+        $jobs = json_decode($this->rt->files['/var/lib/azerioid-panel/cron/jobs.json'], true)['jobs'];
+        $this->assertSame(['shop.test', 'php artisan schedule:run'], [$jobs[0]['owner'], $jobs[0]['command']]);
+        $this->assertSame([['engine' => 'mariadb', 'name' => 'shop']], $bundle->settings(self::DOMAIN)['databases']);
+    }
+
     // ------------------------------------------------------ restore verification
+
+    public function test_a_bundles_database_part_is_verified_by_restoring_it(): void
+    {
+        $bundle = new VhostBundle($this->cfg, $this->rt);
+        $bundle->saveSettings(self::DOMAIN, ['databases' => [['engine' => 'mariadb', 'name' => 'shop']]]);
+        $out = $bundle->run(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local']);
+        $this->rt->dbQueryFn = static fn (string $sql): array => str_contains($sql, 'information_schema.tables') ? [['n' => 1]] : [];
+        $key = '/var/lib/azerioid-panel/backups/vhost/shop.test/' . $out['bundle'] . '/db-mariadb-shop.lacmp2.bin';
+
+        $result = (new \AzerioidPanel\Broker\Actions\BackupVerify())->handle('backup.verify', [$key],
+            ['passphrase' => self::PASS, 'destination' => 'local', 'deep' => true], $this->rt, $this->cfg);
+
+        $this->assertSame('db', $result['kind']);
+        $this->assertSame('scratch-restore', $result['restore_check']['checked']);
+    }
 
     public function test_whole_server_dumps_are_never_restored_for_verification(): void
     {
