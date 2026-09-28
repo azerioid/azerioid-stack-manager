@@ -72,7 +72,7 @@ final class VhostIsolationMigrator
         $running = $this->convergeRunning();
         $result = $state['result'] ?? null;
         $interrupted = $result === 'running' && !$running;
-        $blocked = $result === 'failed' || $interrupted;
+        $blocked = ($result === 'failed' && !$this->failedOnOlderRelease($state)) || $interrupted;
         $migrated = $pending === [];
 
         return [
@@ -119,7 +119,7 @@ final class VhostIsolationMigrator
         if ($status['migrated']) {
             return ['started' => false, 'reason' => 'already migrated'];
         }
-        if (($status['last_attempt']['result'] ?? null) === 'failed') {
+        if (($status['last_attempt']['result'] ?? null) === 'failed' && !$this->failedOnOlderRelease($status['last_attempt'])) {
             return ['started' => false, 'reason' => 'the last attempt failed and was rolled back; automatic retries are off until an operator runs: azerioid vhost isolation apply --confirm'];
         }
         if ($status['interrupted'] && !$now) {
@@ -373,6 +373,12 @@ final class VhostIsolationMigrator
         return $out;
     }
 
+    /**
+     * 0700 with the setgid bit cleared. GNU chmod keeps a directory's setuid/setgid bits on a
+     * numeric mode ("chmod 0700" on a 2770 directory leaves 2700), so it is said explicitly.
+     */
+    private const QUARANTINE_MODE = 'u=rwx,go=,ug-s';
+
     /** Where cron job output lives, one directory per identity (A47). */
     private const CRON_LOG_DIR = '/var/log/azerioid-cron';
 
@@ -597,7 +603,7 @@ final class VhostIsolationMigrator
         $path = $orphan['path'];
         $this->must(['/usr/bin/chown', '-h', '0:0', $path], "quarantine {$path}");
         $this->journal[] = ['cmd' => ['/usr/bin/chown', '-h', $orphan['uid'] . ':' . $orphan['gid'], $path], 'what' => "hand {$path} back to {$orphan['uid']}:{$orphan['gid']}"];
-        $this->must(['/usr/bin/chmod', '0700', $path], "close {$path}");
+        $this->must(['/usr/bin/chmod', self::QUARANTINE_MODE, $path], "close {$path}");
         $this->journal[] = ['cmd' => ['/usr/bin/chmod', $orphan['mode'], $path], 'what' => "reopen {$path} ({$orphan['mode']})"];
         $this->note("Quarantined {$path} (was {$orphan['owner']}:{$orphan['group']} {$orphan['mode']})");
     }
@@ -641,7 +647,7 @@ final class VhostIsolationMigrator
             return false;
         }
         $a = $runtime->exec(['/usr/bin/chown', '-h', '0:0', $path], null, 30);
-        $b = $runtime->exec(['/usr/bin/chmod', '0700', $path], null, 30);
+        $b = $runtime->exec(['/usr/bin/chmod', self::QUARANTINE_MODE, $path], null, 30);
 
         return $a->ok() && $b->ok();
     }
@@ -953,8 +959,33 @@ final class VhostIsolationMigrator
     /** @param array<string,mixed> $state */
     private function writeState(array $state): void
     {
+        $state['version'] = $this->panelVersion();
         $this->runtime->mkdir(dirname(self::STATE_FILE), 0750);
         $this->runtime->writeFile(self::STATE_FILE, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", 0600);
+    }
+
+    /**
+     * A failure recorded by an older release does not stop this one from trying once on
+     * its own: a new release is new code, and a host should not wait for an operator to
+     * find out whether it fixed what failed. A failure of this release still stops it.
+     *
+     * @param  array<string,mixed>  $attempt
+     */
+    private function failedOnOlderRelease(array $attempt): bool
+    {
+        $current = $this->panelVersion();
+
+        return $current !== '' && ($attempt['version'] ?? '') !== $current;
+    }
+
+    private function panelVersion(): string
+    {
+        $path = rtrim($this->config->panelRoot, '/') . '/VERSION';
+        try {
+            return $this->runtime->fileExists($path) ? trim($this->runtime->readFile($path)) : '';
+        } catch (\Throwable) {
+            return '';
+        }
     }
 
     private function convergeRunning(): bool
