@@ -124,8 +124,16 @@ final class ElasticsearchSetup
     }
 
     /** Half the physical RAM, at most 31 GB, at least 512 MB. */
+    /**
+     * Half the physical RAM, 512 MB to 31 GB. Below the 2 GB floor (a LOW-MEMORY-LAB install)
+     * 256 MB: half of a 1 GB host would leave the panel, PHP and the web server nothing.
+     */
     public static function heapMb(int $physicalMb): int
     {
+        if ($physicalMb < 2048) {
+            return 256;
+        }
+
         return max(512, min(31744, intdiv($physicalMb, 2)));
     }
 

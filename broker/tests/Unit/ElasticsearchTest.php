@@ -65,7 +65,7 @@ YAML;
     public function test_heap_is_half_the_ram_within_bounds(): void
     {
         $this->assertSame(1024, ElasticsearchSetup::heapMb(2048));
-        $this->assertSame(512, ElasticsearchSetup::heapMb(900));
+        $this->assertSame(256, ElasticsearchSetup::heapMb(900), 'a LOW-MEMORY-LAB host keeps the heap small');
         $this->assertSame(31744, ElasticsearchSetup::heapMb(128000));
     }
 
@@ -96,6 +96,42 @@ YAML;
             $this->assertStringContainsString("this host has {$totalMb} MB", $issues);
             $this->assertStringContainsString('Swap is not counted', $issues);
         }
+    }
+
+    /** @return iterable<string, array{0:int, 1:bool}> MemTotal MB, blocked with the lab override */
+    public static function labMemory(): iterable
+    {
+        yield 'a "1 GB" droplet (765 MB)' => [765, false];
+        yield '961 MB' => [961, false];
+        yield '453 MB' => [453, true];
+    }
+
+    /** @dataProvider labMemory */
+    #[\PHPUnit\Framework\Attributes\DataProvider('labMemory')]
+    public function test_a_test_host_may_override_the_floor_down_to_the_lab_minimum(int $totalMb, bool $blocked): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/proc/meminfo'] = sprintf("MemTotal: %d kB\nMemAvailable: %d kB\nSwapFree: %d kB\n", $totalMb * 1024, $totalMb * 500, 2048 * 1024);
+        $rt->script(['/bin/df', '-Pk', '/var'], 0, "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/vda1 100000000 1 90000000 1% /\n");
+        $definition = json_decode((string) file_get_contents(__DIR__ . '/../../../registry/components/elasticsearch.json'), true);
+        $preflight = new ComponentPreflight(new Config(), $rt, new OsRelease('ubuntu', '24.04', 'noble', 'ubuntu', 'apt'));
+
+        $without = implode(' ', $preflight->check($definition)['issues']);
+        $this->assertStringContainsString('physical RAM', $without, 'no override: still refused');
+        $result = $preflight->check($definition, true);
+
+        $this->assertSame($blocked, str_contains(implode(' ', $result['issues']), 'physical RAM'));
+        if (!$blocked) {
+            $this->assertStringContainsString('LOW-MEMORY LAB INSTALL', implode(' ', $result['warnings']));
+        }
+    }
+
+    public function test_the_override_needs_the_typed_confirm(): void
+    {
+        $this->expectException(\AzerioidPanel\Broker\BrokerException::class);
+        $this->expectExceptionMessage('Confirmation phrase did not match');
+        (new \AzerioidPanel\Broker\Component\ComponentInstaller(new Config(), new FakeRuntime()))
+            ->install('elasticsearch', 'op-1', ['low_memory' => true, 'confirm' => 'yes']);
     }
 
     public function test_a_signing_key_without_the_pinned_fingerprint_is_refused(): void

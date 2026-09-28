@@ -19,7 +19,7 @@ final class ComponentPreflight
      * @param array<string, mixed> $definition
      * @return array<string, mixed>
      */
-    public function check(array $definition): array
+    public function check(array $definition, bool $lowMemory = false): array
     {
         $id = (string) $definition['id'];
         $preflight = is_array($definition['preflight'] ?? null) ? $definition['preflight'] : [];
@@ -50,11 +50,17 @@ final class ComponentPreflight
         // combined-headroom rule above is not enough, and physical RAM is a hard floor (A54,
         // an exception to A31). Measured as MemTotal, and the message says so.
         $minPhysicalMb = (int) ($preflight['min_physical_ram_mb'] ?? 0);
+        $labMb = (int) ($preflight['lab_min_physical_ram_mb'] ?? 0);
         if ($minPhysicalMb > 0) {
             $totalMb = $this->memTotalMb();
-            if ($totalMb < $minPhysicalMb) {
+            if ($lowMemory && $labMb > 0 && $totalMb >= $labMb && $totalMb < $minPhysicalMb) {
+                // Operator override for a test host (typed LOW-MEMORY-LAB): accepted, and said loudly.
+                $warnings[] = "LOW-MEMORY LAB INSTALL: {$totalMb} MB of physical RAM is below the {$minPhysicalMb} MB floor."
+                    . ' The heap is kept small; expect the kernel to kill the JVM under load. Not for production.';
+            } elseif ($totalMb < $minPhysicalMb) {
                 $issues[] = "Needs at least {$minPhysicalMb} MB of physical RAM; this host has {$totalMb} MB (MemTotal)."
-                    . ' Swap is not counted: a JVM heap under swap pressure is killed, not slowed.';
+                    . ' Swap is not counted: a JVM heap under swap pressure is killed, not slowed.'
+                    . ($labMb > 0 && $totalMb >= $labMb ? " A test host can override this with low_memory=true and the typed confirm LOW-MEMORY-LAB (at least {$labMb} MB)." : '');
             }
         }
 

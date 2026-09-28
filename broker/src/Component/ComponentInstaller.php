@@ -38,6 +38,12 @@ final class ComponentInstaller
     public function install(string $componentId, string $operationId, array $options = []): array
     {
         $componentId = Validator::componentId($componentId);
+        // A54 lab override: a host below the physical-RAM floor may still take the component when
+        // the operator types LOW-MEMORY-LAB (a test host, not production).
+        $lowMemory = self::boolOption($options['low_memory'] ?? false);
+        if ($lowMemory) {
+            Validator::typedConfirm((string) ($options['confirm'] ?? ''), Validator::LOW_MEMORY_CONFIRM);
+        }
         $definition = $this->definition($componentId);
         $this->assertInstallable($definition);
 
@@ -45,7 +51,7 @@ final class ComponentInstaller
         $distro = $definition['distros'][$os->distroKey];
         $log = $this->logger($operationId);
 
-        $preflight = (new ComponentPreflight($this->config, $this->runtime, $os))->check($definition);
+        $preflight = (new ComponentPreflight($this->config, $this->runtime, $os))->check($definition, $lowMemory);
         foreach (is_array($preflight['warnings'] ?? null) ? $preflight['warnings'] : [] as $warning) {
             $log->warn((string) $warning);
         }
@@ -354,6 +360,11 @@ final class ComponentInstaller
      * @param  array<string,mixed>  $options
      * @return array<string,mixed>
      */
+    private static function boolOption(mixed $value): bool
+    {
+        return $value === true || in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+    }
+
     private function redactInstallOptions(array $options): array
     {
         foreach (['confirm', 'password', 'token', 'secret'] as $key) {

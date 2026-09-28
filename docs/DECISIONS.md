@@ -1321,6 +1321,15 @@ hard RAM block with swap not counted; minimum **2 GB**; security on; heap half t
 full install needs a host with ≥2 GB, requested from the operator; B7 is not released until that
 passes.
 
+**Addendum (v2.8.0) — lab override.** The operator's test host is a 1 GB droplet ("it is a lab server"),
+which reports about 765 MB MemTotal. The 2 GB floor stays the default and still refuses it. A test host may
+override it explicitly: install options `low_memory=true` and the typed confirm `LOW-MEMORY-LAB`
+(`azerioid component install elasticsearch --option low_memory=true --option confirm=LOW-MEMORY-LAB`), down
+to a second registry floor, `preflight.lab_min_physical_ram_mb` (700). The preflight then warns loudly
+instead of refusing, and below 2 GB the heap is fixed at **256 MB** instead of half the RAM — half of 765 MB
+would leave the panel, PHP and the web server nothing. Not for production: under load the kernel will kill
+the JVM. The override is recorded in the managed manifest's install options.
+
 ## A55 — One PHP-FPM pool per site, running as the site
 
 **Status:** Accepted, shipped in **v2.5.0**. **Closes:** the site PHP residual A49 recorded. **Operator

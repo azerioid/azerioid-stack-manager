@@ -67,6 +67,7 @@
   "preflight": {
     "min_disk_gb": 3,
     "min_ram_mb": 1024,
-    "min_physical_ram_mb": 2048
+    "min_physical_ram_mb": 2048,
+    "lab_min_physical_ram_mb": 700
   }
 }
