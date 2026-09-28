@@ -38,6 +38,9 @@ Usage:
   azerioid vhost docker disable|build|restart|logs|status --domain=<d>
   azerioid vhost docker services|settings|env [--reveal]|env-set --env-file=path --domain=<d>   # A50
   azerioid docker registry list|add <name> --host=ghcr.io --username=<u>|del <name>   # password: AZERIOID_REGISTRY_PASSWORD or prompt
+  azerioid deploy set <domain> --repository=git@host:o/r.git [--branch=main] [--preset=none|composer|laravel|npm|custom --command=… --confirm=RUN-AS-SITE] [--schedule=off|hourly|daily@3]
+  azerioid deploy config|run|rollback|key|remove <domain>       # A53: fetch with a root-only key, check out and run as the site
+  azerioid deploy list
 
   azerioid db list      [--engine=mariadb|postgresql|mongodb] [--json]
   azerioid db add       --engine=<e> --name=<db> [--user=<u>]

@@ -90,8 +90,8 @@ final class VhostIsolationMigrator
                         ? 'INTERRUPTED: an isolation migration stopped before finishing or rolling back. Check the host, then run: azerioid vhost isolation apply --confirm'
                         : 'FAILED: the last isolation migration was rolled back (' . ($state['error'] ?? 'unknown error')
                             . '). Retry with: azerioid vhost isolation apply --confirm')
-                    : 'PENDING: ' . count($pending) . ' site director' . (count($pending) === 1 ? 'y is' : 'ies are')
-                        . ' reachable from other sites (listed above). It is fixed automatically, or now with: azerioid vhost isolation apply --confirm'),
+                    : 'PENDING: ' . count($pending) . ' director' . (count($pending) === 1 ? 'y' : 'ies')
+                        . ' to close or quarantine (listed above). It is done automatically, or now with: azerioid vhost isolation apply --confirm'),
         ];
     }
 

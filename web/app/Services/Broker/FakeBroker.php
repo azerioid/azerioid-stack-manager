@@ -511,6 +511,18 @@ final class FakeBroker
                 'backup.db', 'backup.files', 'backup.caddy' => $this->backupRun($action, $stdin),
                 'backup.list' => $this->backupList($stdin),
                 'backup.prune' => ['deleted' => [], 'keep' => 14],
+                'deploy.config' => $this->deployConfig((string) ($args[0] ?? '')),
+                'deploy.config.set' => $this->deployConfigSet((string) ($args[0] ?? ''), $stdin),
+                'deploy.key.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
+                'deploy.remove' => (function () use ($args): array {
+                    unset($this->deploys[(string) ($args[0] ?? '')]);
+
+                    return ['domain' => $args[0] ?? '', 'removed' => true];
+                })(),
+                'deploy.list' => ['sites' => array_values(array_map(static fn (string $d, array $c): array => [
+                    'domain' => $d, 'schedule' => $c['schedule'], 'last_deploy_at' => $c['state']['last_deploy_at'] ?? null, 'current' => $c['state']['current'] ?? null,
+                ], array_keys($this->deploys), $this->deploys))],
+                'deploy.run', 'deploy.rollback' => $this->deployRun($action, (string) ($args[0] ?? ($stdin['domain'] ?? '')), $stdin),
                 'backup.prune.age' => ['deleted' => [], 'days' => (int) ($stdin['days'] ?? 0), 'min_keep' => 1, 'destination' => $stdin['destination'] ?? 'spaces'],
                 'backup.verify' => $this->backupVerify($args, $stdin),
                 'backup.vhost.settings' => $this->bundleSettings[(string) ($args[0] ?? '')] ?? ['databases' => []],
@@ -1027,6 +1039,53 @@ final class FakeBroker
         $this->vhostIsolationConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
+    }
+
+    /** @var array<string, array<string,mixed>> git deploy config + state per domain (A53) */
+    public array $deploys = [];
+
+    /** @var list<array{action:string, domain:string, trigger:string}> */
+    public array $deployRuns = [];
+
+    /** @return array<string,mixed> */
+    private function deployConfig(string $domain): array
+    {
+        $c = $this->deploys[$domain] ?? null;
+
+        return ['domain' => $domain, 'configured' => $c !== null, 'repository' => $c['repository'] ?? null, 'branch' => $c['branch'] ?? null,
+            'preset' => $c['preset'] ?? null, 'command' => $c['command'] ?? null, 'schedule' => $c['schedule'] ?? 'off',
+            'public_key' => $c !== null ? 'ssh-ed25519 AAAAfake azerioid-deploy@'.$domain : null, 'state' => $c['state'] ?? []];
+    }
+
+    /** @return array<string,mixed> */
+    private function deployConfigSet(string $domain, array $stdin): array
+    {
+        try {
+            $repository = \AzerioidPanel\Broker\Deploy\GitDeploy::validateRepository($stdin['repository'] ?? '');
+            $branch = \AzerioidPanel\Broker\Deploy\GitDeploy::validateBranch($stdin['branch'] ?? 'main');
+            $schedule = \AzerioidPanel\Broker\Deploy\GitDeploy::validateSchedule($stdin['schedule'] ?? 'off');
+            if (($stdin['preset'] ?? 'none') === 'custom') {
+                Validator::typedConfirm((string) ($stdin['confirm'] ?? ''), 'RUN-AS-SITE');
+            }
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        $this->deploys[$domain] = ['repository' => $repository, 'branch' => $branch, 'preset' => $stdin['preset'] ?? 'none',
+            'command' => $stdin['command'] ?? null, 'schedule' => $schedule, 'state' => $this->deploys[$domain]['state'] ?? []];
+
+        return $this->deployConfig($domain);
+    }
+
+    /** @return array<string,mixed> */
+    private function deployRun(string $action, string $domain, array $stdin): array
+    {
+        if (! isset($this->deploys[$domain])) {
+            throw new BrokerCallException("Deploy is not configured for {$domain}.", 3);
+        }
+        $this->deployRuns[] = ['action' => $action, 'domain' => $domain, 'trigger' => (string) ($stdin['trigger'] ?? 'manual')];
+        $this->deploys[$domain]['state']['last_deploy_at'] = now()->toIso8601String();
+
+        return ['domain' => $domain, 'deployed' => true, 'commit' => str_repeat('a', 40), 'log' => ['fake deploy']];
     }
 
     /** @var array<string, array{databases: list<array{engine:string, name:string}>}> */

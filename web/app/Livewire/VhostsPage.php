@@ -1407,6 +1407,7 @@ class VhostsPage extends Component
         }
         if (! $readonly) {
             $access[] = ['label' => 'Files', 'href' => '/vhosts/'.$domain.'/files'];
+            $access[] = ['label' => 'Git deploy', 'href' => '/vhosts/'.$domain.'/deploy'];
             $access[] = ['label' => 'Terminal', 'href' => '/vhosts/'.$domain.'/terminal'];
             if ($runtime === 'docker') {
                 $access[] = ['label' => 'Container shell', 'href' => '/vhosts/'.$domain.'/container-shell'];
