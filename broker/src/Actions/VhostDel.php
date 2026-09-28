@@ -19,6 +19,7 @@ use AzerioidPanel\Broker\Vhost\DockerSettings;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostIsolationMigrator;
+use AzerioidPanel\Broker\Vhost\SiteDocker;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -75,6 +76,10 @@ final class VhostDel
         // with a pool whose user is gone (A55).
         (new SitePool($config, $runtime))->remove($domain);
         ProgramIdentity::clear($runtime, $domain);
+        // Its own Docker daemon runs as the account deprovision removes (A56).
+        if (SiteDocker::ready($runtime, $domain) || $runtime->isDir(SiteDocker::home($domain))) {
+            (new SiteDocker($config, $runtime))->remove($domain);
+        }
         VhostUser::deprovision($runtime, $config, $domain);
 
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);

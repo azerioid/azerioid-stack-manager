@@ -122,8 +122,9 @@ BASH;
         return <<<'BASH'
 #!/usr/bin/env bash
 # Interactive shell into a rootless Docker container.
-# Invoked by ttyd as azerioid-supervised with DOCKER_HOST already set.
-# Never run as root or az-vh-*; does not use the docker group.
+# Invoked by ttyd as the owner of the container's rootless daemon (the site's own account, or
+# azerioid-supervised for a site still on the shared daemon) with DOCKER_HOST already set.
+# Never run as root; does not use the docker group.
 set -euo pipefail
 
 if [[ $# -lt 1 || -z "${1:-}" ]]; then

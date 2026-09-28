@@ -278,7 +278,8 @@ final class VhostUser
         $candidates = array_merge(
             [$config->webUser, $config->phpUser],
             DistroPaths::for($runtime, $config)->webProcessUsers(),
-            [SupervisedUser::USERNAME],
+            // Once every site program runs as its site (A56), the shared account reads no site.
+            \AzerioidPanel\Broker\Supervisor\ProgramIdentity::detached($runtime) ? [] : [SupervisedUser::USERNAME],
         );
         $out = [];
         foreach ($candidates as $user) {

@@ -141,8 +141,9 @@ final class TerminalManager
     }
 
     /**
-     * Container shell: ttyd runs ONLY as azerioid-supervised with rootless DOCKER_HOST.
-     * Never root, never az-vh-*, never docker group — privilege boundary for ADR A38.
+     * Container shell: ttyd runs as the account whose rootless daemon runs the container — the
+     * site's own once it has a daemon of its own (A56), azerioid-supervised before. Never root,
+     * never another site's account, never the docker group (A38).
      *
      * @param  array<string, mixed>  $vhost
      * @return array<string, mixed>
@@ -176,15 +177,15 @@ final class TerminalManager
                 3
             );
         }
-        $dockerHost = (new DockerRootlessSetup($this->config, $this->runtime))->dockerHost();
-        $pid = $this->spawnTtydContainer($sessionId, $port, $dockerHost, $wrapper, $target['name']);
+        $ctx = $docker->shellContext($domain);
+        $pid = $this->spawnTtydContainer($sessionId, $port, $ctx, $wrapper, $target['name']);
 
         return [
             'id' => $sessionId,
             'kind' => self::KIND_CONTAINER,
             'domain' => $domain,
             'root' => $root,
-            'username' => SupervisedUser::USERNAME,
+            'username' => $ctx['user'],
             'container' => $target['name'],
             'port' => $port,
             'pid' => $pid,
@@ -403,12 +404,14 @@ final class TerminalManager
     }
 
     /**
-     * Spawn ttyd as azerioid-supervised only; DOCKER_HOST points at the rootless user socket.
+     * Spawn ttyd as the container's daemon owner; DOCKER_HOST points at that rootless socket.
+     *
+     * @param  array{user:string, docker_host:string, home:?string}  $ctx
      */
     private function spawnTtydContainer(
         string $sessionId,
         int $port,
-        string $dockerHost,
+        array $ctx,
         string $wrapper,
         string $containerName,
     ): int {
@@ -428,10 +431,11 @@ final class TerminalManager
             '-p', 'StandardOutput=append:' . $log,
             '-p', 'StandardError=append:' . $log,
             $runuser,
-            '-u', SupervisedUser::USERNAME,
+            '-u', $ctx['user'],
             '--',
             '/usr/bin/env',
-            'DOCKER_HOST=' . $dockerHost,
+            'DOCKER_HOST=' . $ctx['docker_host'],
+            'HOME=' . ($ctx['home'] ?? SupervisedUser::HOME),
             $this->config->ttydBin,
             '-p', (string) $port,
             '-i', '127.0.0.1',

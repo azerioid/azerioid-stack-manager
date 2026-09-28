@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Tests;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\FakeRuntime;
+use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Kernel;
 use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\DockerRegistries;
@@ -59,6 +60,9 @@ final class DockerWorkloadTest extends TestCase
         $this->rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
         $program = 'azerioid-' . DockerManager::programName(self::DOMAIN);
         $this->rt->script(['/usr/bin/supervisorctl', 'status', $program], 0, "{$program} RUNNING pid 42, uptime 0:01:00");
+        // These cover the shared daemon (azerioid-supervised), which a site put back by the A56
+        // migration still uses; a new site gets a daemon of its own (SiteDockerTest).
+        ProgramIdentity::putBack($this->rt, self::DOMAIN, 'test: shared daemon path');
 
         $this->rt->execFn = function (array $c, ?string $stdin): ?ExecResult {
             if ($c === ['/usr/bin/id', '-u', 'azerioid-supervised']) {

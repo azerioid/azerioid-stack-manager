@@ -309,7 +309,8 @@ fi
 # Octane and PM2 workers must never run as the shared account again.
 PROG_SHARED=""
 for f in /etc/supervisor/conf.d/azerioid-octane-*.conf /etc/supervisor/conf.d/azerioid-pm2-*.conf \
-    /etc/supervisord.d/azerioid-octane-*.ini /etc/supervisord.d/azerioid-pm2-*.ini; do
+    /etc/supervisor/conf.d/azerioid-docker-*.conf /etc/supervisord.d/azerioid-octane-*.ini \
+    /etc/supervisord.d/azerioid-pm2-*.ini /etc/supervisord.d/azerioid-docker-*.ini; do
     [[ -f "${f}" ]] || continue
     grep -Eq '^user=az-vh-' "${f}" || PROG_SHARED="${PROG_SHARED} ${f}"
 done
@@ -318,6 +319,14 @@ if [[ -z "${PROG_SHARED}" ]]; then
 else
     echo "SITE_WORKERS_SHARED=${PROG_SHARED}"
     echo "CHECK_SITE_WORKERS_AS_SITE=fail"
+fi
+# Part 3: the shared account is in no site's group once every site program has moved.
+SUP_GROUPS="$(id -nG azerioid-supervised 2>/dev/null | tr ' ' '\n' | grep -c '^az-vh-' || true)"
+echo "SUPERVISED_SITE_GROUPS=${SUP_GROUPS}"
+if [[ "${SUP_GROUPS}" == "0" ]] || ! printf '%s' "${PROG_OUT}" | grep -q '"migrated":true'; then
+    echo "CHECK_SUPERVISED_OUT_OF_SITES=pass"
+else
+    echo "CHECK_SUPERVISED_OUT_OF_SITES=fail"
 fi
 if [[ "$(systemctl is-active azerioid-panel-php-fpm.service 2>/dev/null)" == "active" ]]; then
     echo "CHECK_PANEL_OWN_MASTER=pass"

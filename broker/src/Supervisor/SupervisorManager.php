@@ -254,9 +254,14 @@ final class SupervisorManager
             ? self::autorestartInput($input['autorestart'])
             : self::autorestartInput($existing['autorestart'] ?? true);
 
+        $environment = array_key_exists('environment', $input)
+            ? self::environmentInput($input['environment'])
+            : self::environmentInput($existing['environment'] ?? []);
+
         return [
             'command' => $command,
             'directory' => $directory,
+            'environment' => $environment,
             'user' => SupervisedUser::USERNAME,
             'autostart' => $autostart,
             'autorestart' => $autorestart,
@@ -317,6 +322,14 @@ final class SupervisorManager
         $autorestart = self::autorestartValue($spec['autorestart'] ?? true);
         $user = (string) ($spec['user'] ?? SupervisedUser::USERNAME);
         self::rejectRunUser($user, $spec['vhost_domain'] ?? null);
+        $environment = '';
+        if (($spec['environment'] ?? []) !== []) {
+            $pairs = [];
+            foreach ($spec['environment'] as $key => $value) {
+                $pairs[] = $key . '="' . $value . '"';
+            }
+            $environment = 'environment=' . implode(',', $pairs) . "\n";
+        }
 
         return <<<INI
 ; AZERIOID Stack Manager — managed supervisor program (do not edit manually)
@@ -326,7 +339,7 @@ directory={$spec['directory']}
 user={$user}
 autostart={$autostart}
 autorestart={$autorestart}
-stdout_logfile={$stdout}
+{$environment}stdout_logfile={$stdout}
 stderr_logfile={$stderr}
 stdout_logfile_maxbytes=5MB
 stderr_logfile_maxbytes=5MB
@@ -346,6 +359,7 @@ INI;
             'command' => $spec['command'],
             'directory' => $spec['directory'],
             'user' => (string) ($spec['user'] ?? SupervisedUser::USERNAME),
+            'environment' => $spec['environment'] ?? [],
             'autostart' => (bool) ($spec['autostart'] ?? true),
             'autorestart' => self::autorestartInput($spec['autorestart'] ?? true),
             'vhost_domain' => $spec['vhost_domain'] ?? null,
@@ -528,6 +542,30 @@ INI;
         }
 
         return $user;
+    }
+
+    /**
+     * Panel-set environment of a program (A56: HOME of a site's Docker CLI). Names and values
+     * are restricted so nothing can break out of supervisor's environment= syntax.
+     *
+     * @return array<string, string>
+     */
+    private static function environmentInput(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $key => $val) {
+            $key = (string) $key;
+            $val = (string) $val;
+            if (!preg_match('/^[A-Z_][A-Z0-9_]{0,63}$/', $key) || !preg_match('#^[A-Za-z0-9/._:-]{0,255}$#', $val)) {
+                throw new BrokerException("Invalid program environment entry {$key}.", 2);
+            }
+            $out[$key] = $val;
+        }
+
+        return $out;
     }
 
     private static function boolInput(mixed $value): bool
