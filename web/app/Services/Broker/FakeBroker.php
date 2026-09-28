@@ -420,6 +420,7 @@ final class FakeBroker
                 'vhost.pm2.disable' => $this->pm2('disable', $args, $stdin),
                 'vhost.pm2.reload' => $this->pm2('reload', $args, $stdin),
                 'vhost.pm2.scale' => $this->pm2('scale', $args, $stdin),
+                'vhost.pm2.node' => $this->pm2('node', $args, $stdin),
                 'vhost.docker.status' => $this->docker('status', $args, $stdin),
                 'vhost.docker.enable' => $this->docker('enable', $args, $stdin),
                 'vhost.docker.disable' => $this->docker('disable', $args, $stdin),
@@ -956,6 +957,12 @@ final class FakeBroker
 
         return ['started' => true, 'unit' => 'azerioid-panel-identity.service'];
     }
+
+    /** @var array<string, string> Node choice per PM2 vhost (A51) */
+    public array $pm2Node = [];
+
+    /** @var list<string> installed Node choices, 'system' first */
+    public array $fakeNodeRuntimes = ['system'];
 
     public bool $vhostsIsolated = false;
 
@@ -2335,6 +2342,8 @@ final class FakeBroker
                 'program' => $this->supervisorPrograms[$program] ?? null,
                 'node_app' => (bool) ($vhost['node_app'] ?? false),
                 'node_app_detail' => $vhost['node_app_detail'] ?? null,
+                'node' => $enabled ? ($this->pm2Node[$domain] ?? 'system') : null,
+                'node_runtimes' => $this->fakeNodeRuntimes,
                 'docs_url' => Pm2Manager::DOCS_URL,
                 'cluster_docs_url' => Pm2Manager::CLUSTER_DOCS_URL,
             ];
@@ -2360,6 +2369,12 @@ final class FakeBroker
             $entry = isset($stdin['entry']) && is_string($stdin['entry']) && trim($stdin['entry']) !== ''
                 ? trim($stdin['entry'])
                 : 'server.js';
+            $node = (string) ($stdin['node'] ?? '');
+            $node = $node === '' ? ($this->fakeNodeRuntimes[0] ?? 'system') : $node;
+            if (! in_array($node, $this->fakeNodeRuntimes, true)) {
+                throw new BrokerCallException("Node.js {$node} is not installed. Install the Node.js {$node} component first.", 3);
+            }
+            $this->pm2Node[$domain] = $node;
             $this->vhosts[$index]['pm2_prev_type'] = (string) ($vhost['type'] ?? 'static');
             $this->vhosts[$index]['runtime'] = 'pm2';
             $this->vhosts[$index]['type'] = 'proxy';
@@ -2405,6 +2420,21 @@ final class FakeBroker
                 'method' => 'pm2-reload',
                 'pm2_program' => $program,
                 'output' => 'fake pm2-reload ok',
+            ];
+        }
+
+        if ($op === 'node') {
+            $to = (string) ($stdin['node'] ?? '');
+            if (! in_array($to, $this->fakeNodeRuntimes, true)) {
+                throw new BrokerCallException("Node.js {$to} is not installed. Install the Node.js {$to} component first.", 3);
+            }
+            $from = $this->pm2Node[$domain] ?? 'system';
+            $this->pm2Node[$domain] = $to;
+
+            return [
+                'domain' => $domain, 'node' => $to, 'previous' => $from, 'changed' => $from !== $to,
+                'node_version' => $to === 'system' ? 'v22.0.0' : "v{$to}.0.0",
+                'note' => 'node_modules were not rebuilt. If the app uses native modules, run `npm rebuild` in its directory.',
             ];
         }
 
@@ -2739,7 +2769,7 @@ final class FakeBroker
     {
         return [
             'redis', 'mariadb', 'postgresql', 'nginx', 'apache', 'supervisor',
-            'memcached', 'mongodb', 'nodejs', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail', 'docker',
+            'memcached', 'mongodb', 'nodejs', 'nodejs-20', 'nodejs-22', 'nodejs-24', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail', 'docker',
         ];
     }
 

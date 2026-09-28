@@ -42,6 +42,11 @@ class VhostsPage extends Component
     public ?string $pm2ScaleTarget = null;
     public string $pm2Instances = '1';
     public string $pm2Entry = '';
+    /** Node.js for a PM2 vhost: '' (default), system, 20, 22, 24 (A51). */
+    public string $pm2Node = '';
+    /** @var list<string> */
+    public array $pm2NodeRuntimes = [];
+    public ?string $pm2NodeTarget = null;
     public ?string $dockerTarget = null;
     public string $dockerMode = 'image';
     public string $dockerImage = '';
@@ -579,6 +584,54 @@ class VhostsPage extends Component
         $this->pm2ScaleTarget = null;
         $this->pm2Instances = '1';
         $this->pm2Entry = '';
+        $this->pm2Node = '';
+        $this->loadNodeRuntimes(app(BrokerClient::class), $domain);
+    }
+
+    private function loadNodeRuntimes(BrokerClient $broker, string $domain): ?string
+    {
+        $res = $broker->call('vhost.pm2.status', [$domain], [], 30, false);
+        $this->pm2NodeRuntimes = $res->ok ? array_values((array) ($res->data['node_runtimes'] ?? [])) : [];
+
+        return $res->ok ? ($res->data['node'] ?? null) : null;
+    }
+
+    public function askPm2Node(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->showForm = false;
+        $this->pm2Target = null;
+        $this->pm2ScaleTarget = null;
+        $this->pm2Node = (string) ($this->loadNodeRuntimes($broker, $domain) ?? 'system');
+        $this->pm2NodeTarget = $domain;
+    }
+
+    public function changePm2Node(BrokerClient $broker): void
+    {
+        $domain = (string) $this->pm2NodeTarget;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $res = $broker->call('vhost.pm2.node', [$domain], ['node' => $this->pm2Node], 900);
+            if (! $res->ok) {
+                throw new \RuntimeException((string) $res->error);
+            }
+            $this->flash = ($res->data['changed'] ?? false)
+                ? "{$domain} now runs on Node.js ".($res->data['node'] ?? '?').' ('.($res->data['node_version'] ?? '?').'). '.($res->data['note'] ?? '')
+                : "{$domain} already runs on Node.js ".($res->data['node'] ?? '?').'.';
+            $this->pm2NodeTarget = null;
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function cancelPm2Node(): void
+    {
+        $this->pm2NodeTarget = null;
+        $this->pm2Node = '';
     }
 
     public function askPm2Scale(string $domain): void
@@ -617,6 +670,9 @@ class VhostsPage extends Component
             $entry = trim($this->pm2Entry);
             if ($entry !== '') {
                 $input['entry'] = $entry;
+            }
+            if ($this->pm2Node !== '') {
+                $input['node'] = $this->pm2Node;
             }
             $res = $broker->call('vhost.pm2.enable', [$domain], $input, 900);
             if (! $res->ok) {
@@ -1369,6 +1425,7 @@ class VhostsPage extends Component
             } elseif ($runtime === 'pm2') {
                 $runtimeItems[] = ['label' => 'Reload application', 'wireClick' => "reloadPm2('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Scale', 'wireClick' => "askPm2Scale('{$domain}')"];
+                $runtimeItems[] = ['label' => 'Node.js version', 'wireClick' => "askPm2Node('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Switch off PM2', 'wireClick' => "disablePm2('{$domain}')"];
             } elseif ($runtime === 'docker') {
                 $runtimeItems[] = ['label' => 'Container settings', 'wireClick' => "askDockerSettings('{$domain}')"];

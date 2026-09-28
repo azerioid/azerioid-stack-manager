@@ -12,7 +12,7 @@ class VhostCommand extends Command
 
     protected $signature = 'azerioid:vhost
         {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation)}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale|node (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation)}
         {--domain= : Vhost domain}
         {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
         {--confirm : Required for isolation apply (moves every vhost identity onto a group of its own)}
@@ -34,6 +34,7 @@ class VhostCommand extends Command
         {--max-requests= : Requests per Octane worker before it is recycled (octane enable)}
         {--instances= : PM2 cluster worker count (pm2 enable|scale; default 1)}
         {--entry= : Optional Node entry script relative to the app root (pm2 enable)}
+        {--node= : Node.js for a PM2 vhost: system, 20, 22 or 24 (pm2 enable|node)}
         {--port= : Loopback port (octane: 34000-34999; pm2: 36000-36999; docker: 37000-37999)}
         {--mode= : Docker mode: image|compose|dockerfile (docker enable)}
         {--image= : Container image (docker enable --mode=image)}
@@ -763,8 +764,8 @@ class VhostCommand extends Command
     private function pm2(): int
     {
         $op = strtolower(trim((string) $this->argument('filesOp')));
-        if (! in_array($op, ['enable', 'disable', 'reload', 'status', 'scale'], true)) {
-            $this->error('Unknown pm2 operation. Use: enable|disable|reload|status|scale');
+        if (! in_array($op, ['enable', 'disable', 'reload', 'status', 'scale', 'node'], true)) {
+            $this->error('Unknown pm2 operation. Use: enable|disable|reload|status|scale|node');
 
             return self::INVALID;
         }
@@ -781,6 +782,15 @@ class VhostCommand extends Command
                 if ($this->option('port')) {
                     $input['port'] = (string) $this->option('port');
                 }
+                if ($this->option('node')) {
+                    $input['node'] = (string) $this->option('node');
+                }
+            }
+            if ($op === 'node') {
+                if (! $this->option('node')) {
+                    throw new \RuntimeException('--node= is required: system, 20, 22 or 24.');
+                }
+                $input['node'] = (string) $this->option('node');
             }
             if ($op === 'scale') {
                 if (! $this->option('instances')) {
@@ -804,6 +814,10 @@ class VhostCommand extends Command
                 'disable' => "PM2 disabled for {$domain}; the vhost no longer runs under PM2.",
                 'reload' => "Reloaded PM2 workers for {$domain} via ".(string) ($data['method'] ?? 'pm2-reload').'.',
                 'scale' => "Scaled PM2 on {$domain} to ".(string) ($data['pm2_instances'] ?? '?').' worker(s).',
+                'node' => ($data['changed'] ?? false)
+                    ? "{$domain} now runs on Node.js ".(string) ($data['node'] ?? '?').' ('.(string) ($data['node_version'] ?? '?').'), was '
+                        .(string) ($data['previous'] ?? '?').'. '.(string) ($data['note'] ?? '')
+                    : "{$domain} already runs on Node.js ".(string) ($data['node'] ?? '?').'.',
                 default => $this->pm2StatusLine($domain, $data),
             });
             if ($op === 'enable') {

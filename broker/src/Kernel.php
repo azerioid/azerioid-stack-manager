@@ -137,6 +137,7 @@ final class Kernel
         'vhost.pm2.disable' => VhostPm2::class,
         'vhost.pm2.reload' => VhostPm2::class,
         'vhost.pm2.scale' => VhostPm2::class,
+        'vhost.pm2.node' => VhostPm2::class,
         'vhost.docker.status' => VhostDocker::class,
         'vhost.docker.enable' => VhostDocker::class,
         'vhost.docker.disable' => VhostDocker::class,

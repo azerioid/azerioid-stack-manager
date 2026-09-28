@@ -1,0 +1,63 @@
+{
+  "id": "nodejs-22",
+  "display_name": "Node.js 22",
+  "category": "runtime",
+  "description": "Node.js 22 LTS, installed at /opt/azerioid-node/22 next to other majors with its own PM2; chosen per PM2 vhost. Official nodejs.org build, version and checksum pinned.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
+  "ports": [],
+  "conflicts": [],
+  "artifact": {
+    "kind": "node-tarball",
+    "version": "22.23.3",
+    "sources": {
+      "x64": {
+        "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz",
+        "sha256": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de"
+      },
+      "arm64": {
+        "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-arm64.tar.xz",
+        "sha256": "a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f"
+      }
+    }
+  },
+  "distros": {
+    "ubuntu": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/22/bin/node"
+        ]
+      }
+    },
+    "debian": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/22/bin/node"
+        ]
+      }
+    },
+    "el": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/22/bin/node"
+        ]
+      }
+    }
+  },
+  "preflight": {
+    "min_disk_gb": 0.5,
+    "min_ram_mb": 256
+  }
+}

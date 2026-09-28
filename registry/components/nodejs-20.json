@@ -1,0 +1,63 @@
+{
+  "id": "nodejs-20",
+  "display_name": "Node.js 20",
+  "category": "runtime",
+  "description": "Node.js 20 (end of life since April 2026 \u2014 for sites that still need it), installed at /opt/azerioid-node/20 next to other majors with its own PM2; chosen per PM2 vhost. Official nodejs.org build, version and checksum pinned.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
+  "ports": [],
+  "conflicts": [],
+  "artifact": {
+    "kind": "node-tarball",
+    "version": "20.20.2",
+    "sources": {
+      "x64": {
+        "url": "https://nodejs.org/dist/v20.20.2/node-v20.20.2-linux-x64.tar.xz",
+        "sha256": "df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d"
+      },
+      "arm64": {
+        "url": "https://nodejs.org/dist/v20.20.2/node-v20.20.2-linux-arm64.tar.xz",
+        "sha256": "73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71"
+      }
+    }
+  },
+  "distros": {
+    "ubuntu": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/20/bin/node"
+        ]
+      }
+    },
+    "debian": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/20/bin/node"
+        ]
+      }
+    },
+    "el": {
+      "packages": [],
+      "unit_name": "",
+      "detect": {
+        "paths": [
+          "/opt/azerioid-node/20/bin/node"
+        ]
+      }
+    }
+  },
+  "preflight": {
+    "min_disk_gb": 0.5,
+    "min_ram_mb": 256
+  }
+}

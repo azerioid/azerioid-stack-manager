@@ -1146,3 +1146,29 @@ so image and Dockerfile modes now start through `/usr/local/lib/azerioid-panel/s
 (root 0755): it checks its arguments (name `docker-*`, the rootless `DOCKER_HOST`, the docker binary),
 runs `docker rm -f <name>`, then `exec`s the unchanged `docker run`. Compose mode needs nothing: `up`
 recreates its own containers.
+
+## A51 — Node.js majors side by side, chosen per PM2 vhost
+
+**Status:** Accepted (operator decisions 2026-09-28: Approach A, versioned prefixes; 20, 22 and 24 all
+offered), shipped in **v2.2.0** (B4 part 2, request #7). **Amends:** A16, A37.
+
+**Problem:** one Node.js per host (NodeSource `nodejs`, `/usr/bin/node`). Two sites needing different
+majors could not both run, and changing the version changed it under every PM2 site at once.
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Where a major lives | `/opt/azerioid-node/<major>`, one registry component each (`nodejs-20`, `nodejs-22`, `nodejs-24`). NodeSource and distro packages cannot be co-installed — they all own `/usr/bin/node` — so these are the **official nodejs.org Linux tarballs** (x64 and arm64) |
+| Trust | Version and SHA-256 **pinned in the registry entry** (the Adminer pattern): the anchor is this repository. The pins were taken from `SHASUMS256.txt` after `gpgv` verified its signature against the Node.js release keys (`nodejs/release-keys`), 2026-09-28. The installer accepts only `https://nodejs.org/dist/v<pinned>/…` for the host's architecture and refuses a checksum mismatch before unpacking. A Node security release is picked up by a panel release that moves the pin |
+| Install | Download → verify → unpack into `.<major>.new` (`--no-same-owner`, `root:root`, `go-w`) → run `node --version` and require the pinned version → install `pm2@7` **into the prefix** → atomic rename over the old prefix. Nothing lands in `/usr/bin` |
+| PM2 per major | `pm2-runtime` must run under the Node it manages, so each prefix has its own. The Supervisor command sets `PATH=<prefix>/bin:…` first: `pm2-runtime` and `npm` start with `#!/usr/bin/env node`, and without it they would run under the system Node |
+| System Node | The NodeSource `nodejs` component stays, shown as **Node.js (system)**, and is the `system` choice. **PM2 vhosts enabled before v2.2.0 keep running on it; nothing is moved automatically** — moving a site to another major can break native modules, so it is only ever the operator's choice. (The roadmap spoke of migrating the host-wide component; converting running sites silently is exactly what A16/A37 refuse, so "migration" is: both kinds coexist and each site is moved by hand) |
+| Default for a new PM2 vhost | `system` when installed (what PM2 always used), otherwise the newest installed major |
+| Where the choice is stored | The broker-owned PM2 metadata (`/var/lib/azerioid-panel/pm2-meta/<vhost>.json`, key `node`), next to what PM2 enable already records — not the managed comment; the Supervisor command is what actually runs (the A50 reasoning) |
+| Switching | `vhost.pm2.node`: rewrites the command, restarts, waits for the port; if it does not listen the error names the likely cause (native modules) and the way back. **`node_modules` are not rebuilt** (operator decision): the panel says `npm rebuild` may be needed |
+| Removal | A major, or system Node, cannot be uninstalled while a PM2 vhost runs on it |
+| Node 20 | Offered (operator decision) and labelled end-of-life (April 2026) |
+
+**Surfaces:** Components (three new cards); Vhosts → PM2 enable gains a Node.js choice, and running PM2
+vhosts get *Node.js version*; CLI `azerioid vhost pm2 enable --node=…`, `azerioid vhost pm2 node --node=…`.

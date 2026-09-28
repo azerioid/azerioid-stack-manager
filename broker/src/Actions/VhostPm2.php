@@ -22,6 +22,7 @@ final class VhostPm2
             'vhost.pm2.disable' => $manager->disable($domain),
             'vhost.pm2.reload' => $manager->reload($domain),
             'vhost.pm2.scale' => $manager->scale($domain, $input),
+            'vhost.pm2.node' => $manager->setNode($domain, $input),
             default => throw new BrokerException('Unknown pm2 action.', 2),
         };
     }
