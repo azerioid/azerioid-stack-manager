@@ -28,6 +28,7 @@ use App\Http\Controllers\TerminalSessionController;
 use App\Http\Controllers\VhostFilesController;
 use App\Livewire\VhostContainerLogsPage;
 use App\Livewire\VhostContainerShellPage;
+use App\Livewire\SearchPage;
 use App\Livewire\VhostDeployPage;
 use App\Livewire\VhostFilesPage;
 use App\Livewire\VhostTerminalPage;
@@ -77,6 +78,7 @@ Route::middleware(['auth', '2fa'])->group(function () {
     Route::get('/processes', ProcessesPage::class)->name('processes');
     Route::get('/logs', LogsPage::class)->name('logs');
     Route::get('/operations', OperationsPage::class)->name('operations');
+    Route::get('/search', SearchPage::class)->name('search');
     Route::get('/security', SecurityPage::class)->name('security');
     Route::get('/firewall', FirewallPage::class)->name('firewall');
     Route::get('/cron', CronPage::class)->name('cron');

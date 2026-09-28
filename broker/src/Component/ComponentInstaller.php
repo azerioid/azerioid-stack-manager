@@ -13,6 +13,7 @@ use AzerioidPanel\Broker\Mail\MailProvisioner;
 use AzerioidPanel\Broker\Mail\MailState;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Search\ElasticsearchSetup;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Tool\AdminerTool;
@@ -120,6 +121,9 @@ final class ComponentInstaller
                 $firewall = (new MailFirewall($this->runtime))->open();
                 $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
             }
+            if ($componentId === 'elasticsearch') {
+                (new ElasticsearchSetup($this->config, $this->runtime))->configure($log);
+            }
             if (NodeRuntimes::isComponent($componentId)) {
                 (new NodeRuntimes($this->config, $this->runtime))->install($definition, $log);
             }
@@ -207,6 +211,13 @@ final class ComponentInstaller
             }
             if ($componentId === 'mail') {
                 $this->teardownMail($os, $options, $log);
+            }
+            if ($componentId === 'elasticsearch') {
+                // Data in /var/lib/elasticsearch is kept (A29); the credential goes with the service.
+                $this->runtime->exec(['/usr/bin/systemctl', 'disable', '--now', ElasticsearchSetup::UNIT], null, 120);
+                if ($this->runtime->fileExists(ElasticsearchSetup::CREDENTIALS)) {
+                    $this->runtime->deleteFile(ElasticsearchSetup::CREDENTIALS);
+                }
             }
             if (($major = NodeRuntimes::majorOfComponent($componentId)) !== null) {
                 (new NodeRuntimes($this->config, $this->runtime))->uninstall($major, $log);

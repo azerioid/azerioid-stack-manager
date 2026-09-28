@@ -25,6 +25,7 @@ final class ComponentRepoInstaller
             'mongodb' => $this->installMongoDbRepo($os, $log),
             'mail' => $this->ensureEpel($os, $log),
             'docker' => $this->installDockerRepo($os, $log),
+            'elasticsearch' => $this->installElasticRepo($os, $log),
             'nodejs' => $this->installNodeSourceRepo(
                 $os,
                 (string) ($options['node_major'] ?? '22'),
@@ -226,6 +227,71 @@ final class ComponentRepoInstaller
             0644
         );
         $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);
+    }
+
+    /** Elastic's signing key, pinned (A10): the key is refused unless it is this one. */
+    public const ELASTIC_KEY_FINGERPRINT = '46095ACC8548582C1A2699A9D27D666CD88E42B4';
+
+    private const ELASTIC_MAJOR = '9.x';
+
+    /**
+     * Elastic's own repository for Elasticsearch (A54). The downloaded key must carry the
+     * pinned fingerprint before anything signed by it is trusted.
+     */
+    private function installElasticRepo(OsRelease $os, OperationLogger $log): void
+    {
+        $major = self::ELASTIC_MAJOR;
+        $keyring = '/usr/share/keyrings/elasticsearch-keyring.gpg';
+        if ($os->pkgMgr === 'apt' && $this->runtime->fileExists('/etc/apt/sources.list.d/elastic-' . $major . '.list')) {
+            return;
+        }
+        if ($os->pkgMgr !== 'apt' && $this->runtime->fileExists('/etc/yum.repos.d/elasticsearch.repo')) {
+            return;
+        }
+        $log->info("Adding Elastic {$major} repository (signing key fingerprint pinned).");
+        $staging = '/tmp/azerioid-elastic-' . bin2hex(random_bytes(4)) . '.asc';
+        $fetch = $this->runtime->exec(['/usr/bin/curl', '-fsSL', '--max-time', '60', '-o', $staging, 'https://artifacts.elastic.co/GPG-KEY-elasticsearch'], null, 90);
+        if (!$fetch->ok()) {
+            throw new BrokerException('Could not download Elastic\'s signing key.', 1);
+        }
+        try {
+            $show = $this->runtime->exec(['/usr/bin/gpg', '--batch', '--with-colons', '--show-keys', '--with-fingerprint', $staging], null, 30);
+            $fingerprints = [];
+            foreach (explode("\n", $show->stdout) as $line) {
+                if (str_starts_with($line, 'fpr:')) {
+                    $fingerprints[] = strtoupper(explode(':', $line)[9] ?? '');
+                }
+            }
+            if (!in_array(self::ELASTIC_KEY_FINGERPRINT, $fingerprints, true)) {
+                throw new BrokerException('Elastic\'s signing key does not have the pinned fingerprint; refusing to trust it.', 1);
+            }
+            if ($os->pkgMgr === 'apt') {
+                $dearmor = $this->runtime->exec(['/usr/bin/gpg', '--batch', '--yes', '--dearmor', '-o', $keyring, $staging], null, 30);
+                if (!$dearmor->ok()) {
+                    throw new BrokerException('Could not install Elastic\'s signing key.', 1);
+                }
+                $this->runtime->writeFile(
+                    '/etc/apt/sources.list.d/elastic-' . $major . '.list',
+                    "deb [signed-by={$keyring}] https://artifacts.elastic.co/packages/{$major}/apt stable main\n",
+                    0644
+                );
+                $this->aptUpdate($log);
+
+                return;
+            }
+            $this->runtime->exec(['/usr/bin/rpm', '--import', $staging], null, 60);
+            $this->runtime->writeFile(
+                '/etc/yum.repos.d/elasticsearch.repo',
+                "[elasticsearch]\nname=Elasticsearch repository for {$major} packages\nbaseurl=https://artifacts.elastic.co/packages/{$major}/yum\n"
+                . "gpgcheck=1\ngpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch\nenabled=1\nautorefresh=1\ntype=rpm-md\n",
+                0644
+            );
+            $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);
+        } finally {
+            if ($this->runtime->fileExists($staging)) {
+                $this->runtime->deleteFile($staging);
+            }
+        }
     }
 
     private function installNodeSourceRepo(OsRelease $os, string $major, OperationLogger $log): void

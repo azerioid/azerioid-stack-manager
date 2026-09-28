@@ -42,6 +42,7 @@ Usage:
   azerioid deploy set <domain> --repository=git@host:o/r.git [--branch=main] [--preset=none|composer|laravel|npm|custom --command=… --confirm=RUN-AS-SITE] [--schedule=off|hourly|daily@3]
   azerioid deploy config|run|rollback|key|remove <domain>       # A53: fetch with a root-only key, check out and run as the site
   azerioid deploy list
+  azerioid search status|indices|password-reset [--json]   # A54: Elasticsearch on 127.0.0.1:9200
 
   azerioid db list      [--engine=mariadb|postgresql|mongodb] [--json]
   azerioid db add       --engine=<e> --name=<db> [--user=<u>]

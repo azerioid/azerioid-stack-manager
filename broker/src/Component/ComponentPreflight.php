@@ -46,6 +46,18 @@ final class ComponentPreflight
                 . " but combined with SwapFree ({$swapFreeMb} MB) is {$combinedMb} MB — install may proceed slowly under swap pressure.";
         }
 
+        // A JVM heap does not slow down under swap, it is killed: for such a component the
+        // combined-headroom rule above is not enough, and physical RAM is a hard floor (A54,
+        // an exception to A31). Measured as MemTotal, and the message says so.
+        $minPhysicalMb = (int) ($preflight['min_physical_ram_mb'] ?? 0);
+        if ($minPhysicalMb > 0) {
+            $totalMb = $this->memTotalMb();
+            if ($totalMb < $minPhysicalMb) {
+                $issues[] = "Needs at least {$minPhysicalMb} MB of physical RAM; this host has {$totalMb} MB (MemTotal)."
+                    . ' Swap is not counted: a JVM heap under swap pressure is killed, not slowed.';
+            }
+        }
+
         $required = (string) ($minOs[$this->os->distroKey] ?? '');
         if ($required !== '' && version_compare($this->os->versionId, $required, '<')) {
             $issues[] = "Requires {$this->os->distroKey} {$required}+ (this host: {$this->os->versionId}).";
@@ -111,6 +123,16 @@ final class ComponentPreflight
     /**
      * @return array{mem_available_mb:int,swap_free_mb:int,combined_mb:int}
      */
+    private function memTotalMb(): int
+    {
+        if (!$this->runtime->fileExists('/proc/meminfo')) {
+            return 0;
+        }
+
+        return preg_match('/^MemTotal:\s+(\d+)\s+kB/m', $this->runtime->readFile('/proc/meminfo'), $m) === 1
+            ? intdiv((int) $m[1], 1024) : 0;
+    }
+
     private function memBreakdownMb(): array
     {
         $memAvailable = 0;

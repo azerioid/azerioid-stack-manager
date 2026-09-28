@@ -125,6 +125,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "min_physical_ram_mb": {
+          "type": "integer",
+          "description": "Hard minimum of physical RAM (MemTotal); swap is not counted. For JVM services (ADR A54)."
         }
       },
       "additionalProperties": false

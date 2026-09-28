@@ -1,0 +1,72 @@
+{
+  "id": "elasticsearch",
+  "display_name": "Elasticsearch",
+  "category": "database",
+  "description": "Elasticsearch 9 search engine (SSPL license), single node on 127.0.0.1:9200 with a password, from Elastic's own repository. Needs at least 2 GB of physical RAM.",
+  "managed": true,
+  "system": false,
+  "installable": true,
+  "min_os": {
+    "ubuntu": "24.04",
+    "debian": "12",
+    "el": "9"
+  },
+  "ports": [
+    {
+      "port": 9200,
+      "bind": "127.0.0.1",
+      "owner": "elasticsearch",
+      "protocol": "tcp"
+    },
+    {
+      "port": 9300,
+      "bind": "127.0.0.1",
+      "owner": "elasticsearch",
+      "protocol": "tcp"
+    }
+  ],
+  "conflicts": [],
+  "distros": {
+    "ubuntu": {
+      "packages": [
+        "elasticsearch"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": [
+          "elasticsearch"
+        ],
+        "unit": "elasticsearch"
+      }
+    },
+    "debian": {
+      "packages": [
+        "elasticsearch"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": [
+          "elasticsearch"
+        ],
+        "unit": "elasticsearch"
+      }
+    },
+    "el": {
+      "packages": [
+        "elasticsearch"
+      ],
+      "unit_name": "",
+      "detect": {
+        "packages": [
+          "elasticsearch"
+        ],
+        "unit": "elasticsearch"
+      }
+    }
+  },
+  "preflight": {
+    "min_disk_gb": 3,
+    "min_ram_mb": 1024,
+    "min_physical_ram_mb": 2048
+  }
+}
