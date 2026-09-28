@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Supervisor;
 
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Vhost\DockerManager;
+use AzerioidPanel\Broker\Vhost\SiteDocker;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 
 /**
@@ -15,7 +16,7 @@ use AzerioidPanel\Broker\Vhost\VhostUser;
  * reach. The operator has no choice here (operator decision). azerioid-supervised is left for:
  *
  *  - programs bound to no site;
- *  - Docker programs, until each Docker site has a daemon of its own (A56 part 2);
+ *  - a Docker program whose site does not have a daemon of its own yet (A56 part 2);
  *  - a site whose identity is still on the pre-A49 shared group;
  *  - a site the migration put back because its program stopped working as the site (see
  *    ProgramIdentityMigrator), until an operator retries.
@@ -25,11 +26,22 @@ final class ProgramIdentity
     /** Root-only record of sites put back on azerioid-supervised, with the reason. */
     public const SHARED_FILE = '/var/lib/azerioid-panel/program-identity.json';
 
+    /**
+     * Present once azerioid-supervised has left the site groups (A56 part 3): new sites no
+     * longer add it, and only a put-back site lets it back into its own group.
+     */
+    public const DETACHED_MARKER = '/var/lib/azerioid-panel/supervised-detached';
+
+    public static function detached(Runtime $runtime): bool
+    {
+        return $runtime->fileExists(self::DETACHED_MARKER);
+    }
+
     public static function userFor(Runtime $runtime, ?string $domain, string $program = ''): string
     {
         if ($domain === null || $domain === '' || $runtime->getuid() !== 0
-            || str_starts_with($program, DockerManager::PROGRAM_PREFIX)
-            || self::sharedReason($runtime, $domain) !== null) {
+            || self::sharedReason($runtime, $domain) !== null
+            || (str_starts_with($program, DockerManager::PROGRAM_PREFIX) && !SiteDocker::ready($runtime, $domain))) {
             return SupervisedUser::USERNAME;
         }
         $user = VhostUser::username($domain);
@@ -64,6 +76,10 @@ final class ProgramIdentity
         $all = self::load($runtime);
         $all[$domain] = mb_substr($reason, 0, 300);
         self::save($runtime, $all);
+        if (self::detached($runtime) && $runtime->getuid() === 0) {
+            // The shared account runs this site's program again: it needs the site's files.
+            $runtime->exec(['/usr/bin/gpasswd', '-a', SupervisedUser::USERNAME, VhostUser::docrootGroup($runtime, $domain)], null, 30);
+        }
     }
 
     public static function clear(Runtime $runtime, string $domain): void
@@ -72,6 +88,9 @@ final class ProgramIdentity
         if (array_key_exists($domain, $all)) {
             unset($all[$domain]);
             self::save($runtime, $all);
+            if (self::detached($runtime) && $runtime->getuid() === 0) {
+                $runtime->exec(['/usr/bin/gpasswd', '-d', SupervisedUser::USERNAME, VhostUser::docrootGroup($runtime, $domain)], null, 30);
+            }
         }
     }
 

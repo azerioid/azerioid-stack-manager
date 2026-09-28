@@ -15,17 +15,16 @@ use AzerioidPanel\Broker\Supervisor\SupervisedUser;
  * the thing that runs must be the thing that is true. Supervisor restarts a container without
  * asking the panel, so the environment it starts with has to be on the host already.
  *
- *   /var/lib/azerioid-docker/                 root:azerioid-supervised 0750
- *     <slug>/                                 root:azerioid-supervised 0750
+ *   /var/lib/azerioid-docker/                 root:root 0711
+ *     <slug>/                                 root:<reader> 0750
  *       settings.json                         root 0600   service, restart, volumes, registry
- *       env                                   root:azerioid-supervised 0640   docker --env-file
- *       ports.yml                             root:azerioid-supervised 0640   compose override
+ *       env                                   root:<reader> 0640   docker --env-file
+ *       ports.yml                             root:<reader> 0640   compose override
  *
- * The rendered files are readable by azerioid-supervised because the docker CLI runs as that
- * account; not writable by it, so a container with a bind mount cannot rewrite its own
- * configuration. That the env file is readable by the shared supervised account is within
- * A38's accepted blast radius: `docker inspect` already shows every container's environment
- * to that account.
+ * <reader> is the group of the account the docker CLI runs as: the site's own group once the
+ * site has a daemon of its own (A56), azerioid-supervised before. Readable by it, not writable,
+ * so a container with a bind mount cannot rewrite its own configuration; and no other site can
+ * read a site's container environment.
  */
 final class DockerSettings
 {
@@ -124,28 +123,52 @@ final class DockerSettings
         foreach ($env as $key => $value) {
             $body .= $key . '=' . $value . "\n";
         }
-        self::writeShared($runtime, self::envPath($domain), $body);
+        self::writeShared($runtime, self::envPath($domain), $body, $domain);
     }
 
-    /** Write a file the docker CLI (azerioid-supervised) reads but cannot change. */
-    public static function writeShared(Runtime $runtime, string $path, string $body): void
+    /** Write a file the site's docker CLI reads but cannot change. */
+    public static function writeShared(Runtime $runtime, string $path, string $body, ?string $domain = null): void
     {
         $runtime->writeFile($path, $body, 0640);
         if ($runtime->getuid() === 0) {
-            $runtime->chown($path, 'root', SupervisedUser::USERNAME);
+            $runtime->chown($path, 'root', $domain !== null ? self::readerGroup($runtime, $domain) : SupervisedUser::USERNAME);
             $runtime->chmod($path, 0640);
         }
     }
 
+    /** The group of the account the site's docker CLI runs as. */
+    public static function readerGroup(Runtime $runtime, string $domain): string
+    {
+        return SiteDocker::ready($runtime, $domain) ? VhostUser::docrootGroup($runtime, $domain) : SupervisedUser::USERNAME;
+    }
+
+    public static function ensureBase(Runtime $runtime): void
+    {
+        if (!$runtime->isDir(self::BASE)) {
+            $runtime->mkdir(self::BASE, 0711);
+        }
+        if ($runtime->getuid() === 0) {
+            $runtime->chown(self::BASE, 'root', 'root');
+            $runtime->chmod(self::BASE, 0711);
+        }
+    }
+
+    /** The site's directory, and what is in it, readable by the account its docker runs as. */
     public static function ensureDir(Runtime $runtime, string $domain): void
     {
-        foreach ([self::BASE, self::dir($domain)] as $dir) {
-            if (!$runtime->isDir($dir)) {
-                $runtime->mkdir($dir, 0750);
-            }
-            if ($runtime->getuid() === 0) {
-                $runtime->chown($dir, 'root', SupervisedUser::USERNAME);
-                $runtime->chmod($dir, 0750);
+        self::ensureBase($runtime);
+        $dir = self::dir($domain);
+        if (!$runtime->isDir($dir)) {
+            $runtime->mkdir($dir, 0750);
+        }
+        if ($runtime->getuid() === 0) {
+            $group = self::readerGroup($runtime, $domain);
+            $runtime->chown($dir, 'root', $group);
+            $runtime->chmod($dir, 0750);
+            foreach ([self::envPath($domain), self::portsOverridePath($domain)] as $file) {
+                if ($runtime->fileExists($file)) {
+                    $runtime->chown($file, 'root', $group);
+                }
             }
         }
     }

@@ -1361,8 +1361,8 @@ pool before deleting the identities.
 
 ## A56 — Site programs run as their site; Docker gets a daemon per site
 
-**Status:** Part 1 (Octane, PM2, operator programs) accepted, shipped in **v2.6.0**. Part 2 (a rootless
-Docker daemon per Docker site) and part 3 (azerioid-supervised leaves every vhost group) follow.
+**Status:** Part 1 (Octane, PM2, operator programs) shipped in **v2.6.0**; part 2 (a rootless Docker
+daemon per Docker site) and part 3 (azerioid-supervised leaves every vhost group) in **v2.7.0**.
 **Closes, when complete:** the azerioid-supervised residual recorded in A37/A38/A49/A55. **Operator
 decisions (2026-09-28):** a rootless `dockerd` per Docker site under the site's identity; programs bound
 to a site always run as that site, with no run-as choice.
@@ -1394,6 +1394,37 @@ optionally `--domain=`) retries after a fix. State: `/etc/azerioid-panel/program
 `azerioid process identity status` is non-zero until every site program runs as its site;
 `verify-release.sh` checks it and that no Octane/PM2 program names the shared account.
 
-**Until parts 2 and 3.** `azerioid-supervised` still runs the Docker daemon and Docker programs, and stays
-a member of every vhost group; a Docker container's reach is therefore unchanged by part 1.
+**Part 2 — a Docker daemon per site (v2.7.0).** Measured on the Ubuntu host before: a container on the
+shared daemon could not read another site through the account's groups (rootless runc drops supplementary
+groups in the container), but it *could* bind-mount the shared daemon's own socket — the daemon owner is the
+container's root — and from there list, `docker exec` into and read the environment of every other site's
+container. Now each Docker site has a rootless daemon of its own, run by its identity (`SiteDocker`):
+
+| Aspect | Decision |
+|--------|----------|
+| Daemon | `dockerd-rootless-setuptool.sh` as the identity; systemd user unit + linger; socket `/run/user/<uid>/docker.sock` |
+| Where its state lives | The identity's home is its docroot, so a drop-in for its `user@<uid>.service` sets `XDG_CONFIG_HOME`/`XDG_DATA_HOME` to `/var/lib/azerioid-docker-home/<site>` (`0700`, the site's; base `root:root 0711`). Nothing lands in the web root |
+| Subordinate ids | 65 536 of its own, after every range in use |
+| CLI and program | every docker call for the site runs as the site against its daemon, `HOME` = its Docker home (also `environment=HOME=` of the Supervisor program); the container shell's ttyd too |
+| Settings files | `/var/lib/azerioid-docker/<site>` `root:<site group> 0750` (env, ports.yml `0640`); base `root:root 0711` |
+| Cost | measured about 170 MB RSS for a site's daemon stack right after an image pull on the 1 GB host (operator accepted ~80–150 MB; noted) |
+| Lifecycle | disabling Docker on a site or deleting the site stops its daemon and removes its home, drop-in, linger and subordinate ids; `uninstall.sh --drop-db` does the same for every site |
+
+A new Docker site gets its daemon at enable. Existing sites move through the same migration as part 1:
+the new daemon gets the image while the old container still serves, the old container stops, files the old
+containers wrote in the site are renumbered — the old daemon owner (a container's root) becomes the site's
+identity, ids of the shared subordinate range move to the same offset in the site's range — and the program
+restarts as the site. A compose project with **named volumes** is not moved automatically (their data is
+inside the shared daemon); it is put back with the volume names in the reason. A move that breaks the site
+is undone: files renumbered back, program back on the shared daemon, the site's daemon removed.
+
+**Part 3 — the shared account leaves the site groups (v2.7.0).** When the migration finds no site program
+left on `azerioid-supervised`, it removes that account from every `az-vh-*` group and writes
+`/var/lib/azerioid-panel/supervised-detached`; from then on new sites do not add it (`VhostUser::readerUsers`).
+A site put back later lets it into that one site's group again, and out when it is retried successfully.
+`verify-release.sh` checks that the account is in no site group once the migration reports done.
+
+**Still shared.** The shared rootless daemon itself stays installed (idle once every site has moved; put-back
+sites use it). Image checks before enable (`manifest inspect`) still run as `azerioid-supervised`, which needs
+no daemon and no site files.
 

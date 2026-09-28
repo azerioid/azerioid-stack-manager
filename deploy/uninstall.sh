@@ -166,6 +166,21 @@ purge_vhost_identities() {
         pools_removed=1
     done
     rm -rf /var/lib/azerioid-php-sessions /var/lib/azerioid-panel/site-php
+    # A56: a Docker site's own rootless daemon runs as its identity, with linger and a drop-in
+    # for its user manager. Stop them before the identities go.
+    local vu vuid
+    while read -r vu; do
+        [[ -n "${vu}" ]] || continue
+        vuid="$(id -u "${vu}" 2>/dev/null)" || continue
+        loginctl disable-linger "${vu}" 2>/dev/null || true
+        systemctl stop "user@${vuid}.service" 2>/dev/null || true
+        rm -rf "/etc/systemd/system/user@${vuid}.service.d/azerioid-docker.conf"
+        rmdir "/etc/systemd/system/user@${vuid}.service.d" 2>/dev/null || true
+        sed -i "/^${vu}:/d" /etc/subuid /etc/subgid 2>/dev/null || true
+    done < <(getent passwd | awk -F: '$1 ~ /^az-vh-/ {print $1}')
+    rm -rf --one-file-system /var/lib/azerioid-docker-home /var/lib/azerioid-pm2
+    rm -f /var/lib/azerioid-panel/supervised-detached /var/lib/azerioid-panel/program-identity.json
+    systemctl daemon-reload 2>/dev/null || true
     if [[ "${pools_removed}" -eq 1 ]]; then
         while read -r unit; do
             [[ -n "${unit}" ]] && systemctl try-restart "${unit}" 2>/dev/null || true

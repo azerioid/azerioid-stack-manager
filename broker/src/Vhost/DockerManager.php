@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\Component\ManagedManifest;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Validator;
@@ -104,6 +105,8 @@ final class DockerManager
             DockerSettings::saveEnv($this->runtime, $domain, DockerSettings::validateEnv($input['env']));
         }
         try {
+            $this->ensureSiteDaemon($domain);
+            DockerSettings::ensureDir($this->runtime, $domain);
             $this->ensureVolumeDirs($spec);
             $this->ensureDaemonReaches($domain);
             $this->prepareWorkload($spec);
@@ -119,6 +122,7 @@ final class DockerManager
             'vhost_domain' => $domain,
             'autostart' => true,
             'autorestart' => DockerSettings::autorestart($spec['restart']),
+            'environment' => $this->programEnvironment($domain),
         ]);
         $supervisor->control($program, 'start');
 
@@ -217,6 +221,10 @@ final class DockerManager
         $removed = $this->removeProgram(new SupervisorManager($this->config, $this->runtime), $program);
         $this->cleanupContainers($spec);
         $this->cleanupMeta($domain);
+        if ($this->runtime->getuid() === 0 && $this->runtime->isDir(SiteDocker::home($domain))) {
+            // The site no longer runs Docker: its daemon, images and subordinate ids go (A56).
+            (new SiteDocker($this->config, $this->runtime))->remove($domain);
+        }
 
         return [
             'domain' => $domain,
@@ -247,6 +255,7 @@ final class DockerManager
             'vhost_domain' => $domain,
             'autostart' => true,
             'autorestart' => DockerSettings::autorestart($spec['restart']),
+            'environment' => $this->programEnvironment($domain),
         ]);
         $restart = $supervisor->control($program, 'restart');
         if (!$this->waitForPort((int) $spec['port'])) {
@@ -292,7 +301,7 @@ final class DockerManager
         $spec = $this->specFromVhost($domain, $vhost);
         $lines = self::validateLogLines($input['lines'] ?? 100);
         $docker = $this->dockerBin();
-        $env = $this->dockerEnvAssign();
+        $env = $this->dockerEnvAssign($domain);
 
         if ($spec['mode'] === self::MODE_COMPOSE) {
             $cmd = [
@@ -309,7 +318,7 @@ final class DockerManager
                 self::containerName($domain),
             ];
         }
-        $result = $this->runAsSupervised($cmd, $spec['app_dir'], 60);
+        $result = $this->runDocker($domain, $cmd, $spec['app_dir'], 60);
 
         return [
             'domain' => $domain,
@@ -331,8 +340,9 @@ final class DockerManager
         $registry = $this->validateRegistryRef($registry);
         if ($registry !== null) {
             return $this->withRegistry($registry, function (array $auth) use ($image): array {
-                $inspect = $this->runAsSupervised(
-                    array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [$this->dockerBin(), 'manifest', 'inspect', $image]),
+                $inspect = $this->runDocker(
+                    null,
+                    array_merge(['/usr/bin/env', $this->dockerEnvAssign(null)], $auth, [$this->dockerBin(), 'manifest', 'inspect', $image]),
                     '/tmp',
                     60
                 );
@@ -346,8 +356,9 @@ final class DockerManager
             });
         }
         $docker = $this->dockerBin();
-        $env = $this->dockerEnvAssign();
-        $manifest = $this->runAsSupervised(
+        $env = $this->dockerEnvAssign(null);
+        $manifest = $this->runDocker(
+            null,
             ['/usr/bin/env', $env, $docker, 'manifest', 'inspect', $image],
             '/tmp',
             60
@@ -360,7 +371,8 @@ final class DockerManager
                 'detail' => 'manifest inspect ok',
             ];
         }
-        $buildx = $this->runAsSupervised(
+        $buildx = $this->runDocker(
+            null,
             ['/usr/bin/env', $env, $docker, 'buildx', 'imagetools', 'inspect', $image],
             '/tmp',
             60
@@ -519,7 +531,7 @@ final class DockerManager
         return [
             'domain' => $domain,
             'compose' => $compose,
-            'services' => $this->composeServices($appDir, $compose),
+            'services' => $this->composeServices($appDir, $compose, $domain),
             'selected' => DockerSettings::load($this->runtime, $domain)['service'],
         ];
     }
@@ -560,7 +572,7 @@ final class DockerManager
         $enabled = AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) === self::RUNTIME_DOCKER;
         if ($enabled && $next['service'] !== null && ($vhost['docker_mode'] ?? '') === self::MODE_COMPOSE) {
             $spec = $this->specFromVhost($domain, $vhost);
-            $services = $this->composeServices($spec['app_dir'], (string) $spec['compose']);
+            $services = $this->composeServices($spec['app_dir'], (string) $spec['compose'], $domain);
             if (!in_array($next['service'], $services, true)) {
                 throw new BrokerException("Service {$next['service']} is not in the compose file (" . implode(', ', $services) . ').', 2);
             }
@@ -622,6 +634,7 @@ final class DockerManager
             'vhost_domain' => $domain,
             'autostart' => true,
             'autorestart' => DockerSettings::autorestart($spec['restart']),
+            'environment' => $this->programEnvironment($domain),
         ]);
         $supervisor->control($program, 'restart');
         if (!$this->waitForPort((int) $spec['port'])) {
@@ -941,7 +954,7 @@ final class DockerManager
             if (!$this->runtime->fileExists($appDir . '/' . $compose)) {
                 throw new BrokerException("Compose file not found: {$compose}", 3);
             }
-            $service = $this->resolveService($appDir, $compose, $input['service'] ?? $stored['service']);
+            $service = $this->resolveService($appDir, $compose, $input['service'] ?? $stored['service'], $domain);
         } else {
             $dockerfile = self::validateRelativePath(
                 $input['dockerfile'] ?? ($detected['dockerfile'] ?? self::DEFAULT_DOCKERFILE),
@@ -973,9 +986,9 @@ final class DockerManager
      * The service that gets the site's port (G8). Asked of compose itself; an explicit
      * choice must exist, and with no choice only a single-service file is unambiguous.
      */
-    private function resolveService(string $appDir, string $compose, mixed $requested): string
+    private function resolveService(string $appDir, string $compose, mixed $requested, ?string $domain = null): string
     {
-        $services = $this->composeServices($appDir, $compose);
+        $services = $this->composeServices($appDir, $compose, $domain);
         if ($requested !== null && $requested !== '') {
             $service = DockerSettings::validateService($requested);
             if (!in_array($service, $services, true)) {
@@ -996,10 +1009,11 @@ final class DockerManager
     }
 
     /** @return list<string> */
-    private function composeServices(string $appDir, string $compose): array
+    private function composeServices(string $appDir, string $compose, ?string $domain = null): array
     {
-        $result = $this->runAsSupervised(
-            ['/usr/bin/env', $this->dockerEnvAssign(), $this->dockerBin(), 'compose', '-f', $compose, 'config', '--services'],
+        $result = $this->runDocker(
+            $domain,
+            ['/usr/bin/env', $this->dockerEnvAssign($domain), $this->dockerBin(), 'compose', '-f', $compose, 'config', '--services'],
             $appDir,
             60
         );
@@ -1062,7 +1076,7 @@ final class DockerManager
             if (!$this->runtime->isDir($path)) {
                 $this->runtime->mkdir($path, 02775);
                 if ($this->runtime->getuid() === 0) {
-                    $this->runtime->chown($path, SupervisedUser::USERNAME, VhostUser::docrootGroup($this->runtime, $spec['domain']));
+                    $this->runtime->chown($path, $this->onSiteDaemon($spec['domain']) ? VhostUser::username($spec['domain']) : SupervisedUser::USERNAME, VhostUser::docrootGroup($this->runtime, $spec['domain']));
                     $this->runtime->chmod($path, 02775);
                 }
             }
@@ -1081,7 +1095,7 @@ final class DockerManager
      */
     private function ensureDaemonReaches(string $domain): void
     {
-        if ($this->runtime->getuid() !== 0) {
+        if ($this->runtime->getuid() !== 0 || $this->onSiteDaemon($domain)) {
             return;
         }
         $setup = new DockerRootlessSetup($this->config, $this->runtime);
@@ -1106,7 +1120,9 @@ final class DockerManager
             foreach ($supervisor->listPrograms()['programs'] as $row) {
                 $status = $row['status'] ?? '';
                 $state = is_array($status) ? (string) ($status['state'] ?? '') : (string) $status;
-                if (str_starts_with((string) $row['name'], self::PROGRAM_PREFIX) && stripos($state, 'RUNNING') !== false) {
+                // Only the shared daemon restarts here; a site with its own daemon is not touched (A56).
+                if (str_starts_with((string) $row['name'], self::PROGRAM_PREFIX) && stripos($state, 'RUNNING') !== false
+                    && ($row['user'] ?? SupervisedUser::USERNAME) === SupervisedUser::USERNAME) {
                     $running[] = (string) $row['name'];
                 }
             }
@@ -1158,7 +1174,7 @@ final class DockerManager
      * @param  callable(list<string>):T  $fn  receives the env assignment(s) to add to docker calls
      * @return T
      */
-    private function withRegistry(?string $registry, callable $fn): mixed
+    private function withRegistry(?string $registry, callable $fn, ?string $domain = null): mixed
     {
         if ($registry === null) {
             return $fn([]);
@@ -1170,15 +1186,16 @@ final class DockerManager
         $dir = DockerSettings::BASE . '/.auth-' . bin2hex(random_bytes(8));
         $this->runtime->mkdir($dir, 0700);
         if ($this->runtime->getuid() === 0) {
-            $this->runtime->chown(DockerSettings::BASE, 'root', SupervisedUser::USERNAME);
-            $this->runtime->chmod(DockerSettings::BASE, 0750);
-            $this->runtime->chown($dir, SupervisedUser::USERNAME, SupervisedUser::USERNAME);
+            DockerSettings::ensureBase($this->runtime);
+            $owner = $this->onSiteDaemon($domain) ? VhostUser::username((string) $domain) : SupervisedUser::USERNAME;
+            $this->runtime->chown($dir, $owner, VhostUser::primaryGroup($this->runtime, $owner) ?? $owner);
             $this->runtime->chmod($dir, 0700);
         }
         $auth = ['DOCKER_CONFIG=' . $dir];
         try {
-            $login = $this->runAsSupervised(
-                array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [
+            $login = $this->runDocker(
+                $domain,
+                array_merge(['/usr/bin/env', $this->dockerEnvAssign($domain)], $auth, [
                     $this->dockerBin(), 'login', $cred['host'], '--username', $cred['username'], '--password-stdin',
                 ]),
                 '/tmp',
@@ -1191,8 +1208,9 @@ final class DockerManager
 
             return $fn($auth);
         } finally {
-            $this->runAsSupervised(
-                array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [$this->dockerBin(), 'logout', $cred['host']]),
+            $this->runDocker(
+                $domain,
+                array_merge(['/usr/bin/env', $this->dockerEnvAssign($domain)], $auth, [$this->dockerBin(), 'logout', $cred['host']]),
                 '/tmp',
                 30
             );
@@ -1299,9 +1317,9 @@ final class DockerManager
     {
         $this->withRegistry($spec['registry'] ?? null, function (array $auth) use ($spec, $forceRebuild): void {
             $docker = $this->dockerBin();
-            $env = array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth);
+            $env = array_merge(['/usr/bin/env', $this->dockerEnvAssign($spec['domain'])], $auth);
             if ($spec['mode'] === self::MODE_IMAGE) {
-                $pull = $this->runAsSupervised(array_merge($env, [$docker, 'pull', (string) $spec['image']]), $spec['app_dir'], 600);
+                $pull = $this->runDocker($spec['domain'], array_merge($env, [$docker, 'pull', (string) $spec['image']]), $spec['app_dir'], 600);
                 if (!$pull->ok()) {
                     throw new BrokerException('docker pull failed: ' . self::execDetail($pull), 1);
                 }
@@ -1309,7 +1327,8 @@ final class DockerManager
                 return;
             }
             if ($spec['mode'] === self::MODE_DOCKERFILE) {
-                $build = $this->runAsSupervised(
+                $build = $this->runDocker(
+                    $spec['domain'],
                     array_merge($env, [$docker, 'build', '-t', (string) $spec['image'], '-f', (string) $spec['dockerfile'], '.']),
                     $spec['app_dir'],
                     900
@@ -1331,12 +1350,13 @@ final class DockerManager
             if ($auth !== []) {
                 // Supervisor's `up` runs without the credential, so private images are
                 // fetched now, while it exists.
-                $pull = $this->runAsSupervised(array_merge($compose, ['pull', '--ignore-buildable']), $spec['app_dir'], 900);
+                $pull = $this->runDocker($spec['domain'], array_merge($compose, ['pull', '--ignore-buildable']), $spec['app_dir'], 900);
                 if (!$pull->ok()) {
                     throw new BrokerException('docker compose pull failed: ' . self::execDetail($pull), 1);
                 }
             }
-            $build = $this->runAsSupervised(
+            $build = $this->runDocker(
+                $spec['domain'],
                 array_merge($compose, $forceRebuild ? ['build', '--no-cache'] : ['build']),
                 $spec['app_dir'],
                 900
@@ -1344,7 +1364,7 @@ final class DockerManager
             if (!$build->ok()) {
                 throw new BrokerException('docker compose build failed: ' . self::execDetail($build), 1);
             }
-        });
+        }, $spec['domain']);
     }
 
     /**
@@ -1356,7 +1376,7 @@ final class DockerManager
     private function runCommand(array $spec): string
     {
         $docker = $this->dockerBin();
-        $env = $this->dockerEnvAssign();
+        $env = $this->dockerEnvAssign($spec['domain']);
         if ($spec['mode'] === self::MODE_COMPOSE) {
             $parts = [
                 '/usr/bin/env', $env, $docker, 'compose',
@@ -1401,7 +1421,7 @@ final class DockerManager
         if ($service === null) {
             // Enabled before the service was recorded (never on a real host: compose could not
             // read the override until v2.1.0). The same rule as enable: one service, or ask.
-            $service = $this->resolveService($spec['app_dir'], (string) $spec['compose'], null);
+            $service = $this->resolveService($spec['app_dir'], (string) $spec['compose'], null, $spec['domain']);
         }
         DockerSettings::ensureDir($this->runtime, $spec['domain']);
         $yaml = "services:\n  {$service}:\n    ports:\n"
@@ -1421,7 +1441,7 @@ final class DockerManager
                 ) . "\n";
             }
         }
-        DockerSettings::writeShared($this->runtime, $this->portsOverridePath($spec['domain']), $yaml);
+        DockerSettings::writeShared($this->runtime, $this->portsOverridePath($spec['domain']), $yaml, $spec['domain']);
     }
 
     /**
@@ -1430,15 +1450,16 @@ final class DockerManager
      *   image:?string, compose:?string, dockerfile:?string
      * }  $spec
      */
-    private function cleanupContainers(array $spec): void
+    private function cleanupContainers(array $spec, bool $shared = false): void
     {
         $docker = $this->dockerBinIfPresent();
         if ($docker === null) {
             return;
         }
-        $env = $this->dockerEnvAssign();
+        $env = $this->dockerEnvAssign($spec['domain'], $shared);
         if ($spec['mode'] === self::MODE_COMPOSE && is_string($spec['compose']) && $spec['compose'] !== '') {
-            $this->runAsSupervised(
+            $this->runDocker(
+                $spec['domain'],
                 [
                     '/usr/bin/env', $env, $docker, 'compose',
                     '-f', $spec['compose'],
@@ -1447,13 +1468,18 @@ final class DockerManager
                     'down', '--remove-orphans',
                 ],
                 $spec['app_dir'] !== '' ? $spec['app_dir'] : '/tmp',
-                180
+                180,
+                null,
+                $shared
             );
         }
-        $this->runAsSupervised(
+        $this->runDocker(
+            $spec['domain'],
             ['/usr/bin/env', $env, $docker, 'rm', '-f', self::containerName($spec['domain'])],
             '/tmp',
-            60
+            60,
+            null,
+            $shared
         );
     }
 
@@ -1467,9 +1493,10 @@ final class DockerManager
         if ($docker === null) {
             return null;
         }
-        $env = $this->dockerEnvAssign();
+        $env = $this->dockerEnvAssign($domain);
         $name = self::containerName($domain);
-        $result = $this->runAsSupervised(
+        $result = $this->runDocker(
+            $domain,
             [
                 '/usr/bin/env', $env, $docker, 'inspect',
                 '--format', '{{.Id}} {{.State.Status}}',
@@ -1502,9 +1529,10 @@ final class DockerManager
         if ($docker === null || !is_string($spec['compose']) || $spec['compose'] === '') {
             return null;
         }
-        $env = $this->dockerEnvAssign();
+        $env = $this->dockerEnvAssign($spec['domain']);
         $cwd = $spec['app_dir'] !== '' ? $spec['app_dir'] : '/tmp';
-        $ps = $this->runAsSupervised(
+        $ps = $this->runDocker(
+            $spec['domain'],
             [
                 '/usr/bin/env', $env, $docker, 'compose',
                 '-f', $spec['compose'],
@@ -1524,7 +1552,8 @@ final class DockerManager
             }
         }
         $project = self::composeProject($spec['domain']);
-        $ids = $this->runAsSupervised(
+        $ids = $this->runDocker(
+            $spec['domain'],
             [
                 '/usr/bin/env', $env, $docker, 'ps', '-q',
                 '--filter', 'label=com.docker.compose.project=' . $project,
@@ -1540,7 +1569,8 @@ final class DockerManager
         if ($id === '') {
             return null;
         }
-        $inspect = $this->runAsSupervised(
+        $inspect = $this->runDocker(
+            $spec['domain'],
             ['/usr/bin/env', $env, $docker, 'inspect', '--format', '{{.Name}}', $id],
             '/tmp',
             15
@@ -1701,23 +1731,147 @@ final class DockerManager
         return null;
     }
 
-    /** @param  list<string>  $command */
-    private function runAsSupervised(array $command, string $cwd, int $timeout, ?string $stdin = null): ExecResult
+    /**
+     * A new Docker site gets a daemon of its own (A56), unless it was put back on the shared
+     * one. A site already on the shared daemon moves through the migration, not here.
+     */
+    private function ensureSiteDaemon(string $domain): void
     {
-        SupervisedUser::ensure($this->runtime);
+        if ($this->runtime->getuid() !== 0 || ProgramIdentity::sharedReason($this->runtime, $domain) !== null
+            || SiteDocker::ready($this->runtime, $domain) || $this->programRow(self::programName($domain)) !== null) {
+            return;
+        }
+        (new SiteDocker($this->config, $this->runtime))->ensure($domain);
+    }
+
+    /**
+     * Who a container shell runs as and which daemon it talks to: the site and its own daemon,
+     * or azerioid-supervised and the shared one (A56).
+     *
+     * @return array{user:string, docker_host:string, home:?string}
+     */
+    public function shellContext(string $domain): array
+    {
+        if ($this->onSiteDaemon($domain)) {
+            return [
+                'user' => VhostUser::username($domain),
+                'docker_host' => (new SiteDocker($this->config, $this->runtime))->dockerHost($domain),
+                'home' => SiteDocker::home($domain),
+            ];
+        }
+
+        return [
+            'user' => SupervisedUser::USERNAME,
+            'docker_host' => (new DockerRootlessSetup($this->config, $this->runtime))->dockerHost(),
+            'home' => null,
+        ];
+    }
+
+    /** @return array<string, string> Supervisor environment of the site's Docker program */
+    private function programEnvironment(string $domain): array
+    {
+        return $this->onSiteDaemon($domain) ? ['HOME' => SiteDocker::home($domain)] : [];
+    }
+
+    /**
+     * A56 migration: move a running Docker site from the shared daemon to its own. The new
+     * daemon gets the image while the old container still serves; then the old one stops and
+     * the program restarts as the site. True when the site listens again.
+     */
+    public function moveToSiteDaemon(string $domain): bool
+    {
+        $vhost = $this->requireEnabled($domain);
+        (new SiteDocker($this->config, $this->runtime))->ensure($domain);
+        DockerSettings::ensureDir($this->runtime, $domain);
+        $spec = $this->specFromVhost($domain, $vhost);
+        $this->ensureVolumeDirs($spec);
+        $this->prepareWorkload($spec);
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        try {
+            $supervisor->control($program, 'stop');
+        } catch (BrokerException) {
+            // Already stopped.
+        }
+        $this->cleanupContainers($spec, true);
+
+        return $this->restartProgram($domain, $spec);
+    }
+
+    /** A56 put-back: the site's program goes back to the shared daemon. */
+    public function moveToSharedDaemon(string $domain): bool
+    {
+        $vhost = $this->requireEnabled($domain);
+        $spec = $this->specFromVhost($domain, $vhost);
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        try {
+            $supervisor->control(self::programName($domain), 'stop');
+        } catch (BrokerException) {
+        }
+        // ProgramIdentity names the site as put back, so every call below is the shared daemon's.
+        DockerSettings::ensureDir($this->runtime, $domain);
+        $this->ensureDaemonReaches($domain);
+        $this->prepareWorkload($spec);
+
+        return $this->restartProgram($domain, $spec);
+    }
+
+    /** @param array<string, mixed> $spec */
+    private function restartProgram(string $domain, array $spec): bool
+    {
+        if ($spec['mode'] === self::MODE_COMPOSE) {
+            $this->writePortsOverride($spec);
+        }
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->runCommand($spec),
+            'directory' => $spec['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => DockerSettings::autorestart($spec['restart']),
+            'environment' => $this->programEnvironment($domain),
+        ]);
+        $supervisor->control($program, 'restart');
+
+        return $this->waitForPort((int) $spec['port']);
+    }
+
+    /**
+     * Whose docker a call uses (A56): the site's own daemon, as the site, once it has one;
+     * otherwise the shared daemon as azerioid-supervised. $shared forces the shared one (the
+     * migration clears a site's old containers there).
+     */
+    private function onSiteDaemon(?string $domain, bool $shared = false): bool
+    {
+        return !$shared && $domain !== null && SiteDocker::ready($this->runtime, $domain);
+    }
+
+    /** @param  list<string>  $command */
+    private function runDocker(?string $domain, array $command, string $cwd, int $timeout, ?string $stdin = null, bool $shared = false): ExecResult
+    {
         $runuser = $this->runuserBin();
         $shell = 'cd ' . escapeshellarg($cwd) . ' && exec ' . implode(' ', array_map('escapeshellarg', $command));
+        if ($this->onSiteDaemon($domain, $shared)) {
+            $user = VhostUser::username((string) $domain);
+            $shell = 'export HOME=' . escapeshellarg(SiteDocker::home((string) $domain)) . '; ' . $shell;
+        } else {
+            SupervisedUser::ensure($this->runtime);
+            $user = SupervisedUser::USERNAME;
+        }
 
         return $this->runtime->exec(
-            [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
+            [$runuser, '-u', $user, '--', '/bin/bash', '-lc', $shell],
             $stdin,
             $timeout
         );
     }
 
-    private function dockerEnvAssign(): string
+    private function dockerEnvAssign(?string $domain, bool $shared = false): string
     {
-        return 'DOCKER_HOST=' . (new DockerRootlessSetup($this->config, $this->runtime))->dockerHost();
+        return 'DOCKER_HOST=' . ($this->onSiteDaemon($domain, $shared)
+            ? (new SiteDocker($this->config, $this->runtime))->dockerHost((string) $domain)
+            : (new DockerRootlessSetup($this->config, $this->runtime))->dockerHost());
     }
 
     private function dockerBin(): string
