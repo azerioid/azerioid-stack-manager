@@ -112,6 +112,44 @@ final class MongoDbBackupEngine implements BackupEngine
         Validator::dbName($target);
     }
 
+    public function dropTarget(string $target): void
+    {
+        // Verification never restores MongoDB into a scratch database (it uses
+        // mongorestore --dryRun), so there is nothing the panel created to drop.
+        Validator::dbName($target);
+    }
+
+    public function countObjects(string $target): int
+    {
+        throw new BrokerException('Counting MongoDB collections is not used by verification.', 2);
+    }
+
+    /**
+     * mongorestore --dryRun: reads and parses the whole archive, writes nothing.
+     *
+     * @return array{command:list<string>, env:array<string,string>, cleanup:callable():void}
+     */
+    public function dryRunCommand(): array
+    {
+        $cfg = $this->credentialsFile();
+
+        return [
+            'command' => [
+                '/usr/bin/mongorestore',
+                '--config=' . $cfg,
+                '--host=' . $this->config->mongodbHost,
+                '--port=' . $this->config->mongodbPort,
+                '--username=' . $this->config->mongodbUser,
+                '--authenticationDatabase=admin',
+                '--archive',
+                '--dryRun',
+                '--quiet',
+            ],
+            'env' => [],
+            'cleanup' => $this->cleanup($cfg),
+        ];
+    }
+
     private function credentialsFile(): string
     {
         if ($this->config->mongodbPassword === '') {

@@ -331,10 +331,14 @@ final class FakeBroker
      */
     public array $stdinLog = [];
 
+    /** @var list<array{action:string, stdin:array<string,mixed>}> every call, in order */
+    public array $calls = [];
+
     public function handle(string $action, array $args, array $stdin): BrokerResponse
     {
         $this->callLog[] = $action;
         $this->stdinLog[$action] = $stdin;
+        $this->calls[] = ['action' => $action, 'stdin' => $stdin];
 
         if ($this->failNextCall) {
             $this->failNextCall = false;
@@ -507,6 +511,16 @@ final class FakeBroker
                 'backup.db', 'backup.files', 'backup.caddy' => $this->backupRun($action, $stdin),
                 'backup.list' => $this->backupList($stdin),
                 'backup.prune' => ['deleted' => [], 'keep' => 14],
+                'backup.prune.age' => ['deleted' => [], 'days' => (int) ($stdin['days'] ?? 0), 'min_keep' => 1, 'destination' => $stdin['destination'] ?? 'spaces'],
+                'backup.verify' => $this->backupVerify($args, $stdin),
+                'backup.vhost.settings' => $this->bundleSettings[(string) ($args[0] ?? '')] ?? ['databases' => []],
+                'backup.vhost.settings.set' => $this->bundleSettingsSet((string) ($args[0] ?? ''), $stdin),
+                'backup.vhost.run' => $this->bundleRun((string) ($args[0] ?? ($stdin['domain'] ?? '')), $stdin),
+                'backup.vhost.list' => ['destination' => $stdin['destination'] ?? 'spaces', 'bundles' => array_values(array_filter(
+                    $this->fakeBundles,
+                    static fn (array $b): bool => $b['destination'] === ($stdin['destination'] ?? 'spaces')
+                ))],
+                'backup.vhost.restore' => $this->bundleRestore((string) ($args[0] ?? ($stdin['domain'] ?? '')), $stdin),
                 'backup.restore.db' => $this->restoreDb($stdin),
                 'backup.restore.files' => $this->restoreFiles($stdin),
                 'backup.restore.check' => $this->restoreCheck($args, $stdin),
@@ -1013,6 +1027,79 @@ final class FakeBroker
         $this->vhostIsolationConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
+    }
+
+    /** @var array<string, array{databases: list<array{engine:string, name:string}>}> */
+    public array $bundleSettings = [];
+
+    /** @var list<array<string,mixed>> */
+    public array $fakeBundles = [];
+
+    /** @var list<array<string,mixed>> restore calls with apply=true */
+    public array $bundleRestores = [];
+
+    /** @return array<string,mixed> */
+    private function bundleSettingsSet(string $domain, array $stdin): array
+    {
+        $dbs = [];
+        foreach ((array) ($stdin['databases'] ?? []) as $row) {
+            if (! in_array($row['engine'] ?? '', ['mariadb', 'postgresql', 'mongodb'], true)) {
+                throw new BrokerCallException('engine must be mariadb, postgresql or mongodb.', 2);
+            }
+            $dbs[] = ['engine' => $row['engine'], 'name' => (string) $row['name']];
+        }
+
+        return $this->bundleSettings[$domain] = ['databases' => $dbs];
+    }
+
+    /** @return array<string,mixed> */
+    private function bundleRun(string $domain, array $stdin): array
+    {
+        $parts = array_merge(['files', 'config'], array_map(
+            static fn (array $d): string => 'db-'.$d['engine'].'-'.$d['name'],
+            $this->bundleSettings[$domain]['databases'] ?? []
+        ));
+        $bundle = '20260928T0300'.str_pad((string) count($this->fakeBundles), 2, '0', STR_PAD_LEFT).'Z';
+        $this->fakeBundles[] = ['domain' => $domain, 'bundle' => $bundle, 'destination' => $stdin['destination'] ?? 'spaces',
+            'parts' => array_merge(['manifest'], $parts), 'size' => 1024, 'complete' => true, 'created_at' => '2026-09-28T03:00:00Z'];
+
+        return ['domain' => $domain, 'bundle' => $bundle, 'destination' => $stdin['destination'] ?? 'spaces',
+            'parts' => array_map(static fn (string $p): array => ['part' => $p, 'size' => 512], $parts), 'size' => 1024];
+    }
+
+    /** @return array<string,mixed> */
+    private function bundleRestore(string $domain, array $stdin): array
+    {
+        foreach ($this->fakeBundles as $b) {
+            if ($b['domain'] === $domain && $b['bundle'] === ($stdin['bundle'] ?? '')) {
+                $parts = array_values(array_diff($b['parts'], ['manifest']));
+                if (! ($stdin['apply'] ?? false)) {
+                    return ['domain' => $domain, 'bundle' => $b['bundle'], 'applied' => false, 'would_restore' => $parts,
+                        'manifest' => ['domain' => $domain, 'parts' => array_map(static fn (string $p): array => ['part' => $p, 'plain_bytes' => 2048], $parts)]];
+                }
+                if (($stdin['confirm'] ?? '') !== strtoupper($domain)) {
+                    throw new BrokerCallException('Type '.strtoupper($domain).' to confirm.', 2);
+                }
+                $this->bundleRestores[] = $stdin + ['domain' => $domain];
+
+                return ['domain' => $domain, 'bundle' => $b['bundle'], 'applied' => true, 'results' => []];
+            }
+        }
+        throw new BrokerCallException('No such bundle.', 3);
+    }
+
+    /** @return array<string,mixed> */
+    private function backupVerify(array $args, array $stdin): array
+    {
+        $key = (string) ($args[0] ?? ($stdin['key'] ?? ''));
+
+        return [
+            'key' => $key, 'destination' => $stdin['destination'] ?? 'spaces', 'format' => 'lacmp2', 'authenticated' => true,
+            'plain_bytes' => 4096, 'sha256' => str_repeat('a', 64), 'kind' => str_contains($key, '/db/') ? 'db' : 'files',
+            'structure' => ['checked' => 'sql', 'detail' => 'SQL dump.'],
+            'restore_check' => ($stdin['deep'] ?? false) ? ['checked' => 'scratch-restore', 'objects' => 3, 'detail' => 'Restored into scratch database azv_verify_0000, then dropped it.'] : null,
+            'restorable' => true, 'note' => 'Integrity authenticated and structure readable.',
+        ];
     }
 
     /** @var array<string, array<string, mixed>> Docker workload settings per domain (A50) */

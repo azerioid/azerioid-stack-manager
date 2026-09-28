@@ -1172,3 +1172,63 @@ majors could not both run, and changing the version changed it under every PM2 s
 
 **Surfaces:** Components (three new cards); Vhosts → PM2 enable gains a Node.js choice, and running PM2
 vhosts get *Node.js version*; CLI `azerioid vhost pm2 enable --node=…`, `azerioid vhost pm2 node --node=…`.
+
+## A52 — Backup depth: site bundles, per-target schedules and retention, restore verification
+
+**Status:** Accepted (operator decisions 2026-09-28, roadmap Qrup 11: manifest + parts, age-based retention
+with per-target override, verification in scope, no incremental/PITR, no restore into another domain),
+shipped in **v2.3.0** (B6, requests #8 and #9). **Builds on:** A2 (LACMP2, streaming, engines, verify).
+
+**Site bundles.** One site as a manifest plus independently restorable parts, each LACMP2:
+
+| Part | Contents |
+|------|----------|
+| `files` | The site's **top directory** under www_root (the whole Laravel app, not only `public/` — the A49-E1 lesson), `node_modules` and `storage/logs` excluded |
+| `config` | The vhost config file; Docker settings, environment and compose override (A50); PM2/Docker runtime metadata; the site's Supervisor programs; the site's cron jobs; its database list |
+| `db-<engine>-<name>` | One dump per database the operator associated with the site |
+| `manifest` | Parts with size and SHA-256, root, top, identity, runtime — encrypted like the rest |
+
+Layout `vhost/<domain>/<stamp>/<part>.lacmp2.bin` locally and under `azerioid/` in Spaces. A bundle is
+complete or absent: a failing part deletes what was written. The count-based `backup.prune` and
+`backup.list` now skip `vhost/` — counting a bundle's parts one by one would delete half a bundle.
+
+**Deliberately not in a bundle:** TLS private keys — Caddy re-issues HTTP-01 certificates by itself and
+the panel re-issues DNS-01 ones (B1), so a restored key is a liability rather than a convenience, and
+certbot's symlinked layout does not survive a copy; and mail — Maildirs have their own lifecycle (A36).
+
+**The vhost↔database association** did not exist anywhere (`db.list` and `vhost.list` are unrelated).
+It is a broker-owned file per site (`/var/lib/azerioid-panel/vhost-bundles/`), for the same reason as A50:
+the bundle is made by the broker, and a scheduled run must not depend on the panel database. It travels
+inside the `config` part, so a restore brings it back. The roadmap's `vhost_databases` table is not built.
+
+**Restore** (same domain only; typed domain confirm): preview reads only the manifest. Apply, in order:
+`files` through the existing file restore (live tree moved aside as a snapshot, A2 hardened `tar`);
+`config` — the vhost config is written and the web server reloaded through `CaddyApply`, which validates
+first; if it is refused the previous config is put back — then the site identity (A49), Docker settings,
+runtime metadata, Supervisor programs (created or updated, restarted), cron jobs not already present, the
+database list; `db-*` through the existing database restore, overwriting an existing database only with
+`OVERWRITE`. Any subset of parts can be restored.
+
+**Schedules:** a `backup_schedules` table (target type, target, engine, destination, daily/weekly, hour,
+weekday, retention days, enabled, last run) next to the existing global schedule, which is unchanged
+(its once-a-day check now ignores scheduled targets' jobs). After each successful run the target's own
+retention applies: `backup.prune.age` removes archives (or whole bundles) older than the schedule's days,
+or the global default `backup.retention_days` (30), **always keeping the newest copy of each target**,
+however old — a site that stopped being backed up keeps its last good copy.
+
+**Restore verification** (`backup.verify` with `deep`): restores a database dump into a scratch database
+`azv_verify_<random>`, counts its tables, and drops it — in a `finally`, so a failed restore drops it too.
+Guard rails, each because the alternative writes to a live database:
+
+- whole-server dumps (`mysqldump --all-databases`, `pg_dumpall`) are **skipped** — they carry their own
+  `CREATE DATABASE`/`\connect` and would restore over the databases they came from, whatever target is named;
+- a dump that names a database (`USE`, `CREATE/DROP DATABASE`, `\connect`) is refused;
+- only authenticated (LACMP2) archives — an unauthenticated one could have been rewritten to do the above;
+- MongoDB uses `mongorestore --dryRun` (parses the whole archive, writes nothing) instead of a scratch
+  restore, which would need namespace remapping and so verify something other than the real restore.
+
+**Surfaces:** Backups page — *Site bundles* (databases of a site, back up now, bundle list, restore with
+part selection) and *Schedules per target* (with the default retention). Bundles, bundle restores and
+panel-started verifications are queued operations. CLI `azerioid backup bundle|bundles|bundle-restore|
+bundle-dbs`, `azerioid backup verify --deep`. Queued bundle work has the queue's 30-minute ceiling;
+scheduled bundles run from cron with an hour.

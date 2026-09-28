@@ -92,6 +92,20 @@ final class MariaDbBackupEngine implements BackupEngine
         );
     }
 
+    public function dropTarget(string $target): void
+    {
+        $this->runtime->dbExec('DROP DATABASE IF EXISTS `' . Validator::dbName($target) . '`');
+    }
+
+    public function countObjects(string $target): int
+    {
+        $rows = $this->runtime->dbQuery(
+            "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = '" . Validator::dbName($target) . "'"
+        );
+
+        return (int) ($rows[0]['n'] ?? 0);
+    }
+
     private function credentialsFile(): string
     {
         $path = rtrim($this->config->stagingDir, '/') . '/mysql-' . bin2hex(random_bytes(6)) . '.cnf';

@@ -47,8 +47,8 @@ class OperationDispatcher
      *    bookkeeping or leaving BackupJob stuck at `running`, which the alert rule
      *    would read as a missed backup — so they wait for the BackupJob/operations
      *    unification rather than being half-converted here.
-     *  - backup.verify has no panel call site at all; it is a CLI command that
-     *    prints its verdict, where running inline is the point.
+     *  - backup.verify from the CLI stays inline (it prints its verdict); from the
+     *    panel it is queued, because restore verification loads a whole dump.
      *
      * @var array<string, array{0:string, 1:string, 2:list<string>}>
      */
@@ -59,6 +59,11 @@ class OperationDispatcher
         'vhost.docker.enable' => ['docker.enable', 'vhost', []],
         'backup.restore.db' => ['backup.restore.db', 'database', ['target', 'database']],
         'backup.restore.files' => ['backup.restore.files', 'vhost', ['site', 'domain']],
+        // A bundle is a site's files plus its databases (A52); both directions take minutes.
+        'backup.vhost.run' => ['backup.vhost', 'vhost', ['domain']],
+        'backup.vhost.restore' => ['backup.vhost.restore', 'vhost', ['domain']],
+        // Restore verification restores a whole dump into a scratch database.
+        'backup.verify' => ['backup.verify', 'database', ['name']],
     ];
 
     /** Inputs that must never be written to the operations table. */

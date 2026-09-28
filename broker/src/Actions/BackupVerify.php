@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Actions;
 use AzerioidPanel\Broker\Backup\ArchiveCipher;
 use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
+use AzerioidPanel\Broker\Backup\ScratchVerifier;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Runtime;
@@ -70,10 +71,26 @@ final class BackupVerify
             default => ['checked' => 'none', 'detail' => 'Unrecognised archive kind; integrity verified only.'],
         };
 
+        // Layer 3, on request: restore into a scratch database and drop it (B6). Only for
+        // authenticated archives — an unauthenticated one could have been rewritten to act
+        // on a database of its own.
+        $restore = null;
+        if ($kind === 'db' && (bool) ($input['deep'] ?? false)) {
+            if ($format !== 'lacmp2') {
+                throw new BrokerException('Restore verification needs an authenticated (LACMP2) archive.', 3);
+            }
+            $restore = (new ScratchVerifier($config, $runtime))->verify(
+                $plain,
+                (string) ($input['name'] ?? $this->nameOf($key)),
+                isset($input['engine']) ? (string) $input['engine'] : null
+            );
+        }
+
         return [
             'key' => $key,
             'destination' => $destination,
             'format' => $format,
+            'restore_check' => $restore,
             'authenticated' => $format === 'lacmp2',
             'plain_bytes' => strlen($plain),
             'sha256' => hash('sha256', $plain),
@@ -86,6 +103,12 @@ final class BackupVerify
                     . 'carries no authentication, so tampering cannot be ruled out. '
                     . 'Re-create this backup to get an authenticated archive.',
         ];
+    }
+
+    /** The database a db archive holds: the path segment after /db/. */
+    private function nameOf(string $key): string
+    {
+        return preg_match('#/db/([^/]+)/#', $key, $m) === 1 ? $m[1] : 'all';
     }
 
     /** @param array<string,mixed> $input */

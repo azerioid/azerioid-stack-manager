@@ -26,6 +26,9 @@ final class BackupList
         foreach ($listed['objects'] as $obj) {
             $key = (string) ($obj['key'] ?? '');
             $parts = explode('/', $key);
+            if (($parts[1] ?? '') === 'vhost') {
+                continue; // listed as bundles by backup.vhost.list (A52)
+            }
             $objects[] = [
                 'key' => $key,
                 'size' => (int) ($obj['size'] ?? 0),
@@ -50,6 +53,9 @@ final class BackupList
         }
         $objects = [];
         foreach ($runtime->listDir($base) as $kind) {
+            if ($kind === 'vhost') {
+                continue; // bundles: backup.vhost.list / their own retention (A52)
+            }
             $kindDir = $base . '/' . $kind;
             if (!$runtime->isDir($kindDir)) {
                 continue;
