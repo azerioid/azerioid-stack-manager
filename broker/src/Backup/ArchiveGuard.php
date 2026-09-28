@@ -188,7 +188,10 @@ final class ArchiveGuard
             if (($mode & 04000) !== 0) {
                 throw new BrokerException('Archive rejected: setuid entry (' . $name . ').', 3);
             }
-            if (($mode & 02000) !== 0) {
+            // setgid on a directory only makes new files inherit its group — every panel
+            // docroot is 2770 (A25/A49), so refusing it refused every site restore. On a
+            // file it is a privilege grant, and stays refused.
+            if (($mode & 02000) !== 0 && $typeflag !== '5') {
                 throw new BrokerException('Archive rejected: setgid entry (' . $name . ').', 3);
             }
 
