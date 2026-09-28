@@ -102,6 +102,7 @@ final class DockerManager
         }
         try {
             $this->ensureVolumeDirs($spec);
+            $this->ensureDaemonReaches($domain);
             $this->prepareWorkload($spec);
         } catch (\Throwable $e) {
             $this->cleanupMeta($domain);
@@ -232,6 +233,7 @@ final class DockerManager
         $vhost = $this->requireEnabled($domain);
         $spec = $this->specFromVhost($domain, $vhost);
         $this->ensureVolumeDirs($spec);
+        $this->ensureDaemonReaches($domain);
         $this->prepareWorkload($spec, true);
 
         $supervisor = new SupervisorManager($this->config, $this->runtime);
@@ -605,6 +607,7 @@ final class DockerManager
         $vhost = $this->requireEnabled($domain);
         $spec = $this->specFromVhost($domain, $vhost);
         $this->ensureVolumeDirs($spec);
+        $this->ensureDaemonReaches($domain);
         if ($spec['mode'] === self::MODE_COMPOSE) {
             $this->writePortsOverride($spec);
         }
@@ -1059,6 +1062,83 @@ final class DockerManager
             // A symlink planted in the app must not turn a mount into a path outside it.
             if ($this->runtime->resolveUnderBase($path, $spec['app_dir']) === null) {
                 throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
+            }
+        }
+    }
+
+    /**
+     * The daemon resolves bind mounts itself, as azerioid-supervised with the group list it
+     * started with. A vhost created after that (A49: every vhost has its own group) is closed
+     * to it until it restarts — `mkdir …: permission denied` on the mount. Restart it once,
+     * then bring back every Docker site it took down, whatever their restart policy.
+     */
+    private function ensureDaemonReaches(string $domain): void
+    {
+        if ($this->runtime->getuid() !== 0) {
+            return;
+        }
+        $setup = new DockerRootlessSetup($this->config, $this->runtime);
+        $groups = $setup->daemonGroups();
+        if ($groups === null) {
+            return;
+        }
+        $group = $this->runtime->exec(['/usr/bin/getent', 'group', VhostUser::docrootGroup($this->runtime, $domain)], null, 10);
+        $gid = (int) (explode(':', trim($group->stdout))[2] ?? -1);
+        if (!$group->ok() || $gid < 0 || in_array($gid, $groups, true)) {
+            return;
+        }
+        self::restartDaemonAndSites($this->config, $this->runtime);
+    }
+
+    /** Restart the rootless daemon, then every Docker program that was running before. */
+    public static function restartDaemonAndSites(Config $config, Runtime $runtime): void
+    {
+        $supervisor = new SupervisorManager($config, $runtime);
+        $running = [];
+        try {
+            foreach ($supervisor->listPrograms()['programs'] as $row) {
+                $status = $row['status'] ?? '';
+                $state = is_array($status) ? (string) ($status['state'] ?? '') : (string) $status;
+                if (str_starts_with((string) $row['name'], self::PROGRAM_PREFIX) && stripos($state, 'RUNNING') !== false) {
+                    $running[] = (string) $row['name'];
+                }
+            }
+        } catch (BrokerException) {
+            // No Supervisor: nothing to bring back.
+        }
+        $setup = new DockerRootlessSetup($config, $runtime);
+        $setup->restartDaemon();
+        if ($running === []) {
+            return;
+        }
+        // Supervisor has usually brought them back by itself already (a `docker run` whose
+        // daemon went away exits, and autorestart runs it again). Restarting those as well
+        // races the old container's --rm removal: "name already in use", three quick
+        // failures, FATAL. So give it a moment, then only start what is still down —
+        // including sites whose restart policy is "never" — after clearing a stale container.
+        $runtime->exec(['/bin/sleep', '5'], null, 10);
+        $states = [];
+        try {
+            foreach ($supervisor->listPrograms()['programs'] as $row) {
+                $status = $row['status'] ?? '';
+                $states[(string) $row['name']] = is_array($status) ? (string) ($status['state'] ?? '') : (string) $status;
+            }
+        } catch (BrokerException) {
+            return;
+        }
+        $docker = $runtime->fileExists('/usr/bin/docker') ? '/usr/bin/docker' : '/usr/local/bin/docker';
+        foreach ($running as $program) {
+            if (stripos($states[$program] ?? '', 'RUNNING') !== false) {
+                continue;
+            }
+            $runtime->exec([
+                '/usr/sbin/runuser', '-u', SupervisedUser::USERNAME, '--', '/usr/bin/env', 'DOCKER_HOST=' . $setup->dockerHost(),
+                $docker, 'rm', '-f', $program,
+            ], null, 60);
+            try {
+                $supervisor->control($program, 'start');
+            } catch (BrokerException) {
+                // Reported by status; one site must not stop the others coming back.
             }
         }
     }

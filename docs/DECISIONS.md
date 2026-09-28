@@ -1118,3 +1118,16 @@ management); CLI `azerioid vhost docker services|settings|env|env-set` (`--servi
 `--volume host:container[:ro]`, `--registry`, `--env-file` — values never as arguments; `env` shows
 names unless `--reveal`) and `azerioid docker registry list|add|del` (password from
 `AZERIOID_REGISTRY_PASSWORD` or a prompt, never an argument).
+
+**v2.1.1 addendum — the daemon's group list.** Verifying v2.1.0 on the Ubuntu host, a bind mount from a
+new vhost failed with `mkdir …: permission denied`. The rootless daemon resolves bind mounts itself, as
+`azerioid-supervised` with the group list it started with — and since A49 every vhost has its own group,
+created after the daemon started. It inherits that list from the account's systemd `--user` manager,
+so restarting `docker.service` alone changes nothing: `user@<uid>.service` restarts (measured: groups
+`984 986` → every vhost group). This takes every container down, so before enable/build/settings the
+broker checks whether the daemon holds the vhost's group and restarts it **only if not** — once per new
+group. Supervisor usually restarts the Docker sites by itself as their `docker run` clients lose the
+daemon; restarting them again raced the old container's `--rm` removal ("name already in use", FATAL —
+seen on the test host). So after a daemon restart the broker waits, then starts only the Docker
+programs that are still down, after removing a stale container of the same name. The A49 migration
+restarts the daemon the same way instead of restarting Docker programs twice.

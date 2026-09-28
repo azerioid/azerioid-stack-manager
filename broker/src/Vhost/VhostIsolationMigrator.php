@@ -660,11 +660,18 @@ final class VhostIsolationMigrator
     private function refresh(): void
     {
         VhostUser::refreshReaders($this->runtime, $this->config, false);
-        $this->restartSupervised();
+        // The rootless Docker daemon resolves bind mounts with the group list its systemd
+        // --user manager started with; it would keep the old reach and lose the new (A50).
+        // Docker programs come back through that restart, so they are not restarted twice.
+        $daemon = (new \AzerioidPanel\Broker\Component\DockerRootlessSetup($this->config, $this->runtime))->daemonGroups() !== null;
+        $this->restartSupervised($daemon);
+        if ($daemon) {
+            DockerManager::restartDaemonAndSites($this->config, $this->runtime);
+        }
         $this->note('Readers joined the new groups: reloaded web/PHP services, restarted running supervised programs');
     }
 
-    private function restartSupervised(): void
+    private function restartSupervised(bool $skipDocker = false): void
     {
         try {
             $supervisor = new SupervisorManager($this->config, $this->runtime);
@@ -675,7 +682,8 @@ final class VhostIsolationMigrator
         foreach ($programs as $row) {
             $status = $row['status'] ?? '';
             $state = is_array($status) ? (string) ($status['state'] ?? '') : (string) $status;
-            if (stripos($state, 'RUNNING') === false) {
+            if (stripos($state, 'RUNNING') === false
+                || ($skipDocker && str_starts_with((string) $row['name'], DockerManager::PROGRAM_PREFIX))) {
                 continue;
             }
             try {
