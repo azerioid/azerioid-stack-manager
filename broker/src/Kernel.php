@@ -16,6 +16,7 @@ use AzerioidPanel\Broker\Actions\BackupList;
 use AzerioidPanel\Broker\Actions\BackupPrune;
 use AzerioidPanel\Broker\Actions\BackupPruneAge;
 use AzerioidPanel\Broker\Actions\BackupVhost;
+use AzerioidPanel\Broker\Actions\Deploy;
 use AzerioidPanel\Broker\Actions\BackupRestore;
 use AzerioidPanel\Broker\Actions\BackupRestoreCheck;
 use AzerioidPanel\Broker\Actions\BackupRun;
@@ -225,6 +226,13 @@ final class Kernel
         'backup.prune' => BackupPrune::class,
         'backup.verify' => BackupVerify::class,
         'backup.prune.age' => BackupPruneAge::class,
+        'deploy.config' => Deploy::class,
+        'deploy.config.set' => Deploy::class,
+        'deploy.key.rotate' => Deploy::class,
+        'deploy.remove' => Deploy::class,
+        'deploy.list' => Deploy::class,
+        'deploy.run' => Deploy::class,
+        'deploy.rollback' => Deploy::class,
         'backup.vhost.settings' => BackupVhost::class,
         'backup.vhost.settings.set' => BackupVhost::class,
         'backup.vhost.run' => BackupVhost::class,

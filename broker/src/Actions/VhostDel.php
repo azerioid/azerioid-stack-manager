@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Deploy\GitDeploy;
 use AzerioidPanel\Broker\Mail\MailManager;
 use AzerioidPanel\Broker\Mail\MailState;
 use AzerioidPanel\Broker\Runtime;
@@ -74,8 +75,10 @@ final class VhostDel
         if ($mailDropped !== null) {
             $result['mail_dropped'] = $mailDropped;
         }
-        // Container environment and settings (A50) hold secrets and go with the vhost.
+        // Container environment and settings (A50) hold secrets and go with the vhost, as does
+        // the deploy key (A53).
         DockerSettings::remove($runtime, $domain);
+        (new GitDeploy($config, $runtime))->remove($domain);
         // The files are kept, but the uid and gid they carry now belong to nobody and will
         // be handed to the next account created (A49). Close them before that happens.
         try {

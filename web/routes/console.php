@@ -2,6 +2,7 @@
 
 use App\Console\Commands\ConvergePanelIdentity;
 use App\Console\Commands\ConvergeVhostIsolation;
+use App\Console\Commands\DeployScheduled;
 use App\Console\Commands\EvaluateAlerts;
 use App\Console\Commands\PanelMaintenance;
 use App\Console\Commands\RefreshPanelFpmBinary;
@@ -31,6 +32,9 @@ Schedule::command(ConvergePanelIdentity::class)->everyFiveMinutes()->withoutOver
 // A49: move every vhost identity off the shared azerioid-vhosts group after a
 // self-update deploys the release that introduces it. A no-op once isolated.
 Schedule::command(ConvergeVhostIsolation::class)->everyFiveMinutes()->withoutOverlapping();
+
+// B8 / A41: scheduled git deploys (manual and schedule only, no webhooks).
+Schedule::command(DeployScheduled::class)->everyFiveMinutes()->withoutOverlapping();
 
 // KI-3: an EL panel runs a private php-fpm copy (SELinux, A3). Keep it on the distro's
 // patched binary. A cmp and nothing else unless it has changed.

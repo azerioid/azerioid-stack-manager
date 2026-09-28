@@ -62,6 +62,9 @@ class OperationDispatcher
         // A bundle is a site's files plus its databases (A52); both directions take minutes.
         'backup.vhost.run' => ['backup.vhost', 'vhost', ['domain']],
         'backup.vhost.restore' => ['backup.vhost.restore', 'vhost', ['domain']],
+        // A deploy fetches, checks out and runs composer/npm (A53).
+        'deploy.run' => ['deploy', 'vhost', ['domain']],
+        'deploy.rollback' => ['deploy.rollback', 'vhost', ['domain']],
         // Restore verification restores a whole dump into a scratch database.
         'backup.verify' => ['backup.verify', 'database', ['name']],
     ];
