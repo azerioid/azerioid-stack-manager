@@ -348,6 +348,9 @@ final class FakeBroker
                 'panel.identity.status' => $this->panelIdentityStatus(),
                 'panel.identity.apply' => $this->panelIdentityApply($stdin),
                 'panel.identity.converge' => $this->panelIdentityConverge(),
+                'vhost.isolation.status' => $this->vhostIsolationStatus(),
+                'vhost.isolation.apply' => $this->vhostIsolationApply($stdin),
+                'vhost.isolation.converge' => $this->vhostIsolationConverge(),
                 'panel.fpm.refresh' => ['refreshed' => false, 'skipped' => null, 'log' => []],
                 'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'panel.update.check' => [
@@ -939,6 +942,57 @@ final class FakeBroker
         $this->panelIdentityConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-panel-identity.service'];
+    }
+
+    public bool $vhostsIsolated = false;
+
+    public int $vhostIsolationConvergeStarts = 0;
+
+    /** @return array<string, mixed> */
+    private function vhostIsolationStatus(): array
+    {
+        return [
+            'migrated' => $this->vhostsIsolated,
+            'needs_migration' => ! $this->vhostsIsolated,
+            'pending' => $this->vhostsIsolated ? [] : [
+                ['user' => 'az-vh-example-test', 'root' => '/data/www/example.test', 'reason' => 'primary group is azerioid-vhosts'],
+            ],
+            'last_attempt' => [],
+            'running' => false,
+            'interrupted' => false,
+            'auto_eligible' => ! $this->vhostsIsolated,
+            'verdict' => $this->vhostsIsolated
+                ? 'OK: every vhost identity has a group of its own; no site can open another site\'s files.'
+                : 'PENDING: 1 vhost identity shares the azerioid-vhosts group and can open other sites\' files.',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function vhostIsolationApply(array $stdin): array
+    {
+        if (($stdin['confirm'] ?? '') !== 'ISOLATE-VHOSTS') {
+            throw new BrokerCallException('Type ISOLATE-VHOSTS to confirm.', 3);
+        }
+        if ($this->vhostsIsolated) {
+            return ['changed' => false, 'already_migrated' => true, 'status' => $this->vhostIsolationStatus()];
+        }
+        if (($stdin['dry_run'] ?? false) === true) {
+            return ['changed' => false, 'dry_run' => true, 'readers' => ['caddy', 'www-data', 'azerioid-supervised'], 'plan' => $this->vhostIsolationStatus()['pending']];
+        }
+        $this->vhostsIsolated = true;
+
+        return ['changed' => true, 'identities' => ['az-vh-example-test'], 'log' => ['fake isolation']];
+    }
+
+    /** @return array<string, mixed> */
+    private function vhostIsolationConverge(): array
+    {
+        if ($this->vhostsIsolated) {
+            return ['started' => false, 'reason' => 'already migrated'];
+        }
+        $this->vhostIsolationConvergeStarts++;
+
+        return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
     }
 
     /** @var list<string> domains with SFTP enabled */

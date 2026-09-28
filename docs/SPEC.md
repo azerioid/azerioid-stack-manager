@@ -119,7 +119,7 @@ Every phase exit runs `deploy/test/smoke-p1.sh` against Ubuntu 24.04, Debian 12,
 The panel FPM process **must not** read or write vhost document roots. Terminal sessions and the File Manager are broker actions that:
 
 1. Reject read-only / system / reverse-proxy vhosts (same eligibility as each other).
-2. Ensure a dedicated `az-vh-*` user (group `azerioid-vhosts`) for that domain.
+2. Ensure a dedicated `az-vh-*` user with a group of its own (`az-vh-X:az-vh-X`, A49) for that domain. The web server, site PHP pool users and `azerioid-supervised` are members of every vhost group; no identity is a member of another's.
 3. Execute as that user (Terminal: `runuser` + ttyd; File Manager: PHP helper that `setuid`s after loading root-only broker classes).
 
 File Manager actions: `vhost.files.list|read|write|mkdir|rename|move|delete`.

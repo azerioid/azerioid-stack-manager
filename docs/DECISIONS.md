@@ -187,7 +187,7 @@ Opening remote access for **any** database on an engine may bind that engine pub
 ## A25 — Per-vhost Unix identity (Terminal / Files / Supervisor)
 
 **Status:** Accepted  
-**Decision:** Terminal and File Manager drop to a dedicated `az-vh-*` user in group `azerioid-vhosts` (same identity for every engine: Caddy / Apache / Nginx). Supervisor programs run as `azerioid-supervised`, never root / `caddy` / `www-data`. Read-only and system vhosts (panel snippet, reverse-proxy) refuse Terminal, Files, and delete/edit. Uninstall `--full` / `--drop-db` must remove these identities; `/usr/local/bin/azerioid` is removed on every uninstall.
+**Decision:** Terminal and File Manager drop to a dedicated `az-vh-*` user in group `azerioid-vhosts` (same identity for every engine: Caddy / Apache / Nginx). **Corrected by A49:** a shared group made every identity a group member on every other docroot; each identity now has a group of its own (see A25-E1). Supervisor programs run as `azerioid-supervised`, never root / `caddy` / `www-data`. Read-only and system vhosts (panel snippet, reverse-proxy) refuse Terminal, Files, and delete/edit. Uninstall `--full` / `--drop-db` must remove these identities; `/usr/local/bin/azerioid` is removed on every uninstall.
 
 ## A26 — PostgreSQL reinstall must not destroy leftover data dirs
 
@@ -812,7 +812,7 @@ Three defects, one shape:
 
 | Aspect | Decision |
 |--------|----------|
-| Run-as | A job belongs to a vhost and runs as **that vhost's identity** (`az-vh-*`). This is the security win of the phase: a privilege *reduction* for the common case |
+| Run-as | A job belongs to a vhost and runs as **that vhost's identity** (`az-vh-*`). This is the security win of the phase: a privilege *reduction* for the common case. **Until A49 (v2.0.6) it reduced privilege relative to root only — a site's job could still read and write every other site; see A47-E1** |
 | Root jobs | Still possible — host maintenance needs them — but require a typed `RUN-AS-ROOT` **every time, including on re-enable**. The asymmetry is deliberate |
 | State | A **broker-owned file**, not the panel database, for the same reason vhosts use config files (A9, A44): the thing that runs must be the thing that is true. cron reads crontabs, so the crontab is rendered from state and the panel reads state back through the broker |
 | Existing lines | **Preserved byte for byte**, outside a marked block (A30). A host that already had root cron jobs — a provider image's backup script, a certbot hook — keeps them. Not politeness: the difference between a feature and an outage |
@@ -851,7 +851,7 @@ have credentials.
 
 | Question | Decision | Why |
 |----------|----------|-----|
-| Confinement | **No chroot for v1** | `ChrootDirectory` requires the chroot root to be owned by root and not group-writable, which fights A25's ownership model; getting that wrong silently breaks login for one site while working for another. Confinement comes from the account's home and `internal-sftp` |
+| Confinement | **No chroot for v1** | `ChrootDirectory` requires the chroot root to be owned by root and not group-writable, which fights A25's ownership model; getting that wrong silently breaks login for one site while working for another. Confinement comes from the account's home and `internal-sftp`. **Wrong — see A48-E1: neither confines; until A49 (v2.0.6) an SFTP login could read and write every other site** |
 | Authentication | **Key-only by default** | A password for SFTP is also an SSH **shell** credential on these accounts, since `az-vh-*` has `/bin/bash` for the Terminal feature. Keys keep the blast radius of a leaked credential to file transfer |
 | Shell access | **Denied in the `Match` block**, explicitly | See above: the shell exists for Terminal, which the panel brokers. SFTP must not become a second, unbrokered way in |
 | Configuration | **`sshd_config.d` drop-in only**, never edits to `sshd_config` | The distro owns that file; an upgrade that replaces it must not take the panel's changes with it, and the panel must never be the reason a host cannot be upgraded |
@@ -950,3 +950,93 @@ claim, which `.invalid` satisfies more strongly than hostlessness does.
 This is the same seam as two other defects found the same week — a broker action registered but
 unreachable, and a cron log directory whose permission chain the filesystem double treats as a
 no-op. In each case two fakes agreed with each other and the host disagreed with both.
+
+## A49 — Every vhost identity has a group of its own
+
+**Status:** Accepted (operator decision 2026-09-28), shipped as the security release **v2.0.6**.
+**Supersedes:** the group half of **A25**. **Corrects:** A25, A47, A48 (errata below).
+
+**Problem.** Every `az-vh-*` identity was created with `useradd --gid azerioid-vhosts`, and every
+docroot was `2770 az-vh-X:azerioid-vhosts`. The group bits exist so the web server and the site PHP
+pool can read a site's files — but the identities were members of that same group, so each one was a
+**group member on every other site's docroot**, with read and write. Anything that runs as a site's
+identity could open every other site: its Terminal, its SFTP login, its cron jobs. Found 2026-09-28
+while designing B4's Docker data directory, and reproduced on both OS families before the fix:
+
+| Path (attacker `xvh-a`, victim `xvh-b`) | Ubuntu 24.04, v2.0.5 | Rocky 9 Enforcing, v2.0.4 |
+|---|---|---|
+| Terminal (`runuser -u <identity> -- bash`, what ttyd runs) | read + write | read + write |
+| SFTP (real key login, `internal-sftp`) | read + write | read + write |
+| Cron (job owned by `xvh-a`, run through the panel wrapper) | read + write | read + write |
+| File Manager (panel API, `../` and a planted symlink) | refused by path containment | refused by path containment |
+
+The model dates from the first Terminal commit (2026-09-02); every release up to v2.0.5 has it.
+
+**Decision.**
+
+| Aspect | Decision |
+|--------|----------|
+| Group | Each identity's primary group is a **group of its own**, named after it (`az-vh-X:az-vh-X`) |
+| Docroot | `2770 az-vh-X:az-vh-X` — unchanged mode, own group |
+| Readers | Web server user, site PHP pool users and `azerioid-supervised` are members of **every** vhost group; no identity is a member of any group but its own. They serve or run every site, so their reach does not change |
+| Why not one shared reader group | Files a reader creates — PHP uploads, Laravel logs, Octane caches — carry the directory's group (setgid). With a shared reader group the identity would not be a member and could not manage its own site's files. The vhost group has to contain both the identity and the readers |
+| Why not ACLs | They depend on the `acl` package (absent on the Ubuntu test host) and on every tool preserving them; group ownership is what the tree already uses |
+| New vhost | Group created, readers added, php-fpm/Apache/nginx reloaded (each spawns workers with `initgroups()`, so a graceful reload suffices). **Caddy is restarted 3 s later** from a transient unit: it runs as its own user, only a restart gives it a new group list, and restarting it inside the request that created the vhost would drop the panel's own response |
+| Legacy identity touched by a request | Left as it is. Converting one identity inside a File Manager or Terminal request would skip the migration's verification and rollback |
+
+**Migration** (`VhostIsolationMigrator`, the A39 standard):
+
+1. **Additive.** Create every vhost group, add the readers, reload php-fpm/Apache/nginx, restart Caddy and
+   every running supervised program. Readers now hold the legacy group *and* every new one, so no site
+   loses its web server, pool or runtime while files move, however long that takes.
+2. **Regroup.** Per identity: `find <root> -xdev -group azerioid-vhosts -exec chgrp -h az-vh-X {} +`
+   (never follows a symlink a site planted, never walks into another filesystem), then
+   `usermod -g az-vh-X`. Homes that are system directories (`/`, `/etc`, `/var`, …) stop the migration.
+3. **Verify for real:** every identity is refused a read of every other docroot (world-readable
+   docroots are noted and skipped — the group model neither grants nor removes that); every reader can
+   open every docroot with a fresh group list; no site that answered 2xx/3xx before answers with an
+   error after (retried while Caddy warms up).
+4. **Commit:** end the processes each identity was already running (Terminal shells, SFTP sessions, a
+   cron job mid-run) — they carry the old group list until they exit.
+5. **Any failure** replays the journal backwards, refreshes the readers again and records the failure in
+   `/etc/azerioid-panel/vhost-isolation.json` (root-only). Automatic retries stop until an operator runs
+   `azerioid vhost isolation apply --confirm`.
+
+**Trigger:** the scheduler, every five minutes, hands off to the transient unit
+`azerioid-vhost-isolation.service` — the release that ships the migration is deployed by the previous
+release's updater, which cannot call it (same reasoning as A39). `azerioid vhost isolation status` exits
+non-zero until a host is isolated, so a fleet check can gate on it.
+
+**What this does not close — site PHP.** The site PHP pool runs as one shared account: `www-data` on
+apt, `apache` on EL. It is a reader, so it is a member of every vhost group, and one site's PHP code can
+still read and write every other site's files — measured on both hosts before and after the fix. This
+is not new and not caused by the group model: the pool must write every site (uploads, caches, SQLite),
+and it is one process identity for all of them. Closing it means **one PHP-FPM pool per vhost running
+as that vhost's identity**, which changes pool management, sockets, SELinux labelling and the Octane
+hand-back. Recorded as the next step for isolation, not done here. A49 closes every path where the
+panel *hands a person or a schedule* a site's identity: Terminal, SFTP, cron and the File Manager.
+
+**Also not closed:** `azerioid-supervised` (Octane, PM2, Docker, custom programs) is one account for
+every site, as A37/A38 already record.
+
+### A25-E1 — Erratum: the per-vhost identity was not per-vhost for files
+
+A25 gave each site "a dedicated `az-vh-*` user" and described it as isolation for Terminal and the File
+Manager. The user was dedicated; the **group was shared**, and the docroots granted that group
+everything. The identity separated who owned a file, not who could open it. The File Manager held only
+because its path containment refuses anything outside the site before the kernel is asked.
+
+### A47-E1 — Erratum: cron jobs could reach every site
+
+A47 called running a site's job as its identity "a privilege *reduction*". Relative to root it was; but
+through the shared group a site's job could read and write every other site, which a reader of A47
+would not have expected. Fixed by A49 (v2.0.6).
+
+### A48-E1 — Erratum: SFTP was not confined to the site
+
+A48 said "confinement comes from the account's home and `internal-sftp`". Neither confines anything:
+the home is only where a session starts, and `internal-sftp` without `ChrootDirectory` can open any
+path the account's permissions allow. Through the shared group those included every other site, for
+reading and writing. The claim was reasoned, not tested — the B3 acceptance criterion "confined to that
+vhost's tree" was never run against a second site. A49 (v2.0.6) makes it true by permissions; chroot
+remains out of scope for the reasons A48 gives.

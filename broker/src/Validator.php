@@ -297,6 +297,7 @@ final class Validator
     public const HARDEN_PANEL_CONFIRM = 'HARDEN-PANEL';
 
     public const MIGRATE_PANEL_IDENTITY_CONFIRM = 'MIGRATE-PANEL-IDENTITY';
+    public const ISOLATE_VHOSTS_CONFIRM = 'ISOLATE-VHOSTS';
 
     public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
 

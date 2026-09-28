@@ -10,16 +10,26 @@ use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 
 /**
- * Per-vhost Linux identity for terminal sessions and the file manager.
+ * Per-vhost Linux identity for terminal sessions, the file manager, SFTP and cron.
  *
- * Permission model (v1):
- * - Vhost user owns the docroot tree (user:azerioid-vhosts).
- * - Web server user (caddy/www-data) is in group azerioid-vhosts for read+execute on served files.
- * - Directories: 2770 (setgid), files: 0660 — new files inherit group for PHP-FPM reads.
+ * Permission model (ADR A49):
+ * - Each vhost identity has a primary group of its own, named after it (az-vh-X:az-vh-X),
+ *   and owns the docroot tree as user:that-group.
+ * - The readers — web server, site PHP pool users and azerioid-supervised — are members of
+ *   every vhost group, because they serve or run every site. Vhost identities are members
+ *   of their own group only, so one site's identity is "other" on every other docroot.
+ * - Directories: 2770 (setgid), files: 0660 — files a reader creates (PHP uploads, Laravel
+ *   logs, Octane caches) inherit the vhost group, so the identity can still manage them.
+ *
+ * Before A49 every identity shared the primary group azerioid-vhosts, which made each
+ * site's identity a group member on every other site's 2770 docroot. Existing hosts are
+ * moved off it by VhostIsolationMigrator; until then ensure() leaves a legacy identity as
+ * it is rather than half-migrating it in the middle of a request.
  */
 final class VhostUser
 {
-    public const GROUP = 'azerioid-vhosts';
+    /** The shared group every identity used to have as its primary group (pre-A49). */
+    public const LEGACY_GROUP = 'azerioid-vhosts';
     public const PREFIX = 'az-vh-';
 
     public static function username(string $domain): string
@@ -39,6 +49,12 @@ final class VhostUser
         return substr(self::PREFIX . $hash . '-' . $slug, 0, 32);
     }
 
+    /** The vhost's own group: same name as its identity (a user-private group). */
+    public static function groupName(string $domain): string
+    {
+        return self::username($domain);
+    }
+
     /**
      * @return array{username: string, root: string, domain: string}
      */
@@ -48,22 +64,40 @@ final class VhostUser
             return ['username' => self::username($domain), 'root' => $root, 'domain' => $domain];
         }
 
-        self::ensureGroup($runtime, $config);
         $username = self::username($domain);
-        if (!$runtime->fileExists('/etc/passwd') || !self::userExists($runtime, $username)) {
+        $group = self::groupName($domain);
+        $exists = self::userExists($runtime, $username);
+
+        if ($exists && self::primaryGroup($runtime, $username) === self::LEGACY_GROUP) {
+            // Not migrated yet. Converting one identity here, inside a File Manager or
+            // Terminal request, would skip the migration's verification and rollback;
+            // VhostIsolationMigrator moves every identity in one journalled pass.
+            self::applyOwnership($runtime, $root, $username, self::LEGACY_GROUP);
+            self::record($runtime, $config, $domain, $username, $root);
+
+            return ['username' => $username, 'root' => $root, 'domain' => $domain];
+        }
+
+        $changed = self::ensureVhostGroup($runtime, $config, $group);
+        if (!$exists) {
             $runtime->exec([
                 '/usr/sbin/useradd',
                 '--system',
                 '--home-dir', $root,
                 '--shell', '/bin/bash',
-                '--gid', self::GROUP,
+                '--gid', $group,
                 '--comment', 'AZERIOID Stack Manager vhost user for ' . $domain,
                 $username,
             ], null, 30);
         }
 
-        self::applyOwnership($runtime, $root, $username);
+        self::applyOwnership($runtime, $root, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
+        if ($changed) {
+            // The web server must not restart inside the request that created the vhost
+            // (the panel is served through it), so Caddy's restart is deferred.
+            self::refreshReaders($runtime, $config, true);
+        }
 
         return ['username' => $username, 'root' => $root, 'domain' => $domain];
     }
@@ -82,16 +116,21 @@ final class VhostUser
         if ($username !== '' && self::userExists($runtime, $username)) {
             $runtime->exec(['/usr/sbin/userdel', '--force', $username], null, 30);
         }
+        // userdel keeps a user-private group that still has members, and the readers
+        // are members of every vhost group.
+        if ($username !== '' && str_starts_with($username, self::PREFIX) && self::groupExists($runtime, $username)) {
+            $runtime->exec(['/usr/sbin/groupdel', $username], null, 30);
+        }
         unset($meta['users'][$domain]);
         self::save($runtime, $path, $meta);
     }
 
-    public static function applyOwnership(Runtime $runtime, string $root, string $username): void
+    public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group): void
     {
         if ($runtime->getuid() !== 0 || !$runtime->isDir($root)) {
             return;
         }
-        $runtime->exec(['/usr/bin/chown', '-R', $username . ':' . self::GROUP, $root], null, 120);
+        $runtime->exec(['/usr/bin/chown', '-R', $username . ':' . $group, $root], null, 120);
         $runtime->exec([
             '/bin/sh', '-c',
             'find ' . escapeshellarg($root) . ' -type d -exec chmod 2770 {} +',
@@ -118,39 +157,81 @@ final class VhostUser
         return ['users' => $decoded['users']];
     }
 
-    private static function ensureGroup(Runtime $runtime, Config $config): void
+    /**
+     * Create the vhost's group if needed and make every reader a member.
+     *
+     * @return bool whether any reader's membership changed (its running processes then
+     *              still hold the old group list and must be refreshed)
+     */
+    public static function ensureVhostGroup(Runtime $runtime, Config $config, string $group): bool
     {
-        $check = $runtime->exec(['/usr/bin/getent', 'group', self::GROUP], null, 10);
-        if (!$check->ok()) {
-            $runtime->exec(['/usr/sbin/groupadd', '--system', self::GROUP], null, 30);
+        if (!self::groupExists($runtime, $group)) {
+            $runtime->exec(['/usr/sbin/groupadd', '--system', $group], null, 30);
         }
-        // web_user in broker.json can lag the actual process user (e.g. www-data on a
-        // Caddy stack). Add every reader that must open docroots: configured users plus
-        // known web/PHP process users that exist on this host.
         $changed = false;
         foreach (self::readerUsers($runtime, $config) as $user) {
-            if (self::userInGroup($runtime, $user, self::GROUP)) {
+            if (self::userInGroup($runtime, $user, $group)) {
                 continue;
             }
-            $runtime->exec(['/usr/sbin/usermod', '-aG', self::GROUP, $user], null, 30);
+            $runtime->exec(['/usr/bin/gpasswd', '-a', $user, $group], null, 30);
             $changed = true;
         }
-        if ($changed) {
-            // Supplementary groups are copied at process start; FPM/apache/nginx
-            // otherwise keep serving 404 "File not found" until restart.
-            foreach (DistroPaths::for($runtime, $config)->reloadableServiceUnits() as $unit) {
-                if ($unit === '') {
-                    continue;
-                }
-                $runtime->exec(['/usr/bin/systemctl', 'try-restart', $unit], null, 30);
-            }
-        }
+
+        return $changed;
     }
 
     /**
+     * Supplementary groups are fixed when a process starts, so a reader added to a new
+     * vhost group cannot open that docroot until it re-reads them.
+     *
+     * php-fpm, Apache and nginx start as root and call initgroups() for each worker they
+     * spawn, so a graceful reload is enough. Caddy runs as its own user from the start
+     * and only a restart gives it the new list.
+     */
+    public static function refreshReaders(Runtime $runtime, Config $config, bool $deferWebRestart): void
+    {
+        $paths = DistroPaths::for($runtime, $config);
+        $web = $config->webService;
+        $units = [$paths->nginxUnit(), $paths->apacheUnit()];
+        foreach ($runtime->phpVersions() as $ver) {
+            $units[] = $paths->phpFpmUnit($ver);
+        }
+        foreach (array_unique(array_filter($units, static fn (string $u): bool => $u !== '' && $u !== $web)) as $unit) {
+            $runtime->exec(['/usr/bin/systemctl', 'try-reload-or-restart', $unit], null, 60);
+        }
+        if ($web === '') {
+            return;
+        }
+        if (!str_contains($web, 'caddy')) {
+            $runtime->exec(['/usr/bin/systemctl', 'try-reload-or-restart', $web], null, 60);
+
+            return;
+        }
+        if ($deferWebRestart) {
+            $deferred = $runtime->exec([
+                '/usr/bin/systemd-run',
+                '--on-active=3',
+                '--collect',
+                '--unit=azerioid-web-regroup-' . substr(hash('sha256', $runtime->now() . random_int(0, PHP_INT_MAX)), 0, 12),
+                '--description=AZERIOID: restart the web server to pick up a new vhost group',
+                '/usr/bin/systemctl', 'try-restart', $web,
+            ], null, 30);
+            if ($deferred->ok()) {
+                return;
+            }
+        }
+        $runtime->exec(['/usr/bin/systemctl', 'try-restart', $web], null, 60);
+    }
+
+    /**
+     * Every account that serves or runs site code and so must open every docroot.
+     *
+     * web_user in broker.json can lag the actual process user (e.g. www-data on a Caddy
+     * stack), so known web/PHP process users that exist on this host are included too.
+     *
      * @return list<string>
      */
-    private static function readerUsers(Runtime $runtime, Config $config): array
+    public static function readerUsers(Runtime $runtime, Config $config): array
     {
         $candidates = array_merge(
             [$config->webUser, $config->phpUser],
@@ -160,7 +241,7 @@ final class VhostUser
         $out = [];
         foreach ($candidates as $user) {
             $user = trim((string) $user);
-            if ($user === '' || $user === 'root' || isset($out[$user])) {
+            if ($user === '' || $user === 'root' || isset($out[$user]) || str_starts_with($user, self::PREFIX)) {
                 continue;
             }
             if (!self::userExists($runtime, $user)) {
@@ -172,12 +253,32 @@ final class VhostUser
         return array_values($out);
     }
 
-    private static function userExists(Runtime $runtime, string $username): bool
+    public static function primaryGroup(Runtime $runtime, string $username): ?string
+    {
+        $r = $runtime->exec(['/usr/bin/id', '-gn', $username], null, 10);
+
+        return $r->ok() && trim($r->stdout) !== '' ? trim($r->stdout) : null;
+    }
+
+    /** The group a vhost's docroot is (or must be) owned by: its own, or the legacy one until migrated. */
+    public static function docrootGroup(Runtime $runtime, string $domain): string
+    {
+        $primary = self::primaryGroup($runtime, self::username($domain));
+
+        return $primary === self::LEGACY_GROUP ? self::LEGACY_GROUP : self::groupName($domain);
+    }
+
+    public static function groupExists(Runtime $runtime, string $group): bool
+    {
+        return $runtime->exec(['/usr/bin/getent', 'group', $group], null, 10)->ok();
+    }
+
+    public static function userExists(Runtime $runtime, string $username): bool
     {
         return $runtime->exec(['/usr/bin/id', '-u', $username], null, 10)->ok();
     }
 
-    private static function userInGroup(Runtime $runtime, string $username, string $group): bool
+    public static function userInGroup(Runtime $runtime, string $username, string $group): bool
     {
         $r = $runtime->exec(['/usr/bin/id', '-nG', $username], null, 10);
         if (!$r->ok()) {
