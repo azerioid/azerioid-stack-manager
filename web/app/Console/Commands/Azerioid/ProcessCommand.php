@@ -11,8 +11,8 @@ class ProcessCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:process
-        {action : list|create|start|stop|restart|del|logs}
-        {name? : Program name}
+        {action : list|create|start|stop|restart|del|logs|identity}
+        {name? : Program name; with identity: status|apply}
         {--command= : Process command (create)}
         {--vhost= : Tie process to a vhost domain}
         {--freeform : Create as freeform (azerioid-supervised home)}
@@ -20,7 +20,9 @@ class ProcessCommand extends Command
         {--name= : Explicit program name on create}
         {--follow : Follow logs}
         {--lines=100 : Log lines}
-        {--json : JSON output (list)}';
+        {--domain= : identity apply: only this site}
+        {--confirm : Required for identity apply}
+        {--json : JSON output (list, identity)}';
 
     protected $description = 'Manage Supervisor programs via broker supervisor.program.* actions';
 
@@ -32,8 +34,64 @@ class ProcessCommand extends Command
             'start', 'stop', 'restart' => $this->controlProcess((string) $this->argument('action')),
             'del', 'delete', 'rm' => $this->deleteProcess(),
             'logs' => $this->logsProcess(),
+            'identity' => $this->identity(),
             default => $this->invalidAction(),
         };
+    }
+
+    /**
+     * ADR A56: every site-bound program runs as its own site. The scheduler moves existing ones;
+     * this is the status check and the operator retry for programs put back.
+     */
+    private function identity(): int
+    {
+        $op = strtolower((string) ($this->argument('name') ?: 'status'));
+        try {
+            if ($op === 'apply') {
+                if (! $this->option('confirm')) {
+                    $this->error('Refusing to move programs without --confirm (each moved program restarts as its site).');
+
+                    return self::INVALID;
+                }
+                $domain = trim((string) $this->option('domain'));
+                $data = $this->brokerData('program.identity.apply', [], array_filter([
+                    'confirm' => Validator::ISOLATE_PROGRAMS_CONFIRM,
+                    'domain' => $domain !== '' ? $domain : null,
+                ]), 3600);
+                if ($this->wantsJson()) {
+                    return $this->emitData($data);
+                }
+                foreach ((array) ($data['programs'] ?? []) as $name => $row) {
+                    $this->line('  '.$name.'  '.(string) ($row['result'] ?? '?').'  '.(string) ($row['before'] ?? '').' → '.(string) ($row['after'] ?? '')
+                        .(isset($row['reason']) ? '  — '.(string) $row['reason'] : ''));
+                }
+                $ok = ($data['result'] ?? '') === 'ok';
+                $ok ? $this->info('Done.') : $this->warn('Some programs were put back on the shared account; see above.');
+
+                return $ok ? self::SUCCESS : self::FAILURE;
+            }
+            if (! in_array($op, ['status', 'check'], true)) {
+                $this->error('Unknown identity op. Use: azerioid process identity status|apply');
+
+                return self::INVALID;
+            }
+            $data = $this->brokerData('program.identity.status', [], [], 120, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+        $migrated = ($data['migrated'] ?? false) === true;
+        if ($this->wantsJson()) {
+            $this->emitData($data);
+
+            return $migrated ? self::SUCCESS : self::FAILURE;
+        }
+        foreach ((array) ($data['programs'] ?? []) as $row) {
+            $this->line('  '.(string) ($row['name'] ?? '?').'  '.(string) ($row['domain'] ?? '').'  '.(string) ($row['state'] ?? '').'  as '.(string) ($row['user'] ?? '')
+                .(isset($row['reason']) && $row['reason'] !== null ? '  — '.(string) $row['reason'] : ''));
+        }
+        $migrated ? $this->info((string) ($data['verdict'] ?? 'OK')) : $this->warn((string) ($data['verdict'] ?? 'PENDING'));
+
+        return $migrated ? self::SUCCESS : self::FAILURE;
     }
 
     private function listProcesses(): int

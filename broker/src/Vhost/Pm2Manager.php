@@ -7,6 +7,7 @@ use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Validator;
@@ -225,7 +226,8 @@ final class Pm2Manager
         $nodeChoice = $this->nodeOf($domain);
         $pm2 = $this->pm2BinFor($nodeChoice);
 
-        $reload = $this->runAsSupervised(
+        $reload = $this->runAs(
+            $this->runUser($domain),
             ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, NodeRuntimes::pathEnv($nodeChoice), $pm2, 'reload', $appName],
             (string) ($vhost['root'] ?? '/tmp'),
             120
@@ -281,7 +283,8 @@ final class Pm2Manager
         $pm2 = $this->pm2BinFor($nodeChoice);
         $appDir = (string) ($vhost['root'] ?? '/tmp');
 
-        $scale = $this->runAsSupervised(
+        $scale = $this->runAs(
+            $this->runUser($domain),
             ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, NodeRuntimes::pathEnv($nodeChoice), $pm2, 'scale', $appName, (string) $instances],
             $appDir,
             180
@@ -729,31 +732,85 @@ final class Pm2Manager
         return self::validateInstances($value);
     }
 
+    /** PM2 state of sites whose app runs as the site (A56): root:root 0711, each site's own 0700. */
+    public const PM2_BASE = '/var/lib/azerioid-pm2';
+
+    /**
+     * Re-render the site's PM2 program for the account it now runs as (A56 migration, or a
+     * put-back) and restart it; true when it listens again.
+     */
+    public function reapply(string $domain): bool
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        if (AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) !== self::RUNTIME_PM2) {
+            throw new BrokerException("PM2 is not enabled for {$domain}.", 3);
+        }
+        $node = $this->nodeOf($domain);
+        $nodes = new NodeRuntimes($this->config, $this->runtime);
+        $pm2Runtime = $nodes->bin($node, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found.', 1);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $port = (int) ($vhost['pm2_port'] ?? 0);
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain),
+                max(1, (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES)), $detected, $node),
+            'directory' => $detected['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => true,
+        ]);
+        $supervisor->control($program, 'restart');
+
+        return $port <= 0 || $this->waitForPort($port);
+    }
+
+    private function runUser(string $domain): string
+    {
+        return ProgramIdentity::userFor($this->runtime, $domain, self::programName($domain));
+    }
+
     private function pm2HomePath(string $domain): string
     {
-        return SupervisedUser::HOME . '/pm2/' . self::domainSlug($domain);
+        return ProgramIdentity::isSiteIdentity($this->runUser($domain))
+            ? self::PM2_BASE . '/' . self::domainSlug($domain)
+            : SupervisedUser::HOME . '/pm2/' . self::domainSlug($domain);
     }
 
     private function ensurePm2Home(string $domain): string
     {
-        SupervisedUser::ensure($this->runtime);
-        $base = SupervisedUser::HOME . '/pm2';
-        $home = $this->pm2HomePath($domain);
-        foreach ([$base, $home, $home . '/logs', $home . '/pids', $home . '/modules'] as $dir) {
-            if (!$this->runtime->isDir($dir)) {
-                $this->runtime->mkdir($dir, 0750);
+        $user = $this->runUser($domain);
+        $site = ProgramIdentity::isSiteIdentity($user);
+        if ($site) {
+            if (!$this->runtime->isDir(self::PM2_BASE)) {
+                $this->runtime->mkdir(self::PM2_BASE, 0711);
             }
             if ($this->runtime->getuid() === 0) {
-                $this->runtime->chown($dir, SupervisedUser::USERNAME, SupervisedUser::USERNAME);
-                $this->runtime->chmod($dir, 0750);
+                $this->runtime->chown(self::PM2_BASE, 'root', 'root');
+                $this->runtime->chmod(self::PM2_BASE, 0711);
+            }
+            $group = VhostUser::primaryGroup($this->runtime, $user) ?? $user;
+            $mode = 0700;
+            $dirs = [];
+        } else {
+            SupervisedUser::ensure($this->runtime);
+            $group = $user;
+            $mode = 0750;
+            $dirs = [SupervisedUser::HOME . '/pm2'];
+        }
+        $home = $this->pm2HomePath($domain);
+        foreach (array_merge($dirs, [$home, $home . '/logs', $home . '/pids', $home . '/modules']) as $dir) {
+            if (!$this->runtime->isDir($dir)) {
+                $this->runtime->mkdir($dir, $mode);
+            }
+            if ($this->runtime->getuid() === 0) {
+                $this->runtime->chown($dir, $user, $group);
+                $this->runtime->chmod($dir, $mode);
             }
         }
         if ($this->runtime->getuid() === 0) {
-            $this->runtime->exec([
-                '/bin/chown', '-R',
-                SupervisedUser::USERNAME . ':' . SupervisedUser::USERNAME,
-                $home,
-            ], null, 30);
+            $this->runtime->exec(['/bin/chown', '-R', $user . ':' . $group, $home], null, 30);
         }
 
         return $home;
@@ -761,9 +818,10 @@ final class Pm2Manager
 
     private function cleanupPm2Home(string $domain): void
     {
-        $home = $this->pm2HomePath($domain);
-        if ($this->runtime->isDir($home)) {
-            $this->runtime->exec(['/bin/rm', '-rf', $home], null, 30);
+        foreach ([self::PM2_BASE . '/' . self::domainSlug($domain), SupervisedUser::HOME . '/pm2/' . self::domainSlug($domain)] as $home) {
+            if ($this->runtime->isDir($home)) {
+                $this->runtime->exec(['/bin/rm', '-rf', '--one-file-system', $home], null, 30);
+            }
         }
         $meta = $this->metaPath($domain);
         if ($this->runtime->fileExists($meta)) {
@@ -885,14 +943,16 @@ final class Pm2Manager
     }
 
     /** @param  list<string>  $command */
-    private function runAsSupervised(array $command, string $cwd, int $timeout): ExecResult
+    private function runAs(string $user, array $command, string $cwd, int $timeout): ExecResult
     {
-        SupervisedUser::ensure($this->runtime);
+        if ($user === SupervisedUser::USERNAME) {
+            SupervisedUser::ensure($this->runtime);
+        }
         $runuser = $this->runuserBin();
         $shell = 'cd ' . escapeshellarg($cwd) . ' && exec ' . implode(' ', array_map('escapeshellarg', $command));
 
         return $this->runtime->exec(
-            [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
+            [$runuser, '-u', $user, '--', '/bin/bash', '-lc', $shell],
             null,
             $timeout
         );

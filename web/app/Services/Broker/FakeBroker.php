@@ -361,6 +361,9 @@ final class FakeBroker
                 'vhost.phppool.apply' => $this->phpPoolApply($stdin),
                 'vhost.phppool.converge' => $this->phpPoolConverge(),
                 'vhost.phppool.set' => $this->phpPoolSet($args, $stdin),
+                'program.identity.status' => $this->programIdentityStatus(),
+                'program.identity.apply' => $this->programIdentityApply($stdin),
+                'program.identity.converge' => $this->programIdentityConverge(),
                 'panel.fpm.refresh' => ['refreshed' => false, 'skipped' => null, 'log' => []],
                 'panel.domain.set' => $this->panelDomainSet($args, $stdin),
                 'panel.update.check' => [
@@ -1043,6 +1046,56 @@ final class FakeBroker
         $this->vhostIsolationConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
+    }
+
+    public bool $programsIsolated = false;
+
+    public int $programIdentityConvergeStarts = 0;
+
+    /** @return array<string, mixed> */
+    private function programIdentityStatus(): array
+    {
+        $programs = [[
+            'name' => 'octane-shop-example-com', 'domain' => 'shop.example.com', 'kind' => 'octane',
+            'user' => $this->programsIsolated ? 'az-vh-shop-example-com' : 'azerioid-supervised',
+            'state' => $this->programsIsolated ? 'isolated' : 'pending', 'directory' => '/data/www/shop.example.com', 'reason' => null,
+        ]];
+
+        return [
+            'migrated' => $this->programsIsolated,
+            'programs' => $programs,
+            'pending' => $this->programsIsolated ? [] : ['octane-shop-example-com'],
+            'shared' => [],
+            'last_attempt' => [],
+            'running' => false,
+            'auto_eligible' => ! $this->programsIsolated,
+            'verdict' => $this->programsIsolated
+                ? 'OK: every site-bound program runs as its own site; none can open another site\'s files.'
+                : 'PENDING: 1 program(s) to move to their site\'s account.',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function programIdentityApply(array $stdin): array
+    {
+        if (($stdin['confirm'] ?? '') !== 'ISOLATE-PROGRAMS') {
+            throw new BrokerCallException('Type ISOLATE-PROGRAMS to confirm.', 3);
+        }
+        $moved = $this->programsIsolated ? [] : ['octane-shop-example-com' => ['result' => 'isolated', 'before' => 'HTTP 200', 'after' => 'HTTP 200']];
+        $this->programsIsolated = true;
+
+        return ['changed' => $moved !== [], 'result' => 'ok', 'trigger' => 'operator', 'programs' => $moved];
+    }
+
+    /** @return array<string, mixed> */
+    private function programIdentityConverge(): array
+    {
+        if ($this->programsIsolated) {
+            return ['started' => false, 'reason' => 'nothing to do'];
+        }
+        $this->programIdentityConvergeStarts++;
+
+        return ['started' => true, 'unit' => 'azerioid-program-identity.service'];
     }
 
     public bool $phpPoolsMigrated = false;

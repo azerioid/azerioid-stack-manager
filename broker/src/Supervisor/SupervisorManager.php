@@ -88,8 +88,9 @@ final class SupervisorManager
 
         $spec = $this->buildSpec($name, $input, null);
         $vhost = $this->optionalVhostDomain($input);
-        if ($vhost !== null) {
-            $spec['vhost_domain'] = $vhost;
+        $spec['vhost_domain'] = $vhost;
+        $spec['user'] = $this->runUser($name, $vhost, $input);
+        if ($vhost !== null && $spec['user'] === SupervisedUser::USERNAME) {
             $this->grantDirectoryAccess($spec['directory']);
         }
 
@@ -121,7 +122,8 @@ final class SupervisorManager
         } else {
             $spec['vhost_domain'] = $before['vhost_domain'] ?? null;
         }
-        if ($spec['vhost_domain'] !== null) {
+        $spec['user'] = $this->runUser($name, $spec['vhost_domain'], $input);
+        if ($spec['vhost_domain'] !== null && $spec['user'] === SupervisedUser::USERNAME) {
             $this->grantDirectoryAccess($spec['directory']);
         }
 
@@ -252,11 +254,6 @@ final class SupervisorManager
             ? self::autorestartInput($input['autorestart'])
             : self::autorestartInput($existing['autorestart'] ?? true);
 
-        if (array_key_exists('user', $input) || array_key_exists('run_as', $input)) {
-            $requested = strtolower(trim((string) ($input['user'] ?? $input['run_as'] ?? '')));
-            self::rejectRunUser($requested !== '' ? $requested : 'root');
-        }
-
         return [
             'command' => $command,
             'directory' => $directory,
@@ -318,8 +315,8 @@ final class SupervisorManager
         $stderr = SupervisedUser::LOG_DIR . '/' . $name . '.stderr.log';
         $autostart = ($spec['autostart'] ?? true) ? 'true' : 'false';
         $autorestart = self::autorestartValue($spec['autorestart'] ?? true);
-        $user = SupervisedUser::USERNAME;
-        self::rejectRunUser($user);
+        $user = (string) ($spec['user'] ?? SupervisedUser::USERNAME);
+        self::rejectRunUser($user, $spec['vhost_domain'] ?? null);
 
         return <<<INI
 ; AZERIOID Stack Manager — managed supervisor program (do not edit manually)
@@ -348,7 +345,7 @@ INI;
         return [
             'command' => $spec['command'],
             'directory' => $spec['directory'],
-            'user' => SupervisedUser::USERNAME,
+            'user' => (string) ($spec['user'] ?? SupervisedUser::USERNAME),
             'autostart' => (bool) ($spec['autostart'] ?? true),
             'autorestart' => self::autorestartInput($spec['autorestart'] ?? true),
             'vhost_domain' => $spec['vhost_domain'] ?? null,
@@ -490,18 +487,47 @@ INI;
         return Validator::domain($raw);
     }
 
-    public static function rejectRunUser(string $user): void
+    /**
+     * A program runs as the site it is bound to, or as azerioid-supervised (A56). Nothing else:
+     * not a system account, and never another site's identity.
+     */
+    public static function rejectRunUser(string $user, ?string $vhostDomain = null): void
     {
         $user = strtolower(trim($user));
         if ($user === '' || in_array($user, self::FORBIDDEN_RUN_USERS, true)) {
             throw new BrokerException('Refusing privileged or disallowed run-as user for supervisor programs.', 3);
         }
-        if ($user !== SupervisedUser::USERNAME) {
-            throw new BrokerException(
-                'Only the dedicated supervised user (' . SupervisedUser::USERNAME . ') may run panel-managed processes.',
-                3
-            );
+        if ($user === SupervisedUser::USERNAME) {
+            return;
         }
+        if ($vhostDomain !== null && $user === \AzerioidPanel\Broker\Vhost\VhostUser::username($vhostDomain)) {
+            return;
+        }
+
+        throw new BrokerException(
+            'A panel-managed process runs as the site it belongs to, or as ' . SupervisedUser::USERNAME . '.',
+            3
+        );
+    }
+
+    /**
+     * The account the program runs as. An explicit request is only accepted when it names
+     * what the panel would choose anyway: a site-bound program cannot be moved to another account.
+     *
+     * @param  array<string, mixed>  $input
+     */
+    private function runUser(string $name, ?string $vhost, array $input): string
+    {
+        $user = ProgramIdentity::userFor($this->runtime, $vhost, $name);
+        if (array_key_exists('user', $input) || array_key_exists('run_as', $input)) {
+            $requested = strtolower(trim((string) ($input['user'] ?? $input['run_as'] ?? '')));
+            self::rejectRunUser($requested !== '' ? $requested : 'root', $vhost);
+            if ($requested !== $user) {
+                throw new BrokerException("This program runs as {$user}" . ($vhost !== null ? " (the account of {$vhost})" : '') . '; the run-as account cannot be chosen.', 3);
+            }
+        }
+
+        return $user;
     }
 
     private static function boolInput(mixed $value): bool

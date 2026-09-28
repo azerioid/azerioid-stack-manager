@@ -63,6 +63,7 @@ use AzerioidPanel\Broker\Actions\PhpOpcache;
 use AzerioidPanel\Broker\Actions\PhpTimeoutsEnsure;
 use AzerioidPanel\Broker\Actions\PhpVersions;
 use AzerioidPanel\Broker\Actions\SchedulerInstall;
+use AzerioidPanel\Broker\Actions\ProgramIdentityAction;
 use AzerioidPanel\Broker\Actions\SftpManage;
 use AzerioidPanel\Broker\Actions\SitePhpPool;
 use AzerioidPanel\Broker\Actions\ServiceControl;
@@ -279,6 +280,9 @@ final class Kernel
         'cron.job.disable' => CronManage::class,
         'cron.job.run' => CronManage::class,
         'cron.job.log' => CronManage::class,
+        'program.identity.status' => ProgramIdentityAction::class,
+        'program.identity.apply' => ProgramIdentityAction::class,
+        'program.identity.converge' => ProgramIdentityAction::class,
         'supervisor.program.list' => SupervisorProgram::class,
         'supervisor.program.create' => SupervisorProgram::class,
         'supervisor.program.update' => SupervisorProgram::class,

@@ -138,6 +138,11 @@ final class NodeRuntimesTest extends TestCase
         $conf = $this->programConf();
         $this->assertStringContainsString('PATH=/opt/azerioid-node/22/bin:', $conf);
         $this->assertStringContainsString('/opt/azerioid-node/22/bin/pm2-runtime start', $conf);
+        // A56: the app runs as the site, with PM2 state of its own outside the shared account.
+        $this->assertStringContainsString("user=az-vh-node-example-com\n", $conf);
+        $this->assertStringContainsString('PM2_HOME=/var/lib/azerioid-pm2/node-example-com ', $conf);
+        $this->assertSame(0700, $this->rt->modes['/var/lib/azerioid-pm2/node-example-com'] ?? null);
+        $this->assertSame(0711, $this->rt->modes['/var/lib/azerioid-pm2'] ?? null);
 
         [$code, $json] = $this->run_($kernel, 'vhost.pm2.node', ['node' => '24']);
         $this->assertSame(0, $code, json_encode($json));

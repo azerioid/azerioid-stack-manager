@@ -1359,3 +1359,41 @@ pool before deleting the identities.
   member of every group (A37/A38/A49); as such it can also connect to any site's PHP socket.
 - Adminer keeps its own pool.
 
+## A56 — Site programs run as their site; Docker gets a daemon per site
+
+**Status:** Part 1 (Octane, PM2, operator programs) accepted, shipped in **v2.6.0**. Part 2 (a rootless
+Docker daemon per Docker site) and part 3 (azerioid-supervised leaves every vhost group) follow.
+**Closes, when complete:** the azerioid-supervised residual recorded in A37/A38/A49/A55. **Operator
+decisions (2026-09-28):** a rootless `dockerd` per Docker site under the site's identity; programs bound
+to a site always run as that site, with no run-as choice.
+
+**Problem.** Every Supervisor program — each site's Octane worker, PM2 app, Docker container and the
+operator's own programs — ran as one account, `azerioid-supervised`, which A49 made a member of every
+vhost group so it could reach each site's files. Any one of those processes could therefore read and
+change every site (measured on the Ubuntu host before this change: it read and wrote another site's
+files), and could connect to every site's PHP socket (A55).
+
+**Part 1 — decision.**
+
+| Aspect | Decision |
+|--------|----------|
+| Run-as account | `ProgramIdentity::userFor`: a program bound to a site runs as the site's identity (`az-vh-*`); a program bound to no site, a Docker program (until part 2), a site still on the pre-A49 group, or a site put back by the migration runs as `azerioid-supervised`. Nothing else is accepted: a request for another account — root, a system account, another site's identity, or even `azerioid-supervised` for a site program — is refused |
+| Octane | composer, `artisan octane:install`, `octane:reload` and the worker run as the site. Instead of an ACL for the shared account, the app is handed to the site (`chown -R -h <identity>:<site group>`, `chmod -R g+rwX`) |
+| PM2 | runs as the site with `PM2_HOME=/var/lib/azerioid-pm2/<site>` (`0700`, the site's; the base `root:root 0711`) — the old home under `/var/lib/azerioid-supervised` is `0750` to that account alone |
+| Operator programs | bound to a site: run as it, no ACL for the shared account. Bound to none: unchanged |
+| Logs | stay in `/var/log/azerioid-supervised`; supervisord (root) writes them, not the program |
+
+**Migration.** `program.identity.converge`, started by the scheduler every five minutes in a transient unit
+(`azerioid-program-identity.service`), moves one program at a time: note its health (the site's HTTP
+answer for Octane/PM2, the Supervisor state for an operator's program), hand the site's top directory to
+the identity (what the shared account wrote there is its own), re-render and restart the program as the
+site, look again (five retries). A program that worked before and does not now goes back to
+`azerioid-supervised` at once, the reason recorded in `/var/lib/azerioid-panel/program-identity.json`,
+and is not retried automatically; `azerioid process identity apply --confirm` (typed `ISOLATE-PROGRAMS`,
+optionally `--domain=`) retries after a fix. State: `/etc/azerioid-panel/program-identity-migration.json`.
+`azerioid process identity status` is non-zero until every site program runs as its site;
+`verify-release.sh` checks it and that no Octane/PM2 program names the shared account.
+
+**Until parts 2 and 3.** `azerioid-supervised` still runs the Docker daemon and Docker programs, and stays
+a member of every vhost group; a Docker container's reach is therefore unchanged by part 1.
+

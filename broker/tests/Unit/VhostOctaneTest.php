@@ -205,7 +205,8 @@ CADDY;
             'command=/usr/bin/php8.4 artisan octane:start --server=frankenphp --host=127.0.0.1 --port=34000 --max-requests=250',
             $supervisorConf
         );
-        $this->assertStringContainsString('user=azerioid-supervised', $supervisorConf);
+        // A56: the worker runs as the site, never as the shared supervised account.
+        $this->assertStringContainsString('user=az-vh-app-example-com', $supervisorConf);
         $this->assertStringContainsString('directory=' . self::APP_DIR, $supervisorConf);
     }
 
@@ -326,7 +327,7 @@ CADDY;
         $shell = 'cd ' . escapeshellarg(self::APP_DIR)
             . " && exec '/usr/bin/php8.4' 'artisan' 'octane:reload'";
         $this->rt->script(
-            ['/usr/sbin/runuser', '-u', 'azerioid-supervised', '--', '/bin/bash', '-lc', $shell],
+            ['/usr/sbin/runuser', '-u', 'az-vh-app-example-com', '--', '/bin/bash', '-lc', $shell],
             1,
             '',
             'octane:reload failed'
