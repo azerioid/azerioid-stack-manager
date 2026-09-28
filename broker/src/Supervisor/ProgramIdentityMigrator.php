@@ -55,20 +55,24 @@ final class ProgramIdentityMigrator
         $shared = array_values(array_filter($programs, static fn (array $p): bool => $p['state'] === 'shared'));
         $running = $this->convergeRunning();
         $done = $pending === [];
+        // Part 3 is part of done: the shared account out of the site groups. Status must not
+        // say done in the second between the last move and the removal (seen in v2.7.0).
+        $detached = ProgramIdentity::detached($this->runtime) || $shared !== [];
 
         return [
-            'migrated' => $done && $shared === [],
+            'migrated' => $done && $shared === [] && $detached,
             'programs' => $programs,
             'pending' => array_column($pending, 'name'),
             'shared' => $shared,
             'last_attempt' => $this->readState(),
             'running' => $running,
-            'auto_eligible' => !$done && !$running,
+            'auto_eligible' => (!$done || !$detached) && !$running,
             'verdict' => match (true) {
-                $done && $shared === [] => 'OK: every site-bound program runs as its own site; none can open another site\'s files.',
+                $done && $shared === [] && $detached => 'OK: every site-bound program runs as its own site; none can open another site\'s files.',
                 $done => 'ATTENTION: ' . count($shared) . ' program(s) were put back on ' . SupervisedUser::USERNAME
                     . ' because they stopped working as their site (' . implode(', ', array_column($shared, 'name'))
                     . '). Fix them, then retry: azerioid process identity apply --confirm',
+                $done && $shared === [] => 'PENDING: every site program runs as its site; ' . SupervisedUser::USERNAME . ' still has to leave the site groups. It is done automatically, or now with: azerioid process identity apply --confirm',
                 default => 'PENDING: ' . count($pending) . ' program(s) to move to their site\'s account. '
                     . 'It is done automatically, or now with: azerioid process identity apply --confirm',
             },

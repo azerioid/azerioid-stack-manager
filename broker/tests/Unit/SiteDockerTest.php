@@ -124,7 +124,21 @@ final class SiteDockerTest extends TestCase
         $this->assertSame([self::USER, 'az-vh-other-example-com'], $out['detached_from']);
         $this->assertContains(['/usr/bin/gpasswd', '-d', 'azerioid-supervised', self::USER], $this->commands());
         $this->assertTrue(ProgramIdentity::detached($this->rt));
+        $this->assertTrue((new ProgramIdentityMigrator($this->rt, $this->cfg, 0))->status()['migrated']);
         $this->assertNotContains('azerioid-supervised', VhostUser::readerUsers($this->rt, $this->cfg), 'new sites no longer add it');
+    }
+
+    public function test_status_is_not_done_before_the_shared_account_left_the_groups(): void
+    {
+        $this->legacyDockerSite();
+        $migrator = new ProgramIdentityMigrator($this->rt, $this->cfg, 0);
+        $migrator->converge(true);
+        $this->rt->deleteFile(ProgramIdentity::DETACHED_MARKER);
+
+        $status = $migrator->status();
+
+        $this->assertFalse($status['migrated']);
+        $this->assertTrue($status['auto_eligible'], 'the converge finishes the removal');
     }
 
     public function test_a_docker_site_that_breaks_on_its_own_daemon_goes_back(): void
