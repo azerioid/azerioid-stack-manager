@@ -1251,3 +1251,9 @@ constructor called with its arguments swapped — no test restored a config part
 now. And a bundle's database part (`vhost/<domain>/<stamp>/db-<engine>-<name>`) was not recognised as a
 database by `backup.verify`, so `--deep` silently checked integrity only; bundle parts now carry their
 kind, database name and engine.
+
+**v2.3.3 addendum.** `verify-release` on the Ubuntu host after the disaster test: the restored site's
+identity existed again, but its cron log directory was still quarantined `root 0700` from the delete — its
+jobs' output redirection would fail and they would never run. `VhostUser::ensure` now hands an existing
+`/var/log/azerioid-cron/<identity>` back to the identity (`0750`), and the cron manager sets the mode as
+well as the owner whenever it prepares a directory.

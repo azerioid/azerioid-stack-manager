@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Vhost;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Cron\CronRenderer;
 use AzerioidPanel\Broker\Os\DistroPaths;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
@@ -93,6 +94,7 @@ final class VhostUser
 
         self::applyOwnership($runtime, $root, $username, $group);
         self::claimTop($runtime, $config, $root, $username, $group);
+        self::reclaimCronLogs($runtime, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
         if ($changed) {
             // The web server must not restart inside the request that created the vhost
@@ -140,6 +142,21 @@ final class VhostUser
             '/bin/sh', '-c',
             'find ' . escapeshellarg($root) . ' -type f -exec chmod 0660 {} +',
         ], null, 120);
+    }
+
+    /**
+     * Deleting a site quarantines its cron log directory root 0700 (A49-E1). When the site
+     * comes back under the same name (a bundle restore, a re-created vhost) the directory is
+     * its again — otherwise every job's output redirection fails and the job never runs.
+     */
+    private static function reclaimCronLogs(Runtime $runtime, string $username, string $group): void
+    {
+        $dir = CronRenderer::LOG_DIR . '/' . $username;
+        if (!$runtime->isDir($dir)) {
+            return;
+        }
+        $runtime->exec(['/usr/bin/chown', '-h', $username . ':' . $group, $dir], null, 30);
+        $runtime->exec(['/usr/bin/chmod', '0750', $dir], null, 30);
     }
 
     /**
