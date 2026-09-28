@@ -246,6 +246,28 @@ final class VhostIsolationTest extends TestCase
         $this->assertStringContainsString('apply --confirm', $result['reason']);
     }
 
+    public function test_a_failure_recorded_by_an_older_release_is_retried_once_automatically(): void
+    {
+        $this->legacyVhost('a.test');
+        $this->rt->files['/usr/local/lib/azerioid-panel/VERSION'] = "2.0.8\n";
+        $this->rt->files[VhostIsolationMigrator::STATE_FILE] = json_encode(['result' => 'failed', 'error' => 'x', 'version' => '2.0.7']);
+
+        $this->assertTrue($this->migrator()->converge(false)['started']);
+
+        $this->rt->files[VhostIsolationMigrator::STATE_FILE] = json_encode(['result' => 'failed', 'error' => 'x', 'version' => '2.0.8']);
+        $this->assertFalse($this->migrator()->converge(false)['started'], 'a failure of this release still stops it');
+    }
+
+    public function test_quarantine_clears_the_setgid_bit(): void
+    {
+        $this->newVhost('live.test');
+        $this->orphanDir('/data/www/gone.test', '981', '971', 'az-vh-live-test', 'azerioid-vhosts', '2770');
+
+        $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+
+        $this->assertSame('700', $this->treeMode['/data/www/gone.test']);
+    }
+
     public function test_converge_hands_off_to_its_own_unit(): void
     {
         $this->legacyVhost('a.test');
@@ -387,7 +409,7 @@ final class VhostIsolationTest extends TestCase
     {
         $this->newVhost('live.test');
         $this->orphanDir('/data/www/gone.test', '981', '971', 'az-vh-live-test', 'azerioid-vhosts', '2770');
-        $this->failing[] = '/usr/bin/chmod 0700 /data/www/gone.test';
+        $this->failing[] = '/usr/bin/chmod u=rwx,go=,ug-s /data/www/gone.test';
 
         try {
             $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
@@ -611,7 +633,13 @@ final class VhostIsolationTest extends TestCase
             case '/usr/bin/chmod':
                 $path = end($c);
                 $old = $this->treeMode[$path] ?? '2770';
-                $this->treeMode[$path] = $c[1] === 'o-rwx' ? substr($old, 0, -1) . '0' : ltrim($c[1], '0');
+                // GNU chmod: a numeric mode keeps a directory's setuid/setgid bits.
+                $this->treeMode[$path] = match (true) {
+                    $c[1] === 'o-rwx' => substr($old, 0, -1) . '0',
+                    $c[1] === 'u=rwx,go=,ug-s' => '700',
+                    strlen(ltrim($c[1], '0')) === 3 && strlen($old) === 4 => $old[0] . ltrim($c[1], '0'),
+                    default => ltrim($c[1], '0'),
+                };
 
                 return $this->ok();
             case '/usr/bin/find':
