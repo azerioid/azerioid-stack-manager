@@ -43,6 +43,7 @@ final class SiteDockerTest extends TestCase
             . self::DOMAIN . " {\n    root * " . self::ROOT . "\n    file_server\n}\n";
         $this->rt->dirs[self::ROOT] = true;
         $this->rt->dirs['/run/user/1005'] = true;
+        $this->rt->dirs['/run/user/1001'] = true;
         $this->rt->files[$this->cfg->managedComponentsPath] = json_encode(['components' => [
             'supervisor' => ['unit' => 'supervisor'], 'docker' => ['unit' => ''],
         ]]);
@@ -125,7 +126,21 @@ final class SiteDockerTest extends TestCase
         $this->assertContains(['/usr/bin/gpasswd', '-d', 'azerioid-supervised', self::USER], $this->commands());
         $this->assertTrue(ProgramIdentity::detached($this->rt));
         $this->assertTrue((new ProgramIdentityMigrator($this->rt, $this->cfg, 0))->status()['migrated']);
+        // Processes keep the groups they started with: the shared daemon and the shared
+        // account's programs restart after the removal.
+        $this->assertContains(['/usr/bin/systemctl', 'restart', 'user@1001.service'], $this->commands());
         $this->assertNotContains('azerioid-supervised', VhostUser::readerUsers($this->rt, $this->cfg), 'new sites no longer add it');
+    }
+
+    public function test_a_removal_by_an_older_release_is_done_again(): void
+    {
+        $this->legacyDockerSite();
+        $migrator = new ProgramIdentityMigrator($this->rt, $this->cfg, 0);
+        $migrator->converge(true);
+        $this->rt->files[ProgramIdentity::DETACHED_MARKER] = "2026-09-28T14:50:59+00:00\n";
+
+        $this->assertFalse($migrator->status()['migrated']);
+        $this->assertTrue($migrator->status()['auto_eligible']);
     }
 
     public function test_status_is_not_done_before_the_shared_account_left_the_groups(): void

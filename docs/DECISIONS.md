@@ -1434,3 +1434,13 @@ program move and the removal from the site groups, and reported the account stil
 a host with every program moved but the marker missing is still eligible for the automatic run, which
 finishes the removal (it also covers a host that never had a site program at all).
 
+**v2.7.2 addendum.** Removing an account from `/etc/group` does not change a process that is already
+running: on the Ubuntu host the idle shared Docker daemon (started before the removal) still held four site
+groups, and two leftover test programs running as `azerioid-supervised` held the pre-A49 `azerioid-vhosts`
+group, which one leftover test directory (not a vhost, so never quarantined) still used. The removal now
+also takes the account out of `azerioid-vhosts` when no site identity still has it as its own group, then
+restarts the account's user manager (the shared daemon) and every Supervisor program whose config runs as
+it, managed or not. The marker records the removal's version (2); a host whose marker is older does the
+removal again automatically. `verify-release.sh` now also checks that no running process of the account
+holds a site group.
+

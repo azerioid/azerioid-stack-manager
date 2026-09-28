@@ -323,7 +323,16 @@ fi
 # Part 3: the shared account is in no site's group once every site program has moved.
 SUP_GROUPS="$(id -nG azerioid-supervised 2>/dev/null | tr ' ' '\n' | grep -c '^az-vh-' || true)"
 echo "SUPERVISED_SITE_GROUPS=${SUP_GROUPS}"
-if [[ "${SUP_GROUPS}" == "0" ]] || ! printf '%s' "${PROG_OUT}" | grep -q '"migrated":true'; then
+# A process keeps the groups it started with: none of the shared account's may hold a site group.
+SITE_GIDS=" $(getent group | awk -F: '$1 ~ /^az-vh-/ {printf "%s ", $3}')"
+SUP_PROC_SITE=0
+for pid in $(pgrep -u azerioid-supervised 2>/dev/null); do
+    for g in $(awk '/^Groups:/ {for (i = 2; i <= NF; i++) print $i}' "/proc/${pid}/status" 2>/dev/null); do
+        [[ "${SITE_GIDS}" == *" ${g} "* ]] && SUP_PROC_SITE=$((SUP_PROC_SITE + 1))
+    done
+done
+echo "SUPERVISED_PROCESS_SITE_GROUPS=${SUP_PROC_SITE}"
+if { [[ "${SUP_GROUPS}" == "0" ]] && [[ "${SUP_PROC_SITE}" == "0" ]]; } || ! printf '%s' "${PROG_OUT}" | grep -q '"migrated":true'; then
     echo "CHECK_SUPERVISED_OUT_OF_SITES=pass"
 else
     echo "CHECK_SUPERVISED_OUT_OF_SITES=fail"

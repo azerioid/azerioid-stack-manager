@@ -230,17 +230,58 @@ final class ProgramIdentityMigrator
         }
         $left = [];
         $keep = array_map(static fn (string $d): string => VhostUser::docrootGroup($this->runtime, $d), array_keys(ProgramIdentity::shared($this->runtime)));
+        // The pre-A49 shared group too, once no site identity still has it as its own.
+        $legacyInUse = $this->legacyIdentityExists();
         $groups = $this->runtime->exec(['/usr/bin/id', '-nG', SupervisedUser::USERNAME], null, 10);
         foreach (preg_split('/\s+/', trim($groups->stdout)) ?: [] as $group) {
-            if (str_starts_with($group, VhostUser::PREFIX) && !in_array($group, $keep, true)) {
+            $site = str_starts_with($group, VhostUser::PREFIX) && !in_array($group, $keep, true);
+            $legacy = $group === VhostUser::LEGACY_GROUP && !$legacyInUse;
+            if ($site || $legacy) {
                 $this->runtime->exec(['/usr/bin/gpasswd', '-d', SupervisedUser::USERNAME, $group], null, 30);
                 $left[] = $group;
             }
         }
+        $this->restartSharedProcesses();
         $this->runtime->mkdir(dirname(ProgramIdentity::DETACHED_MARKER), 0750);
-        $this->runtime->writeFile(ProgramIdentity::DETACHED_MARKER, $this->runtime->now() . "\n", 0600);
+        $this->runtime->writeFile(ProgramIdentity::DETACHED_MARKER, ProgramIdentity::DETACH_VERSION . "\n" . $this->runtime->now() . "\n", 0600);
 
         return $left;
+    }
+
+    private function legacyIdentityExists(): bool
+    {
+        $passwd = $this->runtime->exec(['/usr/bin/getent', 'passwd'], null, 10);
+        foreach (explode("\n", $passwd->stdout) as $line) {
+            $row = explode(':', trim($line));
+            if (count($row) >= 4 && str_starts_with($row[0], VhostUser::PREFIX)
+                && VhostUser::primaryGroup($this->runtime, $row[0]) === VhostUser::LEGACY_GROUP) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * A running process keeps the groups it started with. Restart what runs as the shared
+     * account — its user manager (the shared Docker daemon, idle by now) and every Supervisor
+     * program whose config names it, managed or not — so none still holds a site group.
+     */
+    private function restartSharedProcesses(): void
+    {
+        $uid = $this->idOf('-u', SupervisedUser::USERNAME);
+        if ($uid !== null && $this->runtime->isDir('/run/user/' . $uid)) {
+            $this->runtime->exec(['/usr/bin/systemctl', 'restart', 'user@' . $uid . '.service'], null, 120);
+        }
+        foreach (['/etc/supervisor/conf.d/azerioid-*.conf', '/etc/supervisord.d/azerioid-*.ini'] as $glob) {
+            foreach ($this->runtime->glob($glob) as $conf) {
+                $body = $this->runtime->readFile($conf);
+                if (preg_match('/^user=' . preg_quote(SupervisedUser::USERNAME, '/') . '\s*$/m', $body) === 1
+                    && preg_match('/^\[program:([A-Za-z0-9_.-]+)\]/m', $body, $m) === 1) {
+                    $this->runtime->exec(['/usr/bin/supervisorctl', 'restart', $m[1]], null, 60);
+                }
+            }
+        }
     }
 
     /** @return array<string,mixed> */
