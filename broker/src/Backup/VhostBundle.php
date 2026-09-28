@@ -505,7 +505,7 @@ final class VhostBundle
                 foreach ((new CronStore($this->runtime))->all() as $job) {
                     $have[$job->owner . "\0" . $job->schedule . "\0" . $job->command] = true;
                 }
-                $cron = new CronManager($this->config, $this->runtime);
+                $cron = new CronManager($this->runtime, $this->config);
                 $added = 0;
                 foreach ($jobs as $job) {
                     if (!isset($have[$domain . "\0" . $job['schedule'] . "\0" . $job['command']])) {

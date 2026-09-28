@@ -1244,3 +1244,10 @@ files, and a `0755` top directory reopened the site to every other one; the tree
 the live tree it replaces (`chown -R --reference`) and the top directory its mode. And a vhost created
 with a nested docroot (`…/app/public`) left `…/app` root's `0755` until the isolation converge closed
 it; `VhostUser::ensure` now gives a root-owned top directory to the site's identity (`2770`).
+
+**v2.3.2 addendum.** The disaster test on the Ubuntu host (vhost deleted, site restored from its bundle
+alone) brought the site, its identity and its database back, but restoring the cron jobs failed on a
+constructor called with its arguments swapped — no test restored a config part with jobs in it; one does
+now. And a bundle's database part (`vhost/<domain>/<stamp>/db-<engine>-<name>`) was not recognised as a
+database by `backup.verify`, so `--deep` silently checked integrity only; bundle parts now carry their
+kind, database name and engine.
