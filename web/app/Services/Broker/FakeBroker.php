@@ -518,6 +518,7 @@ final class FakeBroker
                 'backup.db', 'backup.files', 'backup.caddy' => $this->backupRun($action, $stdin),
                 'backup.list' => $this->backupList($stdin),
                 'backup.prune' => ['deleted' => [], 'keep' => 14],
+                'search.status', 'search.indices', 'search.password.reset' => $this->search($action),
                 'deploy.config' => $this->deployConfig((string) ($args[0] ?? '')),
                 'deploy.config.set' => $this->deployConfigSet((string) ($args[0] ?? ''), $stdin),
                 'deploy.key.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
@@ -1169,6 +1170,21 @@ final class FakeBroker
         $this->phpPoolOpenBasedir[$domain] = (bool) ($stdin['open_basedir'] ?? true);
 
         return ['domain' => $domain, 'open_basedir' => $this->phpPoolOpenBasedir[$domain], 'isolated' => true, 'reason' => null];
+    }
+
+    /** @return array<string,mixed> */
+    private function search(string $action): array
+    {
+        if (! isset($this->fakeInstalledComponents['elasticsearch'])) {
+            throw new BrokerCallException('Elasticsearch is not installed. Install it from Components first.', 3);
+        }
+
+        return match ($action) {
+            'search.status' => ['url' => 'http://127.0.0.1:9200', 'version' => '9.1.0', 'cluster' => 'elasticsearch', 'status' => 'green',
+                'nodes' => 1, 'active_shards' => 2, 'unassigned_shards' => 0, 'heap_used_percent' => 40, 'heap_max_mb' => 1024],
+            'search.indices' => ['indices' => [['name' => 'products', 'health' => 'green', 'docs' => 1200, 'size' => '1048576']]],
+            default => ['user' => 'elastic', 'password' => 'fakePassw0rd', 'url' => 'http://127.0.0.1:9200', 'note' => 'Shown once.'],
+        };
     }
 
     /** @var array<string, array<string,mixed>> git deploy config + state per domain (A53) */
@@ -3045,7 +3061,7 @@ final class FakeBroker
     {
         return [
             'redis', 'mariadb', 'postgresql', 'nginx', 'apache', 'supervisor',
-            'memcached', 'mongodb', 'nodejs', 'nodejs-20', 'nodejs-22', 'nodejs-24', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail', 'docker',
+            'memcached', 'mongodb', 'nodejs', 'nodejs-20', 'nodejs-22', 'nodejs-24', 'elasticsearch', 'php-8.1', 'php-8.2', 'php-8.3', 'adminer', 'mail', 'docker',
         ];
     }
 

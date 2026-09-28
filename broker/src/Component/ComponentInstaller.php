@@ -13,6 +13,7 @@ use AzerioidPanel\Broker\Mail\MailProvisioner;
 use AzerioidPanel\Broker\Mail\MailState;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
+use AzerioidPanel\Broker\Search\ElasticsearchSetup;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Tool\AdminerTool;
@@ -37,6 +38,12 @@ final class ComponentInstaller
     public function install(string $componentId, string $operationId, array $options = []): array
     {
         $componentId = Validator::componentId($componentId);
+        // A54 lab override: a host below the physical-RAM floor may still take the component when
+        // the operator types LOW-MEMORY-LAB (a test host, not production).
+        $lowMemory = self::boolOption($options['low_memory'] ?? false);
+        if ($lowMemory) {
+            Validator::typedConfirm((string) ($options['confirm'] ?? ''), Validator::LOW_MEMORY_CONFIRM);
+        }
         $definition = $this->definition($componentId);
         $this->assertInstallable($definition);
 
@@ -44,7 +51,7 @@ final class ComponentInstaller
         $distro = $definition['distros'][$os->distroKey];
         $log = $this->logger($operationId);
 
-        $preflight = (new ComponentPreflight($this->config, $this->runtime, $os))->check($definition);
+        $preflight = (new ComponentPreflight($this->config, $this->runtime, $os))->check($definition, $lowMemory);
         foreach (is_array($preflight['warnings'] ?? null) ? $preflight['warnings'] : [] as $warning) {
             $log->warn((string) $warning);
         }
@@ -119,6 +126,9 @@ final class ComponentInstaller
                 (new MailProvisioner($this->config, $this->runtime, $paths))->provision($log);
                 $firewall = (new MailFirewall($this->runtime))->open();
                 $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
+            }
+            if ($componentId === 'elasticsearch') {
+                (new ElasticsearchSetup($this->config, $this->runtime))->configure($log);
             }
             if (NodeRuntimes::isComponent($componentId)) {
                 (new NodeRuntimes($this->config, $this->runtime))->install($definition, $log);
@@ -207,6 +217,13 @@ final class ComponentInstaller
             }
             if ($componentId === 'mail') {
                 $this->teardownMail($os, $options, $log);
+            }
+            if ($componentId === 'elasticsearch') {
+                // Data in /var/lib/elasticsearch is kept (A29); the credential goes with the service.
+                $this->runtime->exec(['/usr/bin/systemctl', 'disable', '--now', ElasticsearchSetup::UNIT], null, 120);
+                if ($this->runtime->fileExists(ElasticsearchSetup::CREDENTIALS)) {
+                    $this->runtime->deleteFile(ElasticsearchSetup::CREDENTIALS);
+                }
             }
             if (($major = NodeRuntimes::majorOfComponent($componentId)) !== null) {
                 (new NodeRuntimes($this->config, $this->runtime))->uninstall($major, $log);
@@ -343,6 +360,11 @@ final class ComponentInstaller
      * @param  array<string,mixed>  $options
      * @return array<string,mixed>
      */
+    private static function boolOption(mixed $value): bool
+    {
+        return $value === true || in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+    }
+
     private function redactInstallOptions(array $options): array
     {
         foreach (['confirm', 'password', 'token', 'secret'] as $key) {

@@ -1298,6 +1298,38 @@ upload-pack's own command line (`--upload-pack='git -c safe.directory=… upload
 the site's instead was rejected: a site could then plant hooks or config in it that root would run on
 the next fetch. The failure message now says whether the files were changed at all.
 
+## A54 — Elasticsearch: single node, loopback, password, and a hard physical-RAM floor
+
+**Status:** Accepted (operator decisions 2026-09-26/28: Elasticsearch under SSPL, single node, host-wide;
+hard RAM block with swap not counted; minimum **2 GB**; security on; heap half the RAM), B7 / request #1.
+**Exception to:** A31 (combined MemAvailable + swap headroom).
+
+| Aspect | Decision |
+|--------|----------|
+| Source | Elastic's own repository, **9.x**, signing key refused unless its fingerprint is `46095ACC8548582C1A2699A9D27D666CD88E42B4` (checked with `gpg --show-keys` before the key is trusted; A10 pattern) |
+| Licence | SSPL, stated in the registry description as for MongoDB |
+| Preflight | New registry field `preflight.min_physical_ram_mb` (2048): **MemTotal**, not MemAvailable, and swap not counted — a JVM heap under swap pressure is killed, not slowed. The message states what was measured. This is the documented exception to A31, which stays the rule for everything else |
+| Binding | `network.host`, `http.host`, `transport.host` 127.0.0.1; `http.port` 9200; `discovery.type: single-node` |
+| Security | On, with a generated password for `elastic` (`elasticsearch-reset-password -b -s`), stored root-only (`/etc/azerioid-panel/elasticsearch.json`, 0600), passed to curl on stdin (`-K -`), shown to the operator only when (re)set. Loopback alone is not a boundary: every site on the host can reach 127.0.0.1 (R1) |
+| HTTP TLS | Off: the traffic never leaves the host, and applications then need no CA file. Transport TLS as the package configured it |
+| Config | `elasticsearch.yml` rewritten line by line: the package's security auto-configuration adds `cluster.initial_master_nodes` (refused alongside `discovery.type: single-node`), `http.host: 0.0.0.0` and an `xpack.security.http.ssl:` block — these and any other occurrence of a setting the panel owns are removed, then one managed block is appended. Idempotent |
+| Heap | `jvm.options.d/azerioid-heap.options`: half the physical RAM, at least 512 MB, at most 31 GB (compressed pointers) |
+| Surfaces | Components card; **Search** page (cluster health, heap, shards, indices, set a new password — shown once); `azerioid search status|indices|password-reset`. No index editor, query console or snapshots (out of scope) |
+| Uninstall | Packages removed, unit disabled, stored credential deleted; data in `/var/lib/elasticsearch` kept (A29) |
+
+**Verification status:** the preflight refusal is verified on both test hosts (961 MB and 453 MB). A
+full install needs a host with ≥2 GB, requested from the operator; B7 is not released until that
+passes.
+
+**Addendum (v2.8.0) — lab override.** The operator's test host is a 1 GB droplet ("it is a lab server"),
+which reports about 765 MB MemTotal. The 2 GB floor stays the default and still refuses it. A test host may
+override it explicitly: install options `low_memory=true` and the typed confirm `LOW-MEMORY-LAB`
+(`azerioid component install elasticsearch --option low_memory=true --option confirm=LOW-MEMORY-LAB`), down
+to a second registry floor, `preflight.lab_min_physical_ram_mb` (700). The preflight then warns loudly
+instead of refusing, and below 2 GB the heap is fixed at **256 MB** instead of half the RAM — half of 765 MB
+would leave the panel, PHP and the web server nothing. Not for production: under load the kernel will kill
+the JVM. The override is recorded in the managed manifest's install options.
+
 ## A55 — One PHP-FPM pool per site, running as the site
 
 **Status:** Accepted, shipped in **v2.5.0**. **Closes:** the site PHP residual A49 recorded. **Operator

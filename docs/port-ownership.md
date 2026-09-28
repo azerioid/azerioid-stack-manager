@@ -14,6 +14,7 @@ The panel always uses a dedicated Caddy vhost snippet — never a second Caddy p
 | **Nginx engine** | `127.0.0.1:8082` only | Same pattern as Apache. |
 | **Laravel Octane worker** | `127.0.0.1:34000–34999` | Opt-in per vhost (ADR A35). FrankenPHP under Supervisor; Caddy `reverse_proxy` with the same headers as a `type=proxy` site. One port per Octane vhost. |
 | **PM2 (Node) worker** | `127.0.0.1:36000–36999` | Opt-in per vhost (ADR A16/A37). `pm2-runtime` under Supervisor; Caddy `reverse_proxy` like Octane/proxy. One port per PM2 vhost (cluster workers share that listen port via Node cluster). Distinct from ttyd terminals (35000–35999). |
+| **Elasticsearch** | `127.0.0.1:9200` (HTTP) and `127.0.0.1:9300` (transport) | Opt-in component (ADR A54). Single node, security on (password for `elastic`), HTTP TLS off because it never leaves the host. Needs ≥2 GB physical RAM. |
 | **Docker (rootless) container** | `127.0.0.1:37000–37999` | Opt-in per vhost (ADR A38). Rootless `dockerd` as `azerioid-supervised`; Supervisor runs `docker`/`compose` publishing only loopback. Caddy `reverse_proxy` like Octane/PM2/proxy. One host port per Docker vhost. Never `docker` group / rootful socket for panel workloads. |
 | **Panel Caddy vhost** | `127.0.0.1:3169` (optional public HTTPS on the host IP) plus optional white-label hostname on `:443` | Unaffected by site-engine choice. A catch-all on `:3169` returns **421** so site vhosts never accidentally match the panel port. |
 

@@ -29,6 +29,7 @@
                         ['databases', 'Databases', '/databases'],
                         ...(($adminerInstalled ?? false) ? [['database-admin', 'Database Admin', '/tools/adminer/']] : []),
                         ['mail', 'Mail', '/mail'],
+                        ['search', 'Search', '/search'],
                         ['backups', 'Backups', '/backups'],
                         ['services', 'Services', '/services'],
                         ['processes', 'Processes', '/processes'],

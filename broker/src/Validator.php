@@ -300,6 +300,7 @@ final class Validator
     public const ISOLATE_VHOSTS_CONFIRM = 'ISOLATE-VHOSTS';
     public const ISOLATE_PHP_CONFIRM = 'ISOLATE-PHP';
     public const ISOLATE_PROGRAMS_CONFIRM = 'ISOLATE-PROGRAMS';
+    public const LOW_MEMORY_CONFIRM = 'LOW-MEMORY-LAB';
 
     public const REPLACE_MTA_CONFIRM = 'REPLACE-MTA';
 

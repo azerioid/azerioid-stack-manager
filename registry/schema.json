@@ -125,6 +125,14 @@
           "items": {
             "type": "string"
           }
+        },
+        "min_physical_ram_mb": {
+          "type": "integer",
+          "description": "Hard minimum of physical RAM (MemTotal); swap is not counted. For JVM services (ADR A54)."
+        },
+        "lab_min_physical_ram_mb": {
+          "type": "integer",
+          "description": "Lower floor a test host may use with low_memory=true and the typed confirm LOW-MEMORY-LAB (ADR A54 addendum)."
         }
       },
       "additionalProperties": false
