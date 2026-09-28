@@ -14,6 +14,7 @@ use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
+use AzerioidPanel\Broker\Vhost\VhostIsolationMigrator;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -64,11 +65,20 @@ final class VhostDel
 
         $terminal = new TerminalManager($config, $runtime);
         $terminal->stopForVhost($domain);
+        $root = self::vhostRoot($domain, $runtime, $config);
+        $username = VhostUser::username($domain);
         VhostUser::deprovision($runtime, $config, $domain);
 
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);
         if ($mailDropped !== null) {
             $result['mail_dropped'] = $mailDropped;
+        }
+        // The files are kept, but the uid and gid they carry now belong to nobody and will
+        // be handed to the next account created (A49). Close them before that happens.
+        try {
+            $result['quarantined'] = (new VhostIsolationMigrator($runtime, $config))->quarantineRemains($root, $username);
+        } catch (\Throwable) {
+            $result['quarantined'] = [];
         }
 
         return $result;
@@ -99,6 +109,22 @@ final class VhostDel
         Validator::typedConfirm((string) ($input['confirm'] ?? ''), Validator::DROP_MAIL_CONFIRM);
 
         return (new MailManager($config, $runtime))->purgeDomain($domain);
+    }
+
+    private static function vhostRoot(string $domain, Runtime $runtime, Config $config): string
+    {
+        try {
+            foreach (WebServers::for($config)->listVhosts($runtime, $config) as $vhost) {
+                if (($vhost['domain'] ?? '') === $domain) {
+                    return (string) ($vhost['root'] ?? '');
+                }
+            }
+        } catch (\Throwable) {
+            // Fall through to the identity's record.
+        }
+        $meta = VhostUser::load($runtime, dirname($config->managedComponentsPath) . '/vhost-users.json');
+
+        return (string) ($meta['users'][$domain]['root'] ?? '');
     }
 
     private static function boolInput(mixed $value): bool
