@@ -126,6 +126,16 @@ final class VhostIsolationTest extends TestCase
         $this->assertSame([], $this->commandsStartingWith('/usr/sbin/usermod'));
     }
 
+    public function test_a_site_restored_under_its_old_name_gets_its_quarantined_cron_logs_back(): void
+    {
+        $this->rt->dirs['/var/log/azerioid-cron/az-vh-back-test'] = true;
+
+        $this->newVhost('back.test');
+
+        $chown = array_values(array_filter($this->rt->execLog, static fn (array $e): bool => $e['command'] === ['/usr/bin/chown', '-h', 'az-vh-back-test:az-vh-back-test', '/var/log/azerioid-cron/az-vh-back-test']));
+        $this->assertCount(1, $chown);
+    }
+
     public function test_deleting_a_vhost_removes_its_group(): void
     {
         $this->newVhost('gone.test');

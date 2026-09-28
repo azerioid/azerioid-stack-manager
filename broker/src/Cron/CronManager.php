@@ -280,6 +280,9 @@ final class CronManager
         $this->runtime->mkdir($dir, 0750);
         if ($runsAs !== 'root') {
             $this->runtime->chown($dir, $runsAs, $runsAs);
+            // A directory left by a deleted site is quarantined root 0700 (A49-E1); a site
+            // restored under the same name gets it back usable.
+            $this->runtime->chmod($dir, 0750);
         }
     }
 
