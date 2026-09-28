@@ -1044,7 +1044,11 @@ final class DockerManager
     /**
      * Bind-mounted data directories live inside the app, so the site's own identity, its
      * backups and the File Manager see them. A missing one is created for the container:
-     * owned by azerioid-supervised (root inside a rootless container), group the vhost's.
+     * owned by azerioid-supervised (root inside a rootless container), group the vhost's,
+     * 2775. The "other" read/search bit is for the container's non-root processes (nginx's
+     * worker is uid 101 inside, an unmapped subuid outside); on the host it opens nothing,
+     * because the site's top directory is closed to everyone else (A49-E1) and a bind mount
+     * starts inside that gate.
      *
      * @param  array<string, mixed>  $spec
      */
@@ -1053,10 +1057,10 @@ final class DockerManager
         foreach ($spec['volumes'] ?? [] as $volume) {
             $path = rtrim($spec['app_dir'], '/') . '/' . $volume['host'];
             if (!$this->runtime->isDir($path)) {
-                $this->runtime->mkdir($path, 02770);
+                $this->runtime->mkdir($path, 02775);
                 if ($this->runtime->getuid() === 0) {
                     $this->runtime->chown($path, SupervisedUser::USERNAME, VhostUser::docrootGroup($this->runtime, $spec['domain']));
-                    $this->runtime->chmod($path, 02770);
+                    $this->runtime->chmod($path, 02775);
                 }
             }
             // A symlink planted in the app must not turn a mount into a path outside it.
