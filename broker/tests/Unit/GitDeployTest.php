@@ -128,6 +128,7 @@ final class GitDeployTest extends TestCase
         $site = array_map(static fn (array $c): string => (string) end($c), $this->commands(static fn (array $c): bool => ($c[0] ?? '') === '/usr/sbin/runuser'));
         $this->assertStringContainsString("cd '/data/www/app.test'", $site[0], 'the whole site directory, not only public/');
         $this->assertStringContainsString('git checkout --quiet --force --detach', $site[0]);
+        $this->assertStringContainsString("--upload-pack='git -c safe.directory=/var/lib/azerioid-deploy/app-test/mirror.git upload-pack'", $site[0]);
         $this->assertStringContainsString('php artisan migrate --force', $site[1]);
         $this->assertStringContainsString('/usr/bin/php8.4', $site[1], 'the site\'s own PHP version');
         $state = $deploy->state(self::DOMAIN);
@@ -144,11 +145,27 @@ final class GitDeployTest extends TestCase
             $deploy->deploy(self::DOMAIN, []);
             $this->fail('expected failure');
         } catch (BrokerException $e) {
-            $this->assertStringContainsString('roll back', $e->getMessage());
+            $this->assertStringContainsString('roll back', $e->getMessage(), 'checked out, then the command failed');
         }
         $state = $deploy->state(self::DOMAIN);
         $this->assertSame('failed', $state['history'][0]['status']);
         $this->assertNull($state['current'] ?? null);
+    }
+
+    public function test_a_failed_checkout_says_the_files_were_not_changed(): void
+    {
+        $deploy = $this->configured('none');
+        $previous = $this->rt->execFn;
+        $this->rt->execFn = static fn (array $c, ?string $stdin): ?ExecResult => ($c[0] ?? '') === '/usr/sbin/runuser'
+            ? new ExecResult($c, 128, '', 'fatal: Could not read from remote repository.')
+            : $previous($c, $stdin);
+
+        try {
+            $deploy->deploy(self::DOMAIN, []);
+            $this->fail('expected failure');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('were not changed', $e->getMessage());
+        }
     }
 
     public function test_a_scheduled_deploy_of_the_same_commit_does_nothing(): void
