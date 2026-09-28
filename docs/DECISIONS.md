@@ -1076,3 +1076,45 @@ the migration rolled back cleanly on the first host it ran on. The quarantine mo
 (`u=rwx,go=,ug-s`), checked on Ubuntu and Rocky. A failure recorded by an older release no longer
 blocks automatic convergence: a new release tries once on its own, and only a failure of the running
 release waits for an operator.
+
+## A50 — Docker workload depth: compose service, environment, data, restart policy, private registries
+
+**Status:** Accepted (operator decisions 2026-09-28, roadmap Qrup 9), shipped in **v2.1.0** (B4 part 1).
+**Amends:** A38 (per-vhost rootless Docker). **Relates to:** A21 (secrets as root-only files), A44
+(config is truth), A47 (broker-owned state).
+
+**Problems (roadmap G8, G7, #6):**
+
+1. **G8 — the port went to the wrong service.** `firstComposeService()` scanned the compose file line by
+   line and returned the first key under `services:`, so a file listing `db:` before `web:` published the
+   site's port on the database. Found while fixing it: **compose mode had never started on a real host.**
+   The ports override was written to `/var/lib/azerioid-panel/docker-meta` (root 0750), which
+   `azerioid-supervised` — the account `docker compose` runs as — cannot enter (`Permission denied`,
+   confirmed on the Ubuntu host). Every compose enable since A38 (v1.5.0) failed at build.
+2. **G7 — image mode was stateless and unconfigurable:** `docker run --rm --name … -p … <image>` with no
+   environment, no volumes, no restart choice. Any stateful image lost its data on every restart.
+3. **#6 — private images could not be pulled** at all.
+
+**Decisions:**
+
+| Aspect | Decision |
+|--------|----------|
+| Service selection | Asked of **compose itself**: `docker compose config --services`, run as `azerioid-supervised` in the app directory. It resolves profiles, `include`, `extends` and interpolation, which no YAML parser of ours would. The roadmap proposed parsing panel-side with a YAML library; compose's own answer is strictly better and needs no parser anywhere. An explicit choice must be in the list; with no choice only a single-service file is accepted, otherwise enable is refused with the list |
+| Where workload settings live | **Broker-owned files** under `/var/lib/azerioid-docker/<vhost>/`, not the panel database and not the managed comment. Supervisor restarts a container without asking the panel, so what it starts from must already be on the host (the A47 reasoning). The roadmap's `vhost_secrets` table would have been a second copy of the same secrets, with nothing to reconcile it against — so it is **not built**; the managed comment keeps only what serving needs |
+| Layout | Directory `root:azerioid-supervised 0750`; `settings.json` root 0600 (service, restart, volumes, registry); `env` and `ports.yml` `root:azerioid-supervised 0640` — readable by the docker CLI, **not writable** by it, so a container with a bind mount cannot rewrite its own configuration |
+| Environment | `KEY=VALUE` file; image mode passes `--env-file <path>`, compose mode writes `environment:` for the chosen service into the override (YAML double-quoted, `$` doubled so compose does not interpolate). Values never on a command line (`ps`), redacted from both audit logs (`env` key), dropped from the operations table, and the panel saves them with their own synchronous call so they never sit in a queued job's payload. Single-line values only: a line break would start another variable |
+| Readability of `env` by `azerioid-supervised` | Accepted, inside A38's stated blast radius: `docker inspect` already shows every container's environment to that account. Encryption at rest on the host would need a key on the same host; it would be theatre |
+| Data | **Bind mounts from inside the app directory** (operator decision: not named volumes), so the data is part of the site's files, its backups and its File Manager. `host` is relative (letters, digits, `.`, `_`, `-`; no `..`, no absolute path), `container` absolute; at most five; a missing host directory is created `azerioid-supervised:<vhost group> 2770`; a symlink that resolves outside the app is refused |
+| `--rm` | **Kept** (operator decision). With data on bind mounts nothing of value lives in the container layer |
+| Restart policy | `always` / `on-failure` / `never`, mapped to Supervisor's `autorestart=true` / `unexpected` / `false` — the container runs in the foreground under Supervisor, so Supervisor *is* the restart policy. Supervisor's program spec gained the three-valued setting |
+| Registry credentials | **Named, host-wide**, referenced per vhost (operator decision). Stored like DNS tokens (A21): `/etc/azerioid-panel/docker-registries/<name>.json`, root 0600 in a 0700 directory, from broker stdin only. **Never** written to `azerioid-supervised`'s `~/.docker/config.json` (base64, readable by every Docker site's tooling, A38). A pull that needs one runs `docker login --password-stdin` into a throwaway `DOCKER_CONFIG` directory, does its work, logs out and deletes the directory — also when the login fails |
+| Which registries | Standard v2 login: Docker Hub, GHCR, GitLab, Harbor and similar. **ECR refused** (`*.amazonaws.com`): its tokens expire every 12 hours and need the AWS API |
+| Compose + private images | `docker compose pull --ignore-buildable` runs during enable/rebuild while the credential exists, because Supervisor's later `up` runs without it |
+| Deleting a registry | Refused while any vhost refers to it |
+
+**Surfaces:** `vhost.docker.services|settings|settings.set|env|env.set`, `docker.registry.list|set|delete`;
+Vhosts page (enable panel and a *Container settings* panel for running containers, with registry
+management); CLI `azerioid vhost docker services|settings|env|env-set` (`--service`, `--restart`,
+`--volume host:container[:ro]`, `--registry`, `--env-file` — values never as arguments; `env` shows
+names unless `--reveal`) and `azerioid docker registry list|add|del` (password from
+`AZERIOID_REGISTRY_PASSWORD` or a prompt, never an argument).
