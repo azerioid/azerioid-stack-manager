@@ -110,6 +110,61 @@ BASH;
         return 'unix:///run/user/' . $this->supervisedUid() . '/docker.sock';
     }
 
+    /**
+     * Supplementary groups of the running rootless daemon, or null when it is not running.
+     *
+     * @return list<int>|null
+     */
+    public function daemonGroups(): ?array
+    {
+        $pid = $this->runtime->exec(['/usr/bin/pgrep', '-u', SupervisedUser::USERNAME, '-x', 'dockerd'], null, 10);
+        $first = trim(explode("\n", trim($pid->stdout))[0] ?? '');
+        if (!$pid->ok() || !preg_match('/^\d+$/', $first)) {
+            return null;
+        }
+        try {
+            $status = $this->runtime->readFile('/proc/' . $first . '/status');
+        } catch (\Throwable) {
+            return null;
+        }
+        if (!preg_match('/^Groups:\s*([0-9 ]*)$/m', $status, $m)) {
+            return null;
+        }
+
+        return array_map('intval', preg_split('/\s+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY) ?: []);
+    }
+
+    /**
+     * Restart the rootless daemon with the supervised account's current groups (ADR A50/A49).
+     *
+     * The daemon is a child of the account's systemd --user manager and inherits that
+     * manager's group list, fixed when the manager started; restarting only docker.service
+     * would hand it the same stale list. So the manager itself restarts. Every container
+     * stops with it — the caller restarts the Supervisor programs that were running.
+     */
+    public function restartDaemon(): void
+    {
+        $uid = $this->supervisedUid();
+        $restart = $this->runtime->exec(['/usr/bin/systemctl', 'restart', 'user@' . $uid . '.service'], null, 120);
+        if (!$restart->ok()) {
+            throw new BrokerException('Could not restart the rootless Docker daemon (user@' . $uid . '.service): '
+                . trim($restart->stderr . ' ' . $restart->stdout), 1);
+        }
+        $runuser = $this->runuserBin();
+        for ($i = 0; $i < 60; $i++) {
+            $info = $this->runtime->exec([
+                $runuser, '-u', SupervisedUser::USERNAME, '--', '/usr/bin/env', 'DOCKER_HOST=' . $this->dockerHost(),
+                $this->dockerBin(), 'info', '--format', '{{.ServerVersion}}',
+            ], null, 20);
+            if ($info->ok() && trim($info->stdout) !== '') {
+                return;
+            }
+            $this->runtime->exec(['/bin/sleep', '1'], null, 5);
+        }
+
+        throw new BrokerException('The rootless Docker daemon did not come back within 60 seconds after its restart.', 1);
+    }
+
     public function supervisedUid(): int
     {
         $id = $this->runtime->exec(['/usr/bin/id', '-u', SupervisedUser::USERNAME], null, 10);

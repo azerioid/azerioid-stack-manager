@@ -34,6 +34,9 @@ final class DockerWorkloadTest extends TestCase
 
     private bool $loginFails = false;
 
+    /** @var list<int>|null groups of the running rootless dockerd; null = not running */
+    private ?array $daemonGroups = null;
+
     protected function setUp(): void
     {
         $this->rt = new FakeRuntime();
@@ -60,6 +63,15 @@ final class DockerWorkloadTest extends TestCase
         $this->rt->execFn = function (array $c, ?string $stdin): ?ExecResult {
             if ($c === ['/usr/bin/id', '-u', 'azerioid-supervised']) {
                 return new ExecResult($c, 0, "1001\n", '');
+            }
+            if ($c === ['/usr/bin/pgrep', '-u', 'azerioid-supervised', '-x', 'dockerd']) {
+                return $this->daemonGroups === null ? new ExecResult($c, 1, '', '') : new ExecResult($c, 0, "1077\n", '');
+            }
+            if ($c === ['/usr/bin/getent', 'group', 'az-vh-box-example-com']) {
+                return new ExecResult($c, 0, "az-vh-box-example-com:x:969:caddy,www-data,azerioid-supervised\n", '');
+            }
+            if (in_array('info', $c, true)) {
+                return new ExecResult($c, 0, "27.3.1\n", '');
             }
             if (($c[0] ?? '') !== '/usr/sbin/runuser') {
                 return null;
@@ -224,6 +236,31 @@ final class DockerWorkloadTest extends TestCase
         $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
 
         $this->assertStringContainsString("autorestart=true\n", $this->supervisorConf());
+    }
+
+    // ------------------------------------------------ daemon group list (A49 × A50)
+
+    public function test_a_daemon_started_before_the_vhost_group_existed_is_restarted_once(): void
+    {
+        $this->daemonGroups = [984, 986];
+        $this->rt->files['/proc/1077/status'] = "Name:\tdockerd\nGroups:\t984 986 \n";
+
+        [$code, $json] = $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+
+        $this->assertSame(0, $code, json_encode($json));
+        $restarts = array_filter($this->rt->execLog, static fn (array $e): bool => $e['command'] === ['/usr/bin/systemctl', 'restart', 'user@1001.service']);
+        $this->assertCount(1, $restarts, 'the user manager restarts, not only docker.service: dockerd inherits its groups');
+    }
+
+    public function test_a_daemon_that_already_holds_the_group_is_left_alone(): void
+    {
+        $this->daemonGroups = [984, 969];
+        $this->rt->files['/proc/1077/status'] = "Name:\tdockerd\nGroups:\t984 969\n";
+
+        $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+
+        $this->assertSame([], array_filter($this->rt->execLog, static fn (array $e): bool => ($e['command'][1] ?? '') === 'restart'
+            && str_starts_with((string) ($e['command'][2] ?? ''), 'user@')));
     }
 
     // ----------------------------------------------------------------- #6
