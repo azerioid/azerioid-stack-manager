@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\BackupJob;
+use App\Models\BackupSchedule;
 use App\Models\Setting;
 use App\Services\Broker\BrokerClient;
 use Illuminate\Console\Command;
@@ -14,6 +15,70 @@ class RunScheduledBackup extends Command
     protected $description = 'Run the configured backup job if due';
 
     public function handle(BrokerClient $broker): int
+    {
+        $legacy = $this->runGlobalSchedule($broker);
+        $targets = $this->runTargetSchedules($broker);
+
+        return $legacy === self::SUCCESS && $targets === self::SUCCESS ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * Per-target schedules (B6, ADR A52): each due target is backed up to its destination,
+     * then its own retention applies — the schedule's days, or the global default.
+     */
+    private function runTargetSchedules(BrokerClient $broker): int
+    {
+        $due = BackupSchedule::query()->where('enabled', true)->get()->filter(fn (BackupSchedule $s) => $s->isDue(now()));
+        if ($due->isEmpty()) {
+            return self::SUCCESS;
+        }
+        $pass = Setting::getSecret('backup.passphrase');
+        if ($pass === null) {
+            $this->error('backup passphrase is not configured');
+
+            return self::FAILURE;
+        }
+        $defaultDays = (int) Setting::get('backup.retention_days', 30);
+        $status = self::SUCCESS;
+        foreach ($due as $schedule) {
+            $stdin = ['passphrase' => $pass, 'destination' => $schedule->destination];
+            if ($schedule->destination === 'spaces') {
+                $spaces = self::spacesStdin();
+                if ($spaces === null) {
+                    $schedule->forceFill(['last_run_at' => now(), 'last_status' => 'failed', 'last_error' => 'Spaces credentials are incomplete.'])->save();
+                    $status = self::FAILURE;
+
+                    continue;
+                }
+                $stdin['spaces'] = $spaces;
+            }
+            [$action, $args, $extra] = $schedule->brokerCall();
+            $job = $this->runOne($broker, $action, $args, $stdin + $extra, $schedule->target_type, $schedule->target, $schedule->id);
+            $schedule->forceFill([
+                'last_run_at' => now(),
+                'last_status' => $job->status,
+                'last_error' => $job->error,
+            ])->save();
+            if ($job->status !== 'ok') {
+                $status = self::FAILURE;
+
+                continue;
+            }
+            $prune = $broker->call('backup.prune.age', [], $stdin + [
+                'kind' => $schedule->target_type,
+                'name' => $schedule->target_type === 'caddy' ? null : $schedule->target,
+                'days' => $schedule->retention_days ?? $defaultDays,
+                'min_keep' => 1,
+            ], 300, true);
+            if (! $prune->ok) {
+                $this->warn("retention for {$schedule->target_type}/{$schedule->target}: ".$prune->error);
+            }
+        }
+
+        return $status;
+    }
+
+    private function runGlobalSchedule(BrokerClient $broker): int
     {
         $cfg = Setting::get('backup.schedule', []);
         if (! is_array($cfg) || ! ($cfg['enabled'] ?? false)) {
@@ -27,7 +92,7 @@ class RunScheduledBackup extends Command
         if ($cadence === 'weekly' && now()->dayOfWeek !== (int) ($cfg['weekday'] ?? 0)) {
             return self::SUCCESS;
         }
-        $last = BackupJob::query()->where('status', 'ok')->latest()->first();
+        $last = BackupJob::query()->whereNull('schedule_id')->where('status', 'ok')->latest()->first();
         if ($last && $last->created_at->isToday()) {
             return self::SUCCESS;
         }
@@ -78,18 +143,21 @@ class RunScheduledBackup extends Command
     }
 
     /** @param array<int,string> $args */
-    private function runOne(BrokerClient $broker, string $action, array $args, array $stdin, string $kind, string $name): void
+    private function runOne(BrokerClient $broker, string $action, array $args, array $stdin, string $kind, string $name, ?int $scheduleId = null): BackupJob
     {
-        $job = BackupJob::query()->create(['kind' => $kind, 'name' => $name, 'status' => 'running']);
+        $job = BackupJob::query()->create(['schedule_id' => $scheduleId, 'kind' => $kind, 'name' => $name, 'status' => 'running']);
         $start = microtime(true);
-        $res = $broker->call($action, $args, $stdin, 900, true);
+        // A bundle holds a whole site and its databases; one part alone can take minutes.
+        $res = $broker->call($action, $args, $stdin, $action === 'backup.vhost.run' ? 3600 : 900, true);
         $job->forceFill([
             'status' => $res->ok ? 'ok' : 'failed',
-            'object_key' => $res->ok ? ($res->data['key'] ?? null) : null,
+            'object_key' => $res->ok ? ($res->data['key'] ?? $res->data['bundle'] ?? null) : null,
             'size' => $res->ok ? ($res->data['size'] ?? null) : null,
             'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             'error' => $res->ok ? null : $res->error,
         ])->save();
+
+        return $job;
     }
 
     /** @return array<string,string>|null */

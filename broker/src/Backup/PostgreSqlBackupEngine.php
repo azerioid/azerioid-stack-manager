@@ -163,6 +163,39 @@ final class PostgreSqlBackupEngine implements BackupEngine
         }
     }
 
+    public function dropTarget(string $target): void
+    {
+        $target = Validator::dbName($target);
+        $pgpass = $this->pgpassFile();
+        try {
+            $this->runtime->exec(array_merge(
+                ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/dropdb'],
+                ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
+                ['-U', $this->config->postgresqlUser, '--no-password', '--if-exists', $target]
+            ), null, 60);
+        } finally {
+            ($this->cleanup($pgpass))();
+        }
+    }
+
+    public function countObjects(string $target): int
+    {
+        $target = Validator::dbName($target);
+        $pgpass = $this->pgpassFile();
+        try {
+            $result = $this->runtime->exec(array_merge(
+                ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/psql'],
+                ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
+                ['-U', $this->config->postgresqlUser, '--no-password', '-tAc'],
+                ["SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')", $target]
+            ), null, 30);
+        } finally {
+            ($this->cleanup($pgpass))();
+        }
+
+        return (int) trim($result->stdout);
+    }
+
     private function pgpassFile(): string
     {
         $path = rtrim($this->config->stagingDir, '/') . '/pgpass-' . bin2hex(random_bytes(6));

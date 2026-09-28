@@ -43,4 +43,10 @@ interface BackupEngine
 
     /** Create $target if the engine needs it to exist before restore. */
     public function prepareTarget(string $target): void;
+
+    /** Drop a database the panel created itself (restore verification's scratch target). */
+    public function dropTarget(string $target): void;
+
+    /** Tables (or collections) in a database — a restored dump should not be empty. */
+    public function countObjects(string $target): int;
 }

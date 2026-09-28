@@ -14,6 +14,8 @@ use AzerioidPanel\Broker\Actions\ComponentUninstall;
 use AzerioidPanel\Broker\Actions\CaddyApplyConfig;
 use AzerioidPanel\Broker\Actions\BackupList;
 use AzerioidPanel\Broker\Actions\BackupPrune;
+use AzerioidPanel\Broker\Actions\BackupPruneAge;
+use AzerioidPanel\Broker\Actions\BackupVhost;
 use AzerioidPanel\Broker\Actions\BackupRestore;
 use AzerioidPanel\Broker\Actions\BackupRestoreCheck;
 use AzerioidPanel\Broker\Actions\BackupRun;
@@ -222,6 +224,12 @@ final class Kernel
         'backup.list' => BackupList::class,
         'backup.prune' => BackupPrune::class,
         'backup.verify' => BackupVerify::class,
+        'backup.prune.age' => BackupPruneAge::class,
+        'backup.vhost.settings' => BackupVhost::class,
+        'backup.vhost.settings.set' => BackupVhost::class,
+        'backup.vhost.run' => BackupVhost::class,
+        'backup.vhost.list' => BackupVhost::class,
+        'backup.vhost.restore' => BackupVhost::class,
         'backup.restore.db' => BackupRestore::class,
         'backup.restore.files' => BackupRestore::class,
         // Read-only preflight for the two restore guards; see BackupRestoreCheck.

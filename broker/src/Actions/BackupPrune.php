@@ -28,6 +28,11 @@ final class BackupPrune
         foreach ($listed['objects'] as $obj) {
             $key = (string) ($obj['key'] ?? '');
             $parts = explode('/', $key);
+            if (($parts[1] ?? '') === 'vhost') {
+                // A bundle is kept or removed whole (A52): counting its parts one by one
+                // would delete half a bundle. Bundles have their own retention.
+                continue;
+            }
             $kind = ($parts[1] ?? 'unknown') . '/' . ($parts[2] ?? '');
             $byKind[$kind][] = $obj;
         }
@@ -51,6 +56,9 @@ final class BackupPrune
         }
         $deleted = [];
         foreach ($runtime->listDir($base) as $kind) {
+            if ($kind === 'vhost') {
+                continue; // bundles: backup.vhost.list / their own retention (A52)
+            }
             $kindDir = $base . '/' . $kind;
             if (!$runtime->isDir($kindDir)) {
                 continue;

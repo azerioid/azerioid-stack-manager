@@ -91,6 +91,11 @@ Usage:
   azerioid updates apply [--security] --confirm
 
   azerioid backup create [--local|--spaces] [--db=<name|all>] [--keep=N] [--kdf=pbkdf2|argon2id]
+  azerioid backup bundle <domain> [--local|--spaces]            # A52: one site — files, config, its databases
+  azerioid backup bundles [--local|--spaces]                    # list bundles
+  azerioid backup bundle-restore <domain> --bundle=<stamp> [--parts=files,config,db-…] [--apply --confirm] [--db-confirm=OVERWRITE]
+  azerioid backup bundle-dbs <domain> [--set=mariadb:shop]…     # which databases belong to the site
+  azerioid backup verify --file=<key> [--deep]                  # --deep: restore into a scratch database and drop it
   azerioid backup list   [--local|--spaces] [--json]
   azerioid backup restore --file=<path|key> --target=<db> --confirm [--overwrite] [--local|--spaces]
   azerioid backup verify  --file=<path|key> [--local|--spaces] [--json]

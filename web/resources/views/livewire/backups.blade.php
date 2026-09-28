@@ -133,6 +133,10 @@
         @endif
     </div>
 
+    <livewire:backup-bundles />
+
+    <livewire:backup-schedules />
+
     <section class="panel overflow-hidden">
         <div class="border-b border-white/5 px-5 py-3 text-xs uppercase tracking-wide text-zinc-500">History</div>
         @foreach ($history as $h)
