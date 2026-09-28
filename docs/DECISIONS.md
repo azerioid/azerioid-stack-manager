@@ -1137,3 +1137,12 @@ container's non-root process (nginx's worker, uid 101 inside the namespace, an u
 is "other" to it and got `403`. It is now `2775`. That opens nothing on the host: a bind mount starts
 inside the site's top directory, which A49-E1 closes to everyone else — verified on the Ubuntu host,
 another site's identity is still refused the file.
+
+**v2.1.3 addendum — starting through a wrapper.** Supervisor restarts a `docker run --rm --name X`
+before the daemon has finished removing the old X, and the new run fails ("name already in use",
+`spawn error`) — seen on the Ubuntu host after a settings change, and latent in every restart of an
+image-mode site since A38. Supervisor commands cannot chain (`;` is refused by the command validator),
+so image and Dockerfile modes now start through `/usr/local/lib/azerioid-panel/sbin/azerioid-docker-run`
+(root 0755): it checks its arguments (name `docker-*`, the rootless `DOCKER_HOST`, the docker binary),
+runs `docker rm -f <name>`, then `exec`s the unchanged `docker run`. Compose mode needs nothing: `up`
+recreates its own containers.

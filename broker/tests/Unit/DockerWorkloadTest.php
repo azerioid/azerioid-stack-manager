@@ -225,6 +225,15 @@ final class DockerWorkloadTest extends TestCase
         $this->assertNotSame(0, $code);
     }
 
+    public function test_image_mode_starts_through_the_wrapper_that_clears_a_stale_container(): void
+    {
+        $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+
+        $name = DockerManager::containerName(self::DOMAIN);
+        $this->assertStringContainsString('command=' . DockerManager::DOCKER_RUN_WRAPPER . ' ' . $name . ' /usr/bin/env DOCKER_HOST=', $this->supervisorConf());
+        $this->assertSame(\AzerioidPanel\Broker\Component\DockerRootlessSetup::dockerRunWrapperScript(), $this->rt->files[DockerManager::DOCKER_RUN_WRAPPER]);
+    }
+
     public function test_restart_on_failure_maps_to_supervisors_unexpected(): void
     {
         $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80, 'restart' => 'on-failure']);

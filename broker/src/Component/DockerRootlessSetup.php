@@ -65,6 +65,58 @@ final class DockerRootlessSetup
         $log?->info('Installed container shell wrapper at ' . $dest . '.');
     }
 
+    /**
+     * Install (or refresh) the wrapper Supervisor starts a vhost's `docker run` through.
+     * Root-owned 0755; runs as azerioid-supervised.
+     */
+    public function installDockerRunWrapper(): void
+    {
+        $dest = DockerManager::DOCKER_RUN_WRAPPER;
+        $dir = dirname($dest);
+        if (!$this->runtime->isDir($dir)) {
+            $this->runtime->mkdir($dir, 0751);
+        }
+        $script = self::dockerRunWrapperScript();
+        if ($this->runtime->fileExists($dest) && $this->runtime->readFile($dest) === $script) {
+            return;
+        }
+        $this->runtime->writeFile($dest, $script, 0755);
+        if ($this->runtime->getuid() === 0) {
+            $this->runtime->chown($dest, 'root', 'root');
+            $this->runtime->chmod($dest, 0755);
+        }
+    }
+
+    public static function dockerRunWrapperScript(): string
+    {
+        return <<<'BASH'
+#!/usr/bin/env bash
+# Start a vhost's container under Supervisor (ADR A50), after clearing a stale container of
+# the same name. Supervisor restarts a `docker run --rm` before the daemon has finished
+# removing the old container, and the new run then fails: "name already in use".
+# Usage: azerioid-docker-run <name> /usr/bin/env DOCKER_HOST=unix:///run/user/<uid>/docker.sock <docker> run ...
+set -uo pipefail
+
+name="${1:-}"
+shift || true
+if [[ ! "${name}" =~ ^docker-[a-z0-9-]{1,60}$ ]]; then
+    echo "azerioid-docker-run: invalid container name" >&2
+    exit 2
+fi
+if [[ "${1:-}" != "/usr/bin/env" || ! "${2:-}" =~ ^DOCKER_HOST=unix:///run/user/[0-9]+/docker\.sock$ ]]; then
+    echo "azerioid-docker-run: expected /usr/bin/env DOCKER_HOST=unix:///run/user/<uid>/docker.sock <docker> run ..." >&2
+    exit 2
+fi
+if [[ "${3:-}" != "/usr/bin/docker" && "${3:-}" != "/usr/local/bin/docker" ]]; then
+    echo "azerioid-docker-run: unexpected docker binary" >&2
+    exit 2
+fi
+
+/usr/bin/env "$2" "$3" rm -f "${name}" >/dev/null 2>&1 || true
+exec "$@"
+BASH;
+    }
+
     public static function dockerExecWrapperScript(): string
     {
         return <<<'BASH'
