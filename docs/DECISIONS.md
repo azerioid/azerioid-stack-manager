@@ -979,7 +979,7 @@ The model dates from the first Terminal commit (2026-09-02); every release up to
 | Group | Each identity's primary group is a **group of its own**, named after it (`az-vh-X:az-vh-X`) |
 | Docroot | `2770 az-vh-X:az-vh-X` — unchanged mode, own group |
 | Readers | Web server user, site PHP pool users and `azerioid-supervised` are members of **every** vhost group; no identity is a member of any group but its own. They serve or run every site, so their reach does not change |
-| Why not one shared reader group | Files a reader creates — PHP uploads, Laravel logs, Octane caches — carry the directory's group (setgid). With a shared reader group the identity would not be a member and could not manage its own site's files. The vhost group has to contain both the identity and the readers |
+| Why not one shared reader group | Files a reader creates — PHP uploads, Laravel logs, Octane caches — carry the directory's group (setgid). With a shared reader group the identity would not be a member and could not read, rename or delete its own site's files. The vhost group has to contain both the identity and the readers. (Editing such a file in place still needs its group write bit, which PHP's default umask does not set — as before A49) |
 | Why not ACLs | They depend on the `acl` package (absent on the Ubuntu test host) and on every tool preserving them; group ownership is what the tree already uses |
 | New vhost | Group created, readers added, php-fpm/Apache/nginx reloaded (each spawns workers with `initgroups()`, so a graceful reload suffices). **Caddy is restarted 3 s later** from a transient unit: it runs as its own user, only a restart gives it a new group list, and restarting it inside the request that created the vhost would drop the panel's own response |
 | Legacy identity touched by a request | Left as it is. Converting one identity inside a File Manager or Terminal request would skip the migration's verification and rollback |
@@ -1040,3 +1040,32 @@ path the account's permissions allow. Through the shared group those included ev
 reading and writing. The claim was reasoned, not tested — the B3 acceptance criterion "confined to that
 vhost's tree" was never run against a second site. A49 (v2.0.6) makes it true by permissions; chroot
 remains out of scope for the reasons A48 gives.
+
+### A49-E1 — Erratum: A49 closed the docroot, not the site, and left deleted sites open
+
+**Status:** Erratum (2026-09-28), fixed in **v2.0.7**. Found while verifying v2.0.6 on the Ubuntu host.
+
+**1. The site is more than the docroot.** A49 regrouped each identity's *home*, which is its docroot.
+For a Laravel site the docroot is `<app>/public`; the application above it — `.env` with `APP_KEY`,
+`storage/`, the SQLite database — is outside the home. On the test host that directory was
+`www-data:azerioid-vhosts 775`, and after v2.0.6 a different site's identity still read
+`octane-demo/.env`. Neither A25 nor A49 had ever looked above the docroot.
+
+**2. Deleted sites were handed to strangers.** Deleting a vhost removes its identity but keeps its
+files (deliberately). The files keep the numeric uid and gid, and `useradd --system` gives those
+numbers to the next account created. On the test host fifteen leftover directories were owned by
+unrelated accounts: other sites' identities read them, and one was `azerioid-adminer-tool:azerioid-adminer-tool 2770`,
+writable by Adminer's PHP. Cron log directories of deleted identities had the same problem.
+
+**Decision (v2.0.7):**
+
+| Aspect | Decision |
+|--------|----------|
+| The unit of isolation | The site's **top directory**: the directory directly under www_root that holds the docroot (`/data/www/app.test` for `/data/www/app.test/public`), or the docroot itself when it lives elsewhere or when two sites share one directory |
+| Top directory | Regrouped with the rest (`azerioid-vhosts` → own group), given the site's group if it has another one, and closed to everyone else (`o-rwx`). Only the top directory's mode changes: nothing beneath it is reachable once the gate is closed, whatever mode PHP gave a file, and the operator's file modes are left alone |
+| Orphans | A directory under www_root that no vhost root, identity home, Supervisor program (the panel's or hand-written), systemd unit, web server config or crontab refers to, and that root does not own, is **quarantined**: `root:root 0700`, top directory only, so the contents are recoverable exactly as they were. Cron log directories of identities that no longer exist, likewise |
+| On delete | `vhost.del` quarantines the site's top directory (unless another site or program uses it) and its cron log directory. Best effort: whatever it cannot close, the next converge run finds |
+| Restarts | Only when groups were created or readers added. A run that only closes directories restarts nothing and ends no sessions |
+| Verification | Added: each identity can still open its own top directory and docroot; each orphan is `0:0 700`; the cross-identity check targets top directories |
+
+The same migrator and the same trigger as A49: hosts already on v2.0.6 converge again automatically.

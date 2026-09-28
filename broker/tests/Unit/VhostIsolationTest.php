@@ -37,6 +37,12 @@ final class VhostIsolationTest extends TestCase
     /** @var array<string, string> docroot => owner */
     private array $treeOwner = [];
 
+    /** @var array<string, string> directory => octal mode */
+    private array $treeMode = [];
+
+    /** @var array<string, array{owner:string, group:string, uid:string, gid:string}> dirs listed by find -printf */
+    private array $listed = [];
+
     /** @var list<string> commands that must fail, as "argv joined by spaces" prefixes */
     private array $failing = [];
 
@@ -280,7 +286,154 @@ final class VhostIsolationTest extends TestCase
         $this->assertSame([], $status['pending']);
     }
 
+    // ------------------------------------------------ site tops and orphans (v2.0.7)
+
+    public function test_a_laravel_app_above_public_is_closed_to_other_sites(): void
+    {
+        // Docroot is <app>/public; the app with its .env sits above the identity's home.
+        $this->newVhost('b.test');
+        $home = '/data/www/app.test/public';
+        $top = '/data/www/app.test';
+        $this->rt->dirs[$top] = true;
+        $this->rt->dirs[$home] = true;
+        VhostUser::ensure($this->rt, $this->config, 'app.test', $home);
+        $this->treeOwner[$top] = 'www-data';
+        $this->treeGroup[$top] = 'azerioid-vhosts';
+        $this->treeMode[$top] = '775';
+        $this->assertTrue($this->canRead('az-vh-b-test', $top), 'precondition: the app is open');
+
+        $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+
+        $this->assertFalse($this->canRead('az-vh-b-test', $top));
+        $this->assertTrue($this->canRead('az-vh-app-test', $top), 'the site keeps its own app');
+        $this->assertTrue($this->canRead('www-data', $top));
+        $this->assertSame('az-vh-app-test', $this->treeGroup[$top]);
+        $this->assertSame('770', $this->treeMode[$top]);
+    }
+
+    public function test_tightening_a_directory_restarts_nothing(): void
+    {
+        $this->newVhost('a.test');
+        $this->treeMode['/data/www/a.test'] = '2775';
+        $this->rt->execLog = [];
+
+        $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+
+        $this->assertSame('2770', $this->treeMode['/data/www/a.test']);
+        $this->assertSame([], array_filter(
+            $this->commandsStartingWith('/usr/bin/systemctl'),
+            static fn (array $c): bool => in_array($c[1] ?? '', ['try-restart', 'try-reload-or-restart'], true)
+        ));
+        $this->assertSame([], $this->commandsStartingWith('/usr/bin/pkill'));
+    }
+
+    public function test_a_deleted_sites_directory_is_quarantined(): void
+    {
+        $this->newVhost('live.test');
+        // Left behind by a deleted vhost: its uid and gid were recycled by another account.
+        $this->orphanDir('/data/www/gone.test', '981', '971', 'az-vh-live-test', 'azerioid-adminer-tool');
+        $this->assertTrue($this->canRead('az-vh-live-test', '/data/www/gone.test'), 'precondition');
+
+        $result = $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+
+        $this->assertSame(['/data/www/gone.test'], $result['quarantined']);
+        $this->assertSame('root', $this->treeOwner['/data/www/gone.test']);
+        $this->assertSame('700', $this->treeMode['/data/www/gone.test']);
+        $this->assertFalse($this->canRead('az-vh-live-test', '/data/www/gone.test'));
+        $this->assertTrue($this->migrator()->status()['migrated']);
+    }
+
+    public function test_directories_in_use_are_never_quarantined(): void
+    {
+        $this->newVhost('live.test');
+        // A Supervisor program's working directory and a root-owned directory an operator made.
+        $this->rt->files['/var/lib/azerioid-panel/supervisor-programs.json'] = json_encode(['programs' => []]);
+        $this->orphanDir('/data/www/root-made', '0', '0', 'root', 'root');
+        $this->orphanDir('/data/www/live.test', '1000', '2000', 'az-vh-live-test', 'az-vh-live-test');
+
+        $status = $this->migrator()->status();
+
+        $this->assertTrue($status['migrated'], json_encode($status['pending']));
+    }
+
+    public function test_a_directory_a_hand_written_program_uses_is_never_quarantined(): void
+    {
+        $this->newVhost('live.test');
+        $this->rt->files['/etc/supervisor/conf.d/azerioid-node-flagship.conf'] =
+            "[program:azerioid-node-flagship]\ncommand=/usr/bin/node server.js\ndirectory=/data/www/node-proxy.test\nuser=azerioid-supervised\n";
+        $this->orphanDir('/data/www/node-proxy.test', '1001', '1001', 'az-vh-live-test', 'azerioid-vhosts');
+        $this->orphanDir('/data/www/gone.test', '1002', '1002', '1002', '1002');
+
+        $pending = array_column($this->migrator()->status()['pending'], 'root');
+
+        $this->assertNotContains('/data/www/node-proxy.test', $pending);
+        $this->assertContains('/data/www/gone.test', $pending);
+    }
+
+    public function test_cron_logs_of_a_removed_identity_are_quarantined(): void
+    {
+        $this->newVhost('live.test');
+        $this->rt->dirs['/var/log/azerioid-cron'] = true;
+        $this->orphanDir('/var/log/azerioid-cron/az-vh-gone-test', '991', '0', '991', 'root', '750');
+        $this->orphanDir('/var/log/azerioid-cron/az-vh-live-test', '1000', '1000', 'az-vh-live-test', 'az-vh-live-test', '750');
+
+        $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+
+        $this->assertSame('700', $this->treeMode['/var/log/azerioid-cron/az-vh-gone-test']);
+        $this->assertSame('750', $this->treeMode['/var/log/azerioid-cron/az-vh-live-test'], 'a live identity keeps its logs');
+    }
+
+    public function test_a_failed_quarantine_is_rolled_back(): void
+    {
+        $this->newVhost('live.test');
+        $this->orphanDir('/data/www/gone.test', '981', '971', 'az-vh-live-test', 'azerioid-vhosts', '2770');
+        $this->failing[] = '/usr/bin/chmod 0700 /data/www/gone.test';
+
+        try {
+            $this->migrator()->apply(Validator::ISOLATE_VHOSTS_CONFIRM);
+            $this->fail('expected failure');
+        } catch (BrokerException) {
+        }
+
+        $this->assertSame('981', $this->listed['/data/www/gone.test']['uid']);
+        $this->assertSame('971', $this->listed['/data/www/gone.test']['gid']);
+        $this->assertSame('failed', $this->state()['result']);
+    }
+
+    public function test_deleting_a_vhost_quarantines_what_it_leaves(): void
+    {
+        $this->newVhost('gone.test');
+        $this->rt->dirs['/var/log/azerioid-cron/az-vh-gone-test'] = true;
+        VhostUser::deprovision($this->rt, $this->config, 'gone.test');
+
+        $done = $this->migrator()->quarantineRemains('/data/www/gone.test', 'az-vh-gone-test');
+
+        $this->assertSame(['/data/www/gone.test', '/var/log/azerioid-cron/az-vh-gone-test'], $done);
+        $this->assertSame('700', $this->treeMode['/data/www/gone.test']);
+        $this->assertSame('root', $this->treeOwner['/data/www/gone.test']);
+    }
+
+    public function test_deleting_one_of_two_sites_under_one_directory_keeps_it_open(): void
+    {
+        $this->rt->dirs['/data/www/shared'] = true;
+        $this->rt->dirs['/data/www/shared/admin'] = true;
+        VhostUser::ensure($this->rt, $this->config, 'admin.test', '/data/www/shared/admin');
+
+        $done = $this->migrator()->quarantineRemains('/data/www/shared/site', 'az-vh-site-test');
+
+        $this->assertSame([], $done);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private function orphanDir(string $path, string $uid, string $gid, string $owner, string $group, string $mode = '2770'): void
+    {
+        $this->rt->dirs[$path] = true;
+        $this->listed[$path] = ['uid' => $uid, 'gid' => $gid, 'owner' => $owner, 'group' => $group];
+        $this->treeOwner[$path] = $owner;
+        $this->treeGroup[$path] = $group;
+        $this->treeMode[$path] = $mode;
+    }
 
     private function migrator(): VhostIsolationMigrator
     {
@@ -343,11 +496,18 @@ final class VhostIsolationTest extends TestCase
         return array_values(array_unique($out));
     }
 
-    /** 2770 docroots: owner and group get everything, others nothing. */
+    /** Owner and group bits as the tree has them (2770 unless set), "other" from the mode. */
     private function canRead(string $user, string $root): bool
     {
-        return ($this->treeOwner[$root] ?? null) === $user
-            || in_array($this->treeGroup[$root] ?? '', $this->groupsOf($user), true);
+        $mode = $this->treeMode[$root] ?? '2770';
+        if (($this->treeOwner[$root] ?? null) === $user) {
+            return true;
+        }
+        if (in_array($this->treeGroup[$root] ?? '', $this->groupsOf($user), true)) {
+            return true;
+        }
+
+        return ((int) substr($mode, -1) & 4) === 4;
     }
 
     private function canWrite(string $user, string $root): bool
@@ -368,6 +528,9 @@ final class VhostIsolationTest extends TestCase
     /** @param list<string> $c */
     private function host(array $c): ?ExecResult
     {
+        if (in_array(implode(' ', $c), $this->failing, true)) {
+            return $this->no('Operation not permitted');
+        }
         $bin = $c[0] ?? '';
         switch ($bin) {
             case '/usr/bin/getent':
@@ -430,12 +593,38 @@ final class VhostIsolationTest extends TestCase
 
                 return $this->ok();
             case '/usr/bin/chown':
-                [$owner, $group] = explode(':', $c[2]);
-                $this->treeOwner[$c[3]] = $owner;
-                $this->treeGroup[$c[3]] = $group;
+                $spec = $c[1] === '-h' ? $c[2] : $c[2];
+                $path = end($c);
+                [$owner, $group] = explode(':', $spec);
+                $this->treeOwner[$path] = $owner === '0' ? 'root' : $owner;
+                $this->treeGroup[$path] = $group === '0' ? 'root' : $group;
+                if (isset($this->listed[$path])) {
+                    $this->listed[$path]['uid'] = $owner;
+                    $this->listed[$path]['gid'] = $group;
+                }
+
+                return $this->ok();
+            case '/usr/bin/chgrp':
+                $this->treeGroup[end($c)] = $c[2];
+
+                return $this->ok();
+            case '/usr/bin/chmod':
+                $path = end($c);
+                $old = $this->treeMode[$path] ?? '2770';
+                $this->treeMode[$path] = $c[1] === 'o-rwx' ? substr($old, 0, -1) . '0' : ltrim($c[1], '0');
 
                 return $this->ok();
             case '/usr/bin/find':
+                if (in_array('-printf', $c, true)) {
+                    $lines = [];
+                    foreach ($this->listed as $path => $d) {
+                        if (dirname($path) === $c[1]) {
+                            $lines[] = implode("\t", [$d['uid'], $d['gid'], $this->treeMode[$path] ?? '2770', $d['owner'], $d['group'], $path]);
+                        }
+                    }
+
+                    return $this->ok(implode("\n", $lines) . "\n");
+                }
                 $root = $c[1];
                 $from = $c[array_search('-group', $c, true) + 1];
                 $matches = ($this->treeGroup[$root] ?? null) === $from;
@@ -454,7 +643,14 @@ final class VhostIsolationTest extends TestCase
 
                 return $this->canRead($user, $root) ? $this->ok() : $this->no();
             case '/usr/bin/stat':
-                return $this->ok("2770\n");
+                $path = end($c);
+                $mode = $this->treeMode[$path] ?? '2770';
+
+                return match ($c[2]) {
+                    '%G %a' => $this->ok(($this->treeGroup[$path] ?? 'root') . " {$mode}\n"),
+                    '%u:%g %a' => $this->ok(($this->listed[$path]['uid'] ?? '0') . ':' . ($this->listed[$path]['gid'] ?? '0') . " {$mode}\n"),
+                    default => $this->ok("{$mode}\n"),
+                };
             case '/usr/bin/curl':
                 // "before" probes run while every identity is still legacy.
                 $migrated = !in_array('azerioid-vhosts', array_values($this->treeGroup), true);

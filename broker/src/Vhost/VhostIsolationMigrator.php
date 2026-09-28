@@ -67,7 +67,7 @@ final class VhostIsolationMigrator
     /** @return array<string,mixed> */
     public function status(): array
     {
-        $pending = $this->plan();
+        $pending = $this->pendingRows($this->plan());
         $state = $this->readState();
         $running = $this->convergeRunning();
         $result = $state['result'] ?? null;
@@ -78,11 +78,7 @@ final class VhostIsolationMigrator
         return [
             'migrated' => $migrated,
             'needs_migration' => !$migrated,
-            'pending' => array_map(static fn (array $p): array => [
-                'user' => $p['user'],
-                'root' => $p['root'],
-                'reason' => $p['reason'],
-            ], $pending),
+            'pending' => $pending,
             'last_attempt' => $state,
             'running' => $running,
             'interrupted' => $interrupted,
@@ -94,8 +90,8 @@ final class VhostIsolationMigrator
                         ? 'INTERRUPTED: an isolation migration stopped before finishing or rolling back. Check the host, then run: azerioid vhost isolation apply --confirm'
                         : 'FAILED: the last isolation migration was rolled back (' . ($state['error'] ?? 'unknown error')
                             . '). Retry with: azerioid vhost isolation apply --confirm')
-                    : 'PENDING: ' . count($pending) . ' vhost identit' . (count($pending) === 1 ? 'y shares' : 'ies share')
-                        . ' the azerioid-vhosts group and can open other sites\' files. It migrates automatically, or now with: azerioid vhost isolation apply --confirm'),
+                    : 'PENDING: ' . count($pending) . ' site director' . (count($pending) === 1 ? 'y is' : 'ies are')
+                        . ' reachable from other sites (listed above). It is fixed automatically, or now with: azerioid vhost isolation apply --confirm'),
         ];
     }
 
@@ -169,11 +165,15 @@ final class VhostIsolationMigrator
         }
 
         $plan = $this->plan();
-        if ($plan === []) {
+        if ($plan['identities'] === [] && $plan['orphans'] === []) {
             return ['changed' => false, 'already_migrated' => true, 'status' => $this->status()];
         }
-        foreach ($plan as $item) {
+        foreach ($plan['identities'] as $item) {
             $this->assertSafeRoot($item['root']);
+            $this->assertSafeRoot($item['top']);
+        }
+        foreach ($plan['orphans'] as $orphan) {
+            $this->assertSafeRoot($orphan['path']);
         }
         $readers = VhostUser::readerUsers($this->runtime, $this->config);
         if ($dryRun) {
@@ -181,7 +181,7 @@ final class VhostIsolationMigrator
                 'changed' => false,
                 'dry_run' => true,
                 'readers' => $readers,
-                'plan' => $plan,
+                'plan' => $this->pendingRows($plan),
             ];
         }
 
@@ -189,34 +189,46 @@ final class VhostIsolationMigrator
         $this->log = [];
         $startedAt = $this->runtime->now();
         $this->writeState(['result' => 'running', 'trigger' => $trigger, 'started_at' => $startedAt]);
+        $identities = $plan['identities'];
+        $regrouped = array_values(array_filter($identities, static fn (array $i): bool => $i['primary_legacy'] || $i['supplementary_legacy']));
 
         try {
-            $this->note('Isolating ' . count($plan) . ' vhost identit' . (count($plan) === 1 ? 'y' : 'ies') . " ({$trigger}); readers: " . implode(', ', $readers));
+            $this->note('Converging ' . count($identities) . ' site(s) and ' . count($plan['orphans'])
+                . " orphaned director" . (count($plan['orphans']) === 1 ? 'y' : 'ies') . " ({$trigger}); readers: " . implode(', ', $readers));
             $before = $this->probeSites();
 
             // Phase 1 is additive: new groups, readers in them, readers restarted. Readers now
             // hold both the legacy group and every new one, so no site loses its web server,
-            // PHP pool or runtime while phase 2 moves files, however long that takes.
-            foreach ($plan as $item) {
-                $this->prepareGroup($item, $readers);
+            // PHP pool or runtime while phase 2 moves files, however long that takes. A run
+            // that only tightens directories adds nobody to anything and restarts nothing.
+            $joined = false;
+            foreach ($identities as $item) {
+                $joined = $this->prepareGroup($item, $readers) || $joined;
             }
-            $this->refresh();
-            foreach ($plan as $item) {
+            if ($joined) {
+                $this->refresh();
+            }
+            foreach ($identities as $item) {
                 $this->regroup($item);
             }
-            $this->verify($before, $readers);
+            foreach ($plan['orphans'] as $orphan) {
+                $this->quarantine($orphan);
+            }
+            $this->verify($before, $readers, $plan);
 
             // Committed. A process that was already running still carries the old group
             // list — a Terminal shell, an SFTP session, a running cron job — and keeps the
-            // old reach until it exits, so end them.
-            foreach ($plan as $item) {
+            // old reach until it exits, so end them. Only identities whose groups changed.
+            foreach ($regrouped as $item) {
                 $this->runtime->exec(['/usr/bin/pkill', '-TERM', '-u', $item['user']], null, 15);
             }
-            $this->note('Ended processes started before the migration for: ' . implode(', ', array_column($plan, 'user')));
+            if ($regrouped !== []) {
+                $this->note('Ended processes started before the migration for: ' . implode(', ', array_column($regrouped, 'user')));
+            }
         } catch (\Throwable $e) {
             $error = $e->getMessage();
             $this->note('FAILED: ' . $error . ' — rolling back');
-            $rollbackErrors = $this->rollback();
+            $rollbackErrors = $this->rollback($joined ?? false);
             $this->writeState([
                 'result' => 'failed',
                 'trigger' => $trigger,
@@ -239,74 +251,286 @@ final class VhostIsolationMigrator
             'trigger' => $trigger,
             'started_at' => $startedAt,
             'finished_at' => $this->runtime->now(),
-            'identities' => array_column($plan, 'user'),
+            'identities' => array_column($identities, 'user'),
+            'quarantined' => array_column($plan['orphans'], 'path'),
             'log' => $this->log,
         ]);
 
-        return ['changed' => true, 'identities' => array_column($plan, 'user'), 'log' => $this->log];
+        return [
+            'changed' => true,
+            'identities' => array_column($identities, 'user'),
+            'quarantined' => array_column($plan['orphans'], 'path'),
+            'log' => $this->log,
+        ];
     }
 
     /**
-     * Identities still on the legacy model, and why.
+     * What is still reachable from another site, and why.
      *
-     * @return list<array{user:string, root:string, group:string, primary_legacy:bool, supplementary_legacy:bool, residue:bool, reason:string}>
+     *  - identities: an identity still on the shared group, or whose site directory still
+     *    carries it, or whose top directory under www_root is open to everyone. The top
+     *    directory matters because a Laravel site's docroot is `<app>/public`: the app —
+     *    `.env`, storage, the database — sits above the identity's home, where neither the
+     *    A25 model nor A49's first pass looked.
+     *  - orphans: a directory under www_root, or a cron log directory, that belongs to no
+     *    vhost any more. Deleting a vhost keeps its files; the uid and gid they carry are
+     *    handed to the next account created, which then owns another site's data.
+     *
+     * @return array{identities: list<array<string,mixed>>, orphans: list<array<string,mixed>>}
      */
     public function plan(): array
     {
+        $legacyGid = '';
+        $members = [];
         $legacy = $this->runtime->exec(['/usr/bin/getent', 'group', VhostUser::LEGACY_GROUP], null, 10);
-        if (!$legacy->ok() || trim($legacy->stdout) === '') {
-            return [];
+        if ($legacy->ok() && trim($legacy->stdout) !== '') {
+            $fields = explode(':', trim($legacy->stdout));
+            $legacyGid = (string) ($fields[2] ?? '');
+            $members = array_filter(explode(',', (string) ($fields[3] ?? '')));
         }
-        $fields = explode(':', trim($legacy->stdout));
-        $legacyGid = (string) ($fields[2] ?? '');
-        $members = array_filter(explode(',', (string) ($fields[3] ?? '')));
 
-        $passwd = $this->runtime->exec(['/usr/bin/getent', 'passwd'], null, 10);
-        $plan = [];
-        foreach (explode("\n", $passwd->stdout) as $line) {
-            $row = explode(':', trim($line));
-            if (count($row) < 7 || !str_starts_with($row[0], VhostUser::PREFIX)) {
-                continue;
-            }
-            [$user, , , $gid, , $home] = $row;
+        $accounts = $this->identities();
+        $tops = [];
+        foreach ($accounts as $a) {
+            $tops[$this->siteTop($a['root'])][] = $a['user'];
+        }
+
+        $identities = [];
+        foreach ($accounts as $a) {
+            $user = $a['user'];
+            $home = $a['root'];
             if (!preg_match('/^[a-z][a-z0-9-]{0,31}$/', $user)) {
                 continue;
             }
-            $primary = $gid === $legacyGid;
+            $top = $this->siteTop($home);
+            // Two sites under one directory (x/public and x/admin) cannot both own it.
+            if (count($tops[$top] ?? []) > 1) {
+                $top = $home;
+            }
+            $primary = $legacyGid !== '' && $a['gid'] === $legacyGid;
             $supplementary = in_array($user, $members, true);
-            $residue = !$primary && !$supplementary && $this->hasLegacyFiles($home);
-            if (!$primary && !$supplementary && !$residue) {
+            $legacyFiles = $legacyGid !== '' && $this->hasLegacyFiles($top);
+            [$topGroup, $topMode] = $this->statGroupMode($top);
+            $topOpen = $topMode !== null && ((int) substr($topMode, -1)) !== 0;
+            // A top directory with some other group (www-data after an edit, say) cannot be
+            // closed to everyone without first giving the identity its way in.
+            $topForeign = $topGroup !== null && $topGroup !== $user && $topGroup !== VhostUser::LEGACY_GROUP
+                && ($topOpen || $top !== $home);
+            if (!$primary && !$supplementary && !$legacyFiles && !$topOpen && !$topForeign) {
                 continue;
             }
-            $reasons = array_filter([
-                $primary ? 'primary group is ' . VhostUser::LEGACY_GROUP : null,
-                $supplementary ? 'member of ' . VhostUser::LEGACY_GROUP : null,
-                ($primary || $residue) && $this->hasLegacyFiles($home) ? 'docroot files owned by group ' . VhostUser::LEGACY_GROUP : null,
-            ]);
-            $plan[] = [
+            $identities[] = [
                 'user' => $user,
                 'root' => $home,
+                'top' => $top,
                 'group' => $user,
                 'primary_legacy' => $primary,
                 'supplementary_legacy' => $supplementary,
-                'residue' => $residue,
-                'reason' => implode('; ', $reasons),
+                'legacy_files' => $legacyFiles,
+                'top_open' => $topOpen,
+                'top_mode' => $topMode,
+                'top_group' => $topGroup,
+                'reason' => implode('; ', array_filter([
+                    $primary ? 'primary group is ' . VhostUser::LEGACY_GROUP : null,
+                    $supplementary ? 'member of ' . VhostUser::LEGACY_GROUP : null,
+                    $legacyFiles ? "files under {$top} owned by group " . VhostUser::LEGACY_GROUP : null,
+                    $topOpen ? "{$top} is open to everyone (mode {$topMode})" : null,
+                    $topForeign && !$topOpen ? "{$top} belongs to group {$topGroup}" : null,
+                ])),
             ];
         }
 
-        return $plan;
+        return ['identities' => $identities, 'orphans' => $this->orphans($accounts)];
+    }
+
+    /**
+     * @param  list<array{user:string, root:string, gid:string}>  $accounts
+     * @return list<array{path:string, uid:string, gid:string, mode:string, owner:string, reason:string}>
+     */
+    private function orphans(array $accounts): array
+    {
+        $inUse = $this->inUsePaths($accounts);
+        $out = [];
+        $www = rtrim($this->config->wwwRoot, '/');
+        foreach ($this->listDirs($www) as $d) {
+            if ($d['uid'] === '0' || $this->pathInUse($d['path'], $inUse)) {
+                continue;
+            }
+            $out[] = $d + ['reason' => 'belongs to no vhost; owned by ' . $d['owner'] . ':' . $d['group'] . ' mode ' . $d['mode']];
+        }
+        $names = array_column($accounts, 'user');
+        foreach ($this->listDirs(self::CRON_LOG_DIR) as $d) {
+            $name = basename($d['path']);
+            if (!str_starts_with($name, VhostUser::PREFIX) || in_array($name, $names, true)) {
+                continue;
+            }
+            if ($d['uid'] === '0' && $d['mode'] === '700') {
+                continue;
+            }
+            $out[] = $d + ['reason' => 'cron logs of an identity that no longer exists'];
+        }
+
+        return $out;
+    }
+
+    /** Where cron job output lives, one directory per identity (A47). */
+    private const CRON_LOG_DIR = '/var/log/azerioid-cron';
+
+    /** @return list<array{path:string, uid:string, gid:string, mode:string, owner:string, group:string}> */
+    private function listDirs(string $base): array
+    {
+        if (!$this->runtime->isDir($base)) {
+            return [];
+        }
+        $r = $this->runtime->exec([
+            '/usr/bin/find', $base, '-mindepth', '1', '-maxdepth', '1', '-type', 'd',
+            '-printf', '%U\t%G\t%m\t%u\t%g\t%p\n',
+        ], null, 60);
+        $out = [];
+        foreach (explode("\n", $r->stdout) as $line) {
+            $f = explode("\t", $line);
+            if (count($f) !== 6 || !str_starts_with($f[5], $base . '/')) {
+                continue;
+            }
+            $out[] = ['uid' => $f[0], 'gid' => $f[1], 'mode' => $f[2], 'owner' => $f[3], 'group' => $f[4], 'path' => $f[5]];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Everything a live site or program needs: vhost roots, identity homes, Supervisor
+     * program directories.
+     *
+     * @param  list<array{user:string, root:string}>  $accounts
+     * @return list<string>
+     */
+    private function inUsePaths(array $accounts): array
+    {
+        $paths = array_column($accounts, 'root');
+        foreach (WebServers::for($this->config)->listVhosts($this->runtime, $this->config) as $vhost) {
+            $root = (string) ($vhost['root'] ?? '');
+            if ($root !== '') {
+                $paths[] = $root;
+            }
+        }
+        try {
+            foreach ((new SupervisorManager($this->config, $this->runtime))->listPrograms()['programs'] as $row) {
+                $dir = (string) ($row['directory'] ?? '');
+                if ($dir !== '') {
+                    $paths[] = $dir;
+                }
+            }
+        } catch (BrokerException) {
+            // No Supervisor, no programs.
+        }
+        // Programs, units and sites the panel did not create still count: a hand-written
+        // Supervisor program working in /data/www/x must not lose x to a quarantine.
+        $www = rtrim($this->config->wwwRoot, '/');
+        foreach (self::REFERENCE_GLOBS as $pattern) {
+            foreach ($this->runtime->glob($pattern) as $file) {
+                try {
+                    $body = $this->runtime->readFile($file);
+                } catch (\Throwable) {
+                    continue;
+                }
+                if (preg_match_all('#' . preg_quote($www, '#') . '/[^\s"\';{}(),]+#', $body, $m) > 0) {
+                    array_push($paths, ...$m[0]);
+                }
+            }
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /** Configuration that can name a directory under www_root without the panel knowing. */
+    private const REFERENCE_GLOBS = [
+        '/etc/supervisor/conf.d/*.conf',
+        '/etc/supervisord.d/*.ini',
+        '/etc/supervisord.d/*.conf',
+        '/etc/systemd/system/*.service',
+        '/etc/caddy/Caddyfile',
+        '/etc/caddy/conf.d/*',
+        '/etc/apache2/sites-enabled/*',
+        '/etc/httpd/conf.d/*.conf',
+        '/etc/nginx/sites-enabled/*',
+        '/etc/nginx/conf.d/*.conf',
+        '/etc/cron.d/*',
+        '/etc/crontab',
+        '/var/spool/cron/crontabs/*',
+        '/var/spool/cron/*',
+    ];
+
+    /** @param list<string> $inUse */
+    private function pathInUse(string $dir, array $inUse): bool
+    {
+        $dir = rtrim($dir, '/') . '/';
+        foreach ($inUse as $p) {
+            if (str_starts_with(rtrim($p, '/') . '/', $dir)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** The directory directly under www_root that holds a home, or the home itself elsewhere. */
+    private function siteTop(string $home): string
+    {
+        $www = rtrim($this->config->wwwRoot, '/') . '/';
+        if (!str_starts_with($home, $www)) {
+            return $home;
+        }
+        $first = explode('/', substr($home, strlen($www)))[0];
+
+        return $first === '' ? $home : $www . $first;
+    }
+
+    /** @return array{0:?string, 1:?string} group name and octal mode */
+    private function statGroupMode(string $path): array
+    {
+        if (!$this->runtime->isDir($path)) {
+            return [null, null];
+        }
+        $r = $this->runtime->exec(['/usr/bin/stat', '-c', '%G %a', $path], null, 10);
+        $f = preg_split('/\s+/', trim($r->stdout)) ?: [];
+        if (!$r->ok() || count($f) !== 2 || !preg_match('/^[0-7]{3,4}$/', $f[1])) {
+            return [null, null];
+        }
+
+        return [$f[0], $f[1]];
+    }
+
+    /**
+     * @param  array{identities: list<array<string,mixed>>, orphans: list<array<string,mixed>>}  $plan
+     * @return list<array{user:string, root:string, reason:string}>
+     */
+    private function pendingRows(array $plan): array
+    {
+        $rows = [];
+        foreach ($plan['identities'] as $i) {
+            $rows[] = ['user' => $i['user'], 'root' => $i['top'], 'reason' => $i['reason']];
+        }
+        foreach ($plan['orphans'] as $o) {
+            $rows[] = ['user' => $o['owner'], 'root' => $o['path'], 'reason' => $o['reason']];
+        }
+
+        return $rows;
     }
 
     /**
      * @param  array{user:string, root:string, group:string}  $item
      * @param  list<string>  $readers
+     * @return bool whether anything was added
      */
-    private function prepareGroup(array $item, array $readers): void
+    private function prepareGroup(array $item, array $readers): bool
     {
+        $changed = false;
         $group = $item['group'];
         if (!VhostUser::groupExists($this->runtime, $group)) {
             $this->must(['/usr/sbin/groupadd', '--system', $group], "create group {$group}");
             $this->journal[] = ['cmd' => ['/usr/sbin/groupdel', $group], 'what' => "delete group {$group}"];
+            $changed = true;
         }
         foreach ($readers as $reader) {
             if (VhostUser::userInGroup($this->runtime, $reader, $group)) {
@@ -314,25 +538,41 @@ final class VhostIsolationMigrator
             }
             $this->must(['/usr/bin/gpasswd', '-a', $reader, $group], "add {$reader} to {$group}");
             $this->journal[] = ['cmd' => ['/usr/bin/gpasswd', '-d', $reader, $group], 'what' => "remove {$reader} from {$group}"];
+            $changed = true;
         }
+
+        return $changed;
     }
 
     /**
-     * @param  array{user:string, root:string, group:string, primary_legacy:bool, supplementary_legacy:bool}  $item
+     * @param  array<string,mixed>  $item
      */
     private function regroup(array $item): void
     {
         $user = $item['user'];
         $group = $item['group'];
-        $root = $item['root'];
+        $top = $item['top'];
         $legacy = VhostUser::LEGACY_GROUP;
 
         // Files before the primary group: usermod -g would otherwise chgrp the home tree
         // on its own terms. find -h never follows a symlink a site planted to escape its
         // tree, and -xdev never walks into another filesystem mounted under it.
-        if ($this->runtime->isDir($root)) {
-            $this->must($this->chgrpCommand($root, $legacy, $group), "regroup {$root} {$legacy} → {$group}");
-            $this->journal[] = ['cmd' => $this->chgrpCommand($root, $group, $legacy), 'what' => "regroup {$root} back to {$legacy}"];
+        if ($item['legacy_files'] && $this->runtime->isDir($top)) {
+            $this->must($this->chgrpCommand($top, $legacy, $group), "regroup {$top} {$legacy} → {$group}");
+            $this->journal[] = ['cmd' => $this->chgrpCommand($top, $group, $legacy), 'what' => "regroup {$top} back to {$legacy}"];
+        }
+        // The top directory is the gate: once it is the site's group and closed to everyone
+        // else, nothing below it is reachable by another site, whatever mode PHP gave a file.
+        if ($this->runtime->isDir($top)) {
+            [$nowGroup, $nowMode] = $this->statGroupMode($top);
+            if ($nowGroup !== null && $nowGroup !== $group) {
+                $this->must(['/usr/bin/chgrp', '-h', $group, $top], "give {$top} to {$group}");
+                $this->journal[] = ['cmd' => ['/usr/bin/chgrp', '-h', $nowGroup, $top], 'what' => "give {$top} back to {$nowGroup}"];
+            }
+            if ($nowMode !== null && ((int) substr($nowMode, -1)) !== 0) {
+                $this->must(['/usr/bin/chmod', 'o-rwx', $top], "close {$top} to everyone else");
+                $this->journal[] = ['cmd' => ['/usr/bin/chmod', $nowMode, $top], 'what' => "reopen {$top} ({$nowMode})"];
+            }
         }
         if ($item['primary_legacy']) {
             $this->must(['/usr/sbin/usermod', '-g', $group, $user], "primary group of {$user} → {$group}");
@@ -342,7 +582,68 @@ final class VhostIsolationMigrator
             $this->must(['/usr/bin/gpasswd', '-d', $user, $legacy], "remove {$user} from {$legacy}");
             $this->journal[] = ['cmd' => ['/usr/bin/gpasswd', '-a', $user, $legacy], 'what' => "add {$user} back to {$legacy}"];
         }
-        $this->note("Isolated {$user} ({$root})");
+        $this->note("Isolated {$user} ({$top})");
+    }
+
+    /**
+     * Root-owned and closed: the uid and gid the files carry can be reassigned to any new
+     * account without handing it the data. Only the top directory changes, so an operator
+     * can still recover the contents exactly as they were.
+     *
+     * @param  array{path:string, uid:string, gid:string, mode:string}  $orphan
+     */
+    private function quarantine(array $orphan): void
+    {
+        $path = $orphan['path'];
+        $this->must(['/usr/bin/chown', '-h', '0:0', $path], "quarantine {$path}");
+        $this->journal[] = ['cmd' => ['/usr/bin/chown', '-h', $orphan['uid'] . ':' . $orphan['gid'], $path], 'what' => "hand {$path} back to {$orphan['uid']}:{$orphan['gid']}"];
+        $this->must(['/usr/bin/chmod', '0700', $path], "close {$path}");
+        $this->journal[] = ['cmd' => ['/usr/bin/chmod', $orphan['mode'], $path], 'what' => "reopen {$path} ({$orphan['mode']})"];
+        $this->note("Quarantined {$path} (was {$orphan['owner']}:{$orphan['group']} {$orphan['mode']})");
+    }
+
+    /**
+     * After a vhost is deleted: quarantine its site directory (unless another site or program
+     * still uses it) and its cron logs. Its identity is gone, so the uid and gid those carry
+     * are free for the next account.
+     *
+     * @return list<string> what was quarantined
+     */
+    public function quarantineRemains(string $root, string $username): array
+    {
+        $done = [];
+        if ($root !== '' && !$this->isForbiddenRoot($root)) {
+            $top = $this->siteTop($root);
+            $www = rtrim($this->config->wwwRoot, '/');
+            $inUse = $this->inUsePaths($this->identities());
+            if ($top !== $www && !$this->isForbiddenRoot($top) && !$this->pathInUse($top, $inUse)
+                && self::quarantineDirectory($this->runtime, $top)) {
+                $done[] = $top;
+            }
+        }
+        if (str_starts_with($username, VhostUser::PREFIX) && !str_contains($username, '/')) {
+            $logs = self::CRON_LOG_DIR . '/' . $username;
+            if (self::quarantineDirectory($this->runtime, $logs)) {
+                $done[] = $logs;
+            }
+        }
+
+        return $done;
+    }
+
+    /**
+     * The same, outside a migration: used when a vhost is deleted and its files are kept.
+     * Best effort — the next converge run finds anything this could not close.
+     */
+    public static function quarantineDirectory(Runtime $runtime, string $path): bool
+    {
+        if (!$runtime->isDir($path) || $runtime->getuid() !== 0) {
+            return false;
+        }
+        $a = $runtime->exec(['/usr/bin/chown', '-h', '0:0', $path], null, 30);
+        $b = $runtime->exec(['/usr/bin/chmod', '0700', $path], null, 30);
+
+        return $a->ok() && $b->ok();
     }
 
     /**
@@ -385,9 +686,28 @@ final class VhostIsolationMigrator
      * @param  array<string,int>  $before  HTTP status per domain, captured before any change
      * @param  list<string>  $readers
      */
-    private function verify(array $before, array $readers): void
+    private function verify(array $before, array $readers, array $plan): void
     {
         $identities = $this->identities();
+
+        // 0. Every site identity can still open its own site, top directory included.
+        foreach ($plan['identities'] as $item) {
+            foreach (array_unique([$item['top'], $item['root']]) as $dir) {
+                if (!$this->runtime->isDir($dir)) {
+                    continue;
+                }
+                $probe = $this->runtime->exec(['/usr/sbin/runuser', '-u', $item['user'], '--', '/usr/bin/test', '-r', $dir, '-a', '-x', $dir], null, 15);
+                if (!$probe->ok()) {
+                    throw new BrokerException("{$item['user']} can no longer open its own {$dir}.", 1);
+                }
+            }
+        }
+        foreach ($plan['orphans'] as $orphan) {
+            $r = $this->runtime->exec(['/usr/bin/stat', '-c', '%u:%g %a', $orphan['path']], null, 10);
+            if (trim($r->stdout) !== '0:0 700') {
+                throw new BrokerException("{$orphan['path']} is not quarantined (" . trim($r->stdout) . ').', 1);
+            }
+        }
 
         // 1. The point of the migration: one identity can no longer open another's docroot.
         $checked = 0;
@@ -396,13 +716,17 @@ final class VhostIsolationMigrator
                 if ($x['user'] === $y['user'] || $checked >= 200 || $this->overlaps($x['root'], $y['root'])) {
                     continue;
                 }
-                if (!$this->runtime->isDir($y['root']) || $this->worldReadable($y['root'])) {
+                $target = $this->siteTop($y['root']);
+                if ($this->overlaps($x['root'], $target)) {
+                    $target = $y['root'];
+                }
+                if (!$this->runtime->isDir($target) || $this->worldReadable($target)) {
                     continue;
                 }
                 $checked++;
-                $probe = $this->runtime->exec(['/usr/sbin/runuser', '-u', $x['user'], '--', '/usr/bin/test', '-r', $y['root']], null, 15);
+                $probe = $this->runtime->exec(['/usr/sbin/runuser', '-u', $x['user'], '--', '/usr/bin/test', '-r', $target], null, 15);
                 if ($probe->ok()) {
-                    throw new BrokerException("{$x['user']} can still read {$y['root']}.", 1);
+                    throw new BrokerException("{$x['user']} can still read {$target}.", 1);
                 }
             }
         }
@@ -499,7 +823,7 @@ final class VhostIsolationMigrator
         return (int) trim($r->stdout);
     }
 
-    /** @return list<array{user:string, root:string}> */
+    /** @return list<array{user:string, root:string, gid:string}> */
     private function identities(): array
     {
         $passwd = $this->runtime->exec(['/usr/bin/getent', 'passwd'], null, 10);
@@ -507,7 +831,7 @@ final class VhostIsolationMigrator
         foreach (explode("\n", $passwd->stdout) as $line) {
             $row = explode(':', trim($line));
             if (count($row) >= 7 && str_starts_with($row[0], VhostUser::PREFIX)) {
-                $out[] = ['user' => $row[0], 'root' => $row[5]];
+                $out[] = ['user' => $row[0], 'root' => $row[5], 'gid' => $row[3]];
             }
         }
 
@@ -580,7 +904,7 @@ final class VhostIsolationMigrator
     }
 
     /** @return list<string> */
-    private function rollback(): array
+    private function rollback(bool $refresh): array
     {
         $errors = [];
         foreach (array_reverse($this->journal) as $entry) {
@@ -590,11 +914,13 @@ final class VhostIsolationMigrator
             }
         }
         $this->journal = [];
-        try {
-            VhostUser::refreshReaders($this->runtime, $this->config, false);
-            $this->restartSupervised();
-        } catch (\Throwable $e) {
-            $errors[] = 'refresh after rollback: ' . $e->getMessage();
+        if ($refresh) {
+            try {
+                VhostUser::refreshReaders($this->runtime, $this->config, false);
+                $this->restartSupervised();
+            } catch (\Throwable $e) {
+                $errors[] = 'refresh after rollback: ' . $e->getMessage();
+            }
         }
         $this->note($errors === [] ? 'Rolled back cleanly' : 'Rolled back with ' . count($errors) . ' problem(s)');
 
