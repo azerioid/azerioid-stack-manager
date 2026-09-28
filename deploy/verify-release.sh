@@ -224,7 +224,11 @@ for _ in $(seq 1 45); do
     ISO_OUT="$("${PREFIX}/broker" vhost.isolation.status </dev/null 2>&1)" || true
     printf '%s' "${ISO_OUT}" | grep -q '"migrated":true' && break
     [[ "${APPLY}" == "1" ]] || break
-    printf '%s' "${ISO_OUT}" | grep -q '"result":"failed"' && break
+    # A failure only ends the wait when it blocks automatic retries; a failure recorded by
+    # an older release is retried by this one (A49-E1).
+    printf '%s' "${ISO_OUT}" | grep -q '"auto_eligible":false' \
+        && ! printf '%s' "${ISO_OUT}" | grep -q '"running":true' \
+        && printf '%s' "${ISO_OUT}" | grep -q '"result":"failed"' && break
     sleep 10
 done
 printf '%s\n' "${ISO_OUT}" | head -c 400
@@ -410,6 +414,11 @@ if [[ -d "${CRON_LOG_DIR}" ]]; then
     BAD_OWNER=0
     for d in "${CRON_LOG_DIR}"/az-vh-*; do
         [[ -d "${d}" ]] || continue
+        # Logs of a removed identity are quarantined root:root 0700 (A49-E1), not owned by it.
+        if ! id -u "$(basename "${d}")" >/dev/null 2>&1; then
+            [[ "$(stat -c '%u %a' "${d}")" == "0 700" ]] || { BAD_OWNER=1; echo "CRON_LOG_DIR_NOT_QUARANTINED=${d}"; }
+            continue
+        fi
         if [[ "$(stat -c '%U' "${d}" 2>/dev/null)" != "$(basename "${d}")" ]]; then
             BAD_OWNER=1
             echo "CRON_LOG_DIR_WRONG_OWNER=${d}"
