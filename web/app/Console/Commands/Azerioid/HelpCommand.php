@@ -32,6 +32,11 @@ Usage:
   azerioid vhost octane disable|reload|status --domain=<d> [--json]
   azerioid vhost pm2 enable  --domain=<d> [--instances=1] [--entry=server.js] [--port=36000-36999]
   azerioid vhost pm2 disable|reload|status|scale --domain=<d> [--instances=N] [--json]
+  azerioid vhost docker enable  --domain=<d> --internal-port=N [--mode=image|compose|dockerfile] [--image=…] [--service=web]
+                               [--restart=always|on-failure|never] [--volume=data:/data[:ro]]… [--registry=<name>] [--env-file=path]
+  azerioid vhost docker disable|build|restart|logs|status --domain=<d>
+  azerioid vhost docker services|settings|env [--reveal]|env-set --env-file=path --domain=<d>   # A50
+  azerioid docker registry list|add <name> --host=ghcr.io --username=<u>|del <name>   # password: AZERIOID_REGISTRY_PASSWORD or prompt
 
   azerioid db list      [--engine=mariadb|postgresql|mongodb] [--json]
   azerioid db add       --engine=<e> --name=<db> [--user=<u>]

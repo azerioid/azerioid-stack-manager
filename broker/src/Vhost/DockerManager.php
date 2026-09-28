@@ -73,6 +73,8 @@ final class DockerManager
             'docker_app_detail' => $detected['detail'],
             'app_dir' => $detected['app_dir'],
             'docs_url' => self::DOCS_URL,
+            'settings' => DockerSettings::load($this->runtime, $domain),
+            'env_keys' => array_keys(DockerSettings::loadEnv($this->runtime, $domain)),
         ];
     }
 
@@ -94,7 +96,17 @@ final class DockerManager
 
         $spec = $this->resolveEnableSpec($domain, $vhost, $input);
         $this->writeRestoreMeta($domain, $vhost);
-        $this->prepareWorkload($spec);
+        $this->storeSettings($domain, $spec);
+        if (array_key_exists('env', $input)) {
+            DockerSettings::saveEnv($this->runtime, $domain, DockerSettings::validateEnv($input['env']));
+        }
+        try {
+            $this->ensureVolumeDirs($spec);
+            $this->prepareWorkload($spec);
+        } catch (\Throwable $e) {
+            $this->cleanupMeta($domain);
+            throw $e;
+        }
 
         $program = self::programName($domain);
         $this->upsertProgram($supervisor, $program, [
@@ -102,7 +114,7 @@ final class DockerManager
             'directory' => $spec['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
-            'autorestart' => true,
+            'autorestart' => DockerSettings::autorestart($spec['restart']),
         ]);
         $supervisor->control($program, 'start');
 
@@ -148,6 +160,7 @@ final class DockerManager
             'docker_compose' => $spec['compose'],
             'docker_dockerfile' => $spec['dockerfile'],
             'docker_program' => $program,
+            'docker_service' => $spec['service'],
             'app_dir' => $spec['app_dir'],
             'apply' => $applied['apply'] ?? null,
             'docs_url' => self::DOCS_URL,
@@ -218,6 +231,7 @@ final class DockerManager
         $domain = Validator::domain($domain);
         $vhost = $this->requireEnabled($domain);
         $spec = $this->specFromVhost($domain, $vhost);
+        $this->ensureVolumeDirs($spec);
         $this->prepareWorkload($spec, true);
 
         $supervisor = new SupervisorManager($this->config, $this->runtime);
@@ -227,7 +241,7 @@ final class DockerManager
             'directory' => $spec['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
-            'autorestart' => true,
+            'autorestart' => DockerSettings::autorestart($spec['restart']),
         ]);
         $restart = $supervisor->control($program, 'restart');
         if (!$this->waitForPort((int) $spec['port'])) {
@@ -305,10 +319,27 @@ final class DockerManager
      *
      * @return array{ok:bool, exists:bool, image:string, detail:string}
      */
-    public function validateRemoteImage(string $image): array
+    public function validateRemoteImage(string $image, ?string $registry = null): array
     {
         $this->assertDockerComponentInstalled();
         $image = self::validateImage($image);
+        $registry = $this->validateRegistryRef($registry);
+        if ($registry !== null) {
+            return $this->withRegistry($registry, function (array $auth) use ($image): array {
+                $inspect = $this->runAsSupervised(
+                    array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [$this->dockerBin(), 'manifest', 'inspect', $image]),
+                    '/tmp',
+                    60
+                );
+
+                return [
+                    'ok' => true,
+                    'exists' => $inspect->ok(),
+                    'image' => $image,
+                    'detail' => $inspect->ok() ? 'manifest inspect ok (authenticated)' : self::execDetail($inspect, 400),
+                ];
+            });
+        }
         $docker = $this->dockerBin();
         $env = $this->dockerEnvAssign();
         $manifest = $this->runAsSupervised(
@@ -456,6 +487,146 @@ final class DockerManager
             'mode' => $mode,
             'domain' => $domain,
         ];
+    }
+
+    /**
+     * Services a compose file defines, as compose itself resolves them (profiles, includes,
+     * extends and interpolation included) — the reason no YAML parser of our own is used.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function services(string $domain, array $input = []): array
+    {
+        $domain = Validator::domain($domain);
+        $this->assertDockerComponentInstalled();
+        $vhost = $this->findVhost($domain);
+        $detected = self::detectDockerApp($this->runtime, $vhost['root'] ?? null);
+        $appDir = $detected['app_dir'] ?? rtrim((string) ($vhost['root'] ?? ''), '/');
+        $compose = self::validateRelativePath(
+            $input['compose'] ?? ($vhost['docker_compose'] ?? ($detected['compose'] ?? self::DEFAULT_COMPOSE)),
+            'compose'
+        );
+        if (!$this->runtime->fileExists($appDir . '/' . $compose)) {
+            throw new BrokerException("Compose file not found: {$compose}", 3);
+        }
+
+        return [
+            'domain' => $domain,
+            'compose' => $compose,
+            'services' => $this->composeServices($appDir, $compose),
+            'selected' => DockerSettings::load($this->runtime, $domain)['service'],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function settings(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $this->findVhost($domain);
+
+        return [
+            'domain' => $domain,
+            'settings' => DockerSettings::load($this->runtime, $domain),
+            'env_keys' => array_keys(DockerSettings::loadEnv($this->runtime, $domain)),
+        ];
+    }
+
+    /**
+     * Change the service, restart policy, volumes or registry, and apply them to a running
+     * container. Values not given are kept.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function updateSettings(string $domain, array $input): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        $current = DockerSettings::load($this->runtime, $domain);
+        $next = [
+            'service' => array_key_exists('service', $input)
+                ? ($input['service'] === null || $input['service'] === '' ? null : DockerSettings::validateService($input['service']))
+                : $current['service'],
+            'restart' => array_key_exists('restart', $input) ? DockerSettings::validateRestart($input['restart']) : $current['restart'],
+            'volumes' => array_key_exists('volumes', $input) ? DockerSettings::validateVolumes($input['volumes']) : $current['volumes'],
+            'registry' => array_key_exists('registry', $input) ? $this->validateRegistryRef($input['registry']) : $current['registry'],
+        ];
+        $enabled = AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) === self::RUNTIME_DOCKER;
+        if ($enabled && $next['service'] !== null && ($vhost['docker_mode'] ?? '') === self::MODE_COMPOSE) {
+            $spec = $this->specFromVhost($domain, $vhost);
+            $services = $this->composeServices($spec['app_dir'], (string) $spec['compose']);
+            if (!in_array($next['service'], $services, true)) {
+                throw new BrokerException("Service {$next['service']} is not in the compose file (" . implode(', ', $services) . ').', 2);
+            }
+        }
+        DockerSettings::save($this->runtime, $domain, $next);
+
+        return [
+            'domain' => $domain,
+            'settings' => $next,
+            'applied' => $enabled ? $this->reapply($domain) : false,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function env(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $this->findVhost($domain);
+
+        return ['domain' => $domain, 'env' => DockerSettings::loadEnv($this->runtime, $domain)];
+    }
+
+    /**
+     * Replace the container environment and restart the container with it.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function setEnv(string $domain, array $input): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        $env = DockerSettings::validateEnv($input['env'] ?? []);
+        DockerSettings::saveEnv($this->runtime, $domain, $env);
+        $enabled = AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) === self::RUNTIME_DOCKER;
+
+        return [
+            'domain' => $domain,
+            'env_keys' => array_keys($env),
+            'applied' => $enabled ? $this->reapply($domain) : false,
+        ];
+    }
+
+    /** Re-render what the container starts from and restart it. */
+    private function reapply(string $domain): bool
+    {
+        $vhost = $this->requireEnabled($domain);
+        $spec = $this->specFromVhost($domain, $vhost);
+        $this->ensureVolumeDirs($spec);
+        if ($spec['mode'] === self::MODE_COMPOSE) {
+            $this->writePortsOverride($spec);
+        }
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->runCommand($spec),
+            'directory' => $spec['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => DockerSettings::autorestart($spec['restart']),
+        ]);
+        $supervisor->control($program, 'restart');
+        if (!$this->waitForPort((int) $spec['port'])) {
+            throw new BrokerException(
+                'Settings saved, but the container is not listening on 127.0.0.1:' . $spec['port']
+                . ' after the restart. Check: azerioid vhost docker logs --domain=' . $domain,
+                1
+            );
+        }
+
+        return true;
     }
 
     public static function validatePort(mixed $value): int
@@ -745,9 +916,15 @@ final class DockerManager
             $port = $this->allocatePort($reserved);
         }
 
+        $stored = DockerSettings::load($this->runtime, $domain);
+        $restart = array_key_exists('restart', $input) ? DockerSettings::validateRestart($input['restart']) : $stored['restart'];
+        $volumes = array_key_exists('volumes', $input) ? DockerSettings::validateVolumes($input['volumes']) : $stored['volumes'];
+        $registry = array_key_exists('registry', $input) ? $this->validateRegistryRef($input['registry']) : $stored['registry'];
+
         $image = null;
         $compose = null;
         $dockerfile = null;
+        $service = null;
         if ($mode === self::MODE_IMAGE) {
             $image = self::validateImage($input['image'] ?? null);
         } elseif ($mode === self::MODE_COMPOSE) {
@@ -758,6 +935,7 @@ final class DockerManager
             if (!$this->runtime->fileExists($appDir . '/' . $compose)) {
                 throw new BrokerException("Compose file not found: {$compose}", 3);
             }
+            $service = $this->resolveService($appDir, $compose, $input['service'] ?? $stored['service']);
         } else {
             $dockerfile = self::validateRelativePath(
                 $input['dockerfile'] ?? ($detected['dockerfile'] ?? self::DEFAULT_DOCKERFILE),
@@ -778,7 +956,161 @@ final class DockerManager
             'image' => $image,
             'compose' => $compose,
             'dockerfile' => $dockerfile,
+            'service' => $service,
+            'restart' => $restart,
+            'volumes' => $volumes,
+            'registry' => $registry,
         ];
+    }
+
+    /**
+     * The service that gets the site's port (G8). Asked of compose itself; an explicit
+     * choice must exist, and with no choice only a single-service file is unambiguous.
+     */
+    private function resolveService(string $appDir, string $compose, mixed $requested): string
+    {
+        $services = $this->composeServices($appDir, $compose);
+        if ($requested !== null && $requested !== '') {
+            $service = DockerSettings::validateService($requested);
+            if (!in_array($service, $services, true)) {
+                throw new BrokerException("Service {$service} is not in {$compose} (" . implode(', ', $services) . ').', 2);
+            }
+
+            return $service;
+        }
+        if (count($services) === 1) {
+            return $services[0];
+        }
+
+        throw new BrokerException(
+            "{$compose} defines " . count($services) . ' services (' . implode(', ', $services)
+            . '). Choose the one that serves the site: service=<name>.',
+            2
+        );
+    }
+
+    /** @return list<string> */
+    private function composeServices(string $appDir, string $compose): array
+    {
+        $result = $this->runAsSupervised(
+            ['/usr/bin/env', $this->dockerEnvAssign(), $this->dockerBin(), 'compose', '-f', $compose, 'config', '--services'],
+            $appDir,
+            60
+        );
+        if (!$result->ok()) {
+            throw new BrokerException('docker compose could not read ' . $compose . ': ' . self::execDetail($result), 3);
+        }
+        $services = [];
+        foreach (explode("\n", $result->stdout) as $line) {
+            $line = trim($line);
+            if ($line !== '' && preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/', $line)) {
+                $services[] = $line;
+            }
+        }
+        if ($services === []) {
+            throw new BrokerException("{$compose} defines no services.", 3);
+        }
+
+        return $services;
+    }
+
+    private function validateRegistryRef(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $name = DockerRegistries::validateName($value);
+        if (!DockerRegistries::exists($this->runtime, $name)) {
+            throw new BrokerException("No saved registry named {$name}. Add it first: azerioid docker registry add {$name}", 3);
+        }
+
+        return $name;
+    }
+
+    /** @param array<string, mixed> $spec */
+    private function storeSettings(string $domain, array $spec): void
+    {
+        DockerSettings::save($this->runtime, $domain, [
+            'service' => $spec['service'],
+            'restart' => $spec['restart'],
+            'volumes' => $spec['volumes'],
+            'registry' => $spec['registry'],
+        ]);
+    }
+
+    /**
+     * Bind-mounted data directories live inside the app, so the site's own identity, its
+     * backups and the File Manager see them. A missing one is created for the container:
+     * owned by azerioid-supervised (root inside a rootless container), group the vhost's.
+     *
+     * @param  array<string, mixed>  $spec
+     */
+    private function ensureVolumeDirs(array $spec): void
+    {
+        foreach ($spec['volumes'] ?? [] as $volume) {
+            $path = rtrim($spec['app_dir'], '/') . '/' . $volume['host'];
+            if (!$this->runtime->isDir($path)) {
+                $this->runtime->mkdir($path, 02770);
+                if ($this->runtime->getuid() === 0) {
+                    $this->runtime->chown($path, SupervisedUser::USERNAME, VhostUser::docrootGroup($this->runtime, $spec['domain']));
+                    $this->runtime->chmod($path, 02770);
+                }
+            }
+            // A symlink planted in the app must not turn a mount into a path outside it.
+            if ($this->runtime->resolveUnderBase($path, $spec['app_dir']) === null) {
+                throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
+            }
+        }
+    }
+
+    /**
+     * Run $fn with a throwaway docker config holding one registry login (#6). The credential
+     * reaches docker on stdin and exists on disk only for the duration of $fn.
+     *
+     * @template T
+     * @param  callable(list<string>):T  $fn  receives the env assignment(s) to add to docker calls
+     * @return T
+     */
+    private function withRegistry(?string $registry, callable $fn): mixed
+    {
+        if ($registry === null) {
+            return $fn([]);
+        }
+        $cred = DockerRegistries::get($this->runtime, $registry);
+        if (!$this->runtime->isDir(DockerSettings::BASE)) {
+            $this->runtime->mkdir(DockerSettings::BASE, 0750);
+        }
+        $dir = DockerSettings::BASE . '/.auth-' . bin2hex(random_bytes(8));
+        $this->runtime->mkdir($dir, 0700);
+        if ($this->runtime->getuid() === 0) {
+            $this->runtime->chown(DockerSettings::BASE, 'root', SupervisedUser::USERNAME);
+            $this->runtime->chmod(DockerSettings::BASE, 0750);
+            $this->runtime->chown($dir, SupervisedUser::USERNAME, SupervisedUser::USERNAME);
+            $this->runtime->chmod($dir, 0700);
+        }
+        $auth = ['DOCKER_CONFIG=' . $dir];
+        try {
+            $login = $this->runAsSupervised(
+                array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [
+                    $this->dockerBin(), 'login', $cred['host'], '--username', $cred['username'], '--password-stdin',
+                ]),
+                '/tmp',
+                60,
+                $cred['password'] . "\n"
+            );
+            if (!$login->ok()) {
+                throw new BrokerException("Login to {$cred['host']} as {$cred['username']} failed: " . self::execDetail($login, 300), 3);
+            }
+
+            return $fn($auth);
+        } finally {
+            $this->runAsSupervised(
+                array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth, [$this->dockerBin(), 'logout', $cred['host']]),
+                '/tmp',
+                30
+            );
+            $this->runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dir], null, 30);
+        }
     }
 
     /**
@@ -835,8 +1167,13 @@ final class DockerManager
     {
         $detected = self::detectDockerApp($this->runtime, $vhost['root'] ?? null);
         $mode = self::validateMode($vhost['docker_mode'] ?? self::MODE_IMAGE);
+        $settings = DockerSettings::load($this->runtime, $domain);
 
         return [
+            'service' => $settings['service'],
+            'restart' => $settings['restart'],
+            'volumes' => $settings['volumes'],
+            'registry' => $settings['registry'],
             'domain' => $domain,
             'mode' => $mode,
             'app_dir' => $detected['app_dir'] ?? rtrim((string) ($vhost['root'] ?? ''), '/'),
@@ -873,54 +1210,54 @@ final class DockerManager
      */
     private function prepareWorkload(array $spec, bool $forceRebuild = false): void
     {
-        $docker = $this->dockerBin();
-        $env = $this->dockerEnvAssign();
-        if ($spec['mode'] === self::MODE_IMAGE) {
-            $pull = $this->runAsSupervised(
-                ['/usr/bin/env', $env, $docker, 'pull', (string) $spec['image']],
-                $spec['app_dir'],
-                600
-            );
-            if (!$pull->ok()) {
-                throw new BrokerException('docker pull failed: ' . self::execDetail($pull), 1);
+        $this->withRegistry($spec['registry'] ?? null, function (array $auth) use ($spec, $forceRebuild): void {
+            $docker = $this->dockerBin();
+            $env = array_merge(['/usr/bin/env', $this->dockerEnvAssign()], $auth);
+            if ($spec['mode'] === self::MODE_IMAGE) {
+                $pull = $this->runAsSupervised(array_merge($env, [$docker, 'pull', (string) $spec['image']]), $spec['app_dir'], 600);
+                if (!$pull->ok()) {
+                    throw new BrokerException('docker pull failed: ' . self::execDetail($pull), 1);
+                }
+
+                return;
+            }
+            if ($spec['mode'] === self::MODE_DOCKERFILE) {
+                $build = $this->runAsSupervised(
+                    array_merge($env, [$docker, 'build', '-t', (string) $spec['image'], '-f', (string) $spec['dockerfile'], '.']),
+                    $spec['app_dir'],
+                    900
+                );
+                if (!$build->ok()) {
+                    throw new BrokerException('docker build failed: ' . self::execDetail($build), 1);
+                }
+
+                return;
             }
 
-            return;
-        }
-        if ($spec['mode'] === self::MODE_DOCKERFILE) {
-            $tag = (string) $spec['image'];
+            $this->writePortsOverride($spec);
+            $compose = array_merge($env, [
+                $docker, 'compose',
+                '-f', (string) $spec['compose'],
+                '-f', $this->portsOverridePath($spec['domain']),
+                '-p', self::composeProject($spec['domain']),
+            ]);
+            if ($auth !== []) {
+                // Supervisor's `up` runs without the credential, so private images are
+                // fetched now, while it exists.
+                $pull = $this->runAsSupervised(array_merge($compose, ['pull', '--ignore-buildable']), $spec['app_dir'], 900);
+                if (!$pull->ok()) {
+                    throw new BrokerException('docker compose pull failed: ' . self::execDetail($pull), 1);
+                }
+            }
             $build = $this->runAsSupervised(
-                [
-                    '/usr/bin/env', $env, $docker, 'build',
-                    '-t', $tag,
-                    '-f', (string) $spec['dockerfile'],
-                    '.',
-                ],
+                array_merge($compose, $forceRebuild ? ['build', '--no-cache'] : ['build']),
                 $spec['app_dir'],
                 900
             );
             if (!$build->ok()) {
-                throw new BrokerException('docker build failed: ' . self::execDetail($build), 1);
+                throw new BrokerException('docker compose build failed: ' . self::execDetail($build), 1);
             }
-
-            return;
-        }
-
-        $this->writePortsOverride($spec);
-        $buildArgs = [
-            '/usr/bin/env', $env, $docker, 'compose',
-            '-f', (string) $spec['compose'],
-            '-f', $this->portsOverridePath($spec['domain']),
-            '-p', self::composeProject($spec['domain']),
-            'build',
-        ];
-        if ($forceRebuild) {
-            $buildArgs[] = '--no-cache';
-        }
-        $build = $this->runAsSupervised($buildArgs, $spec['app_dir'], 900);
-        if (!$build->ok()) {
-            throw new BrokerException('docker compose build failed: ' . self::execDetail($build), 1);
-        }
+        });
     }
 
     /**
@@ -949,8 +1286,16 @@ final class DockerManager
             '/usr/bin/env', $env, $docker, 'run', '--rm',
             '--name', self::containerName($spec['domain']),
             '-p', '127.0.0.1:' . $spec['port'] . ':' . $spec['internal_port'],
-            (string) $spec['image'],
         ];
+        if (DockerSettings::loadEnv($this->runtime, $spec['domain']) !== []) {
+            // Values stay in the file: never on the command line, where ps would show them.
+            array_push($parts, '--env-file', DockerSettings::envPath($spec['domain']));
+        }
+        foreach ($spec['volumes'] ?? [] as $volume) {
+            array_push($parts, '-v', rtrim($spec['app_dir'], '/') . '/' . $volume['host'] . ':' . $volume['container']
+                . ($volume['readonly'] ? ':ro' : ''));
+        }
+        $parts[] = (string) $spec['image'];
 
         return Validator::supervisorCommand(implode(' ', $parts));
     }
@@ -963,40 +1308,31 @@ final class DockerManager
      */
     private function writePortsOverride(array $spec): void
     {
-        $composePath = $spec['app_dir'] . '/' . $spec['compose'];
-        $service = self::firstComposeService($this->runtime->readFile($composePath));
+        $service = $spec['service'] ?? null;
         if ($service === null) {
-            throw new BrokerException('Could not find a service in the compose file.', 3);
+            // Enabled before the service was recorded (never on a real host: compose could not
+            // read the override until v2.1.0). The same rule as enable: one service, or ask.
+            $service = $this->resolveService($spec['app_dir'], (string) $spec['compose'], null);
         }
-        $dir = dirname($this->portsOverridePath($spec['domain']));
-        if (!$this->runtime->isDir($dir)) {
-            $this->runtime->mkdir($dir, 0750);
-        }
+        DockerSettings::ensureDir($this->runtime, $spec['domain']);
         $yaml = "services:\n  {$service}:\n    ports:\n"
             . "      - \"127.0.0.1:{$spec['port']}:{$spec['internal_port']}\"\n";
-        $this->runtime->writeFile($this->portsOverridePath($spec['domain']), $yaml, 0640);
-    }
-
-    public static function firstComposeService(string $contents): ?string
-    {
-        $inServices = false;
-        foreach (explode("\n", $contents) as $line) {
-            if (preg_match('/^services:\s*(?:#.*)?$/', $line) === 1) {
-                $inServices = true;
-                continue;
-            }
-            if (!$inServices) {
-                continue;
-            }
-            if (preg_match('/^  ([A-Za-z0-9][A-Za-z0-9_-]*):\s*(?:#.*)?$/', $line, $m) === 1) {
-                return $m[1];
-            }
-            if ($line !== '' && preg_match('/^\S/', $line) === 1) {
-                break;
+        $env = DockerSettings::loadEnv($this->runtime, $spec['domain']);
+        if ($env !== []) {
+            $yaml .= "    environment:\n";
+            foreach ($env as $key => $value) {
+                $yaml .= "      {$key}: " . DockerSettings::yamlString($value) . "\n";
             }
         }
-
-        return null;
+        if (($spec['volumes'] ?? []) !== []) {
+            $yaml .= "    volumes:\n";
+            foreach ($spec['volumes'] as $volume) {
+                $yaml .= '      - ' . DockerSettings::yamlString(
+                    rtrim($spec['app_dir'], '/') . '/' . $volume['host'] . ':' . $volume['container'] . ($volume['readonly'] ? ':ro' : '')
+                ) . "\n";
+            }
+        }
+        DockerSettings::writeShared($this->runtime, $this->portsOverridePath($spec['domain']), $yaml);
     }
 
     /**
@@ -1128,7 +1464,17 @@ final class DockerManager
         return $name !== '' ? $name : $id;
     }
 
+    /**
+     * Read by `docker compose` as azerioid-supervised, so it lives where that account can
+     * read it. Until v2.1.0 it was under /var/lib/azerioid-panel/docker-meta (root 0750),
+     * which the account cannot enter — compose mode never started on a real host.
+     */
     private function portsOverridePath(string $domain): string
+    {
+        return DockerSettings::portsOverridePath($domain);
+    }
+
+    private function legacyPortsOverridePath(string $domain): string
     {
         return '/var/lib/azerioid-panel/docker-meta/' . self::domainSlug($domain) . '.ports.yml';
     }
@@ -1172,7 +1518,7 @@ final class DockerManager
 
     private function cleanupMeta(string $domain): void
     {
-        foreach ([$this->metaPath($domain), $this->portsOverridePath($domain)] as $path) {
+        foreach ([$this->metaPath($domain), $this->portsOverridePath($domain), $this->legacyPortsOverridePath($domain)] as $path) {
             if ($this->runtime->fileExists($path)) {
                 $this->runtime->deleteFile($path);
             }
@@ -1267,7 +1613,7 @@ final class DockerManager
     }
 
     /** @param  list<string>  $command */
-    private function runAsSupervised(array $command, string $cwd, int $timeout): ExecResult
+    private function runAsSupervised(array $command, string $cwd, int $timeout, ?string $stdin = null): ExecResult
     {
         SupervisedUser::ensure($this->runtime);
         $runuser = $this->runuserBin();
@@ -1275,7 +1621,7 @@ final class DockerManager
 
         return $this->runtime->exec(
             [$runuser, '-u', SupervisedUser::USERNAME, '--', '/bin/bash', '-lc', $shell],
-            null,
+            $stdin,
             $timeout
         );
     }

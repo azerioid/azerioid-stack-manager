@@ -10,6 +10,8 @@ final class AuditLog
         'passphrase', 'bot_token', 'access_key', 'access_key_id',
         'secret_access_key', 'spaces_key', 'spaces_secret', 'aws_secret_access_key',
         'content', 'content_base64', 'body', 'bytes',
+        // Container environment (A50): every value may be a secret.
+        'env',
     ];
 
     public function __construct(private readonly Config $config, private readonly Runtime $runtime)

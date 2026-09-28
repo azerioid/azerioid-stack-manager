@@ -103,6 +103,9 @@
                     <label class="text-xs uppercase tracking-wide text-zinc-500">Compose path (optional)
                         <input class="field mt-1 font-mono text-sm" wire:model="dockerCompose" placeholder="docker-compose.yml">
                     </label>
+                    <label class="text-xs uppercase tracking-wide text-zinc-500">Service that serves the site
+                        <input class="field mt-1 font-mono text-sm" wire:model="dockerService" placeholder="needed when the file has several services">
+                    </label>
                 @else
                     <label class="text-xs uppercase tracking-wide text-zinc-500">Dockerfile path (optional)
                         <input class="field mt-1 font-mono text-sm" wire:model="dockerDockerfile" placeholder="Dockerfile">
@@ -307,9 +310,24 @@
                     <input class="field mt-1 max-w-md font-mono text-sm" wire:model="dockerDockerfile" placeholder="Dockerfile">
                 </label>
             @endif
+            @include('livewire.partials.docker-workload', ['compose' => $dockerMode === 'compose'])
             <div class="mt-3 flex gap-2">
                 <button class="btn-primary" wire:click="enableDocker">Enable Docker</button>
                 <button class="btn-ghost" wire:click="cancelDocker">Cancel</button>
+            </div>
+        </div>
+    @endif
+
+    @if ($dockerSettingsTarget)
+        <div class="panel border border-white/10 p-5">
+            <p class="text-sm">
+                Container settings for <span class="font-mono">{{ $dockerSettingsTarget }}</span>
+            </p>
+            <p class="mt-1 text-xs text-zinc-500">Saving restarts the container with the new settings.</p>
+            @include('livewire.partials.docker-workload', ['compose' => $dockerServices !== [] || $dockerService !== ''])
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="saveDockerSettings">Save and restart</button>
+                <button class="btn-ghost" wire:click="cancelDockerSettings">Cancel</button>
             </div>
         </div>
     @endif

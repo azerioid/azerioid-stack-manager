@@ -16,7 +16,12 @@ final class VhostDocker
         $manager = new DockerManager($config, $runtime);
 
         if ($action === 'vhost.docker.image.validate') {
-            return $manager->validateRemoteImage((string) ($input['image'] ?? ($args[0] ?? '')));
+            $registry = $input['registry'] ?? null;
+
+            return $manager->validateRemoteImage(
+                (string) ($input['image'] ?? ($args[0] ?? '')),
+                is_string($registry) && $registry !== '' ? $registry : null
+            );
         }
         if ($action === 'vhost.docker.image.search') {
             return $manager->searchImages((string) ($input['query'] ?? ($args[0] ?? '')));
@@ -31,6 +36,11 @@ final class VhostDocker
             'vhost.docker.build' => $manager->build($domain),
             'vhost.docker.restart' => $manager->restart($domain),
             'vhost.docker.logs' => $manager->logs($domain, $input),
+            'vhost.docker.services' => $manager->services($domain, $input),
+            'vhost.docker.settings' => $manager->settings($domain),
+            'vhost.docker.settings.set' => $manager->updateSettings($domain, $input),
+            'vhost.docker.env' => $manager->env($domain),
+            'vhost.docker.env.set' => $manager->setEnv($domain, $input),
             default => throw new BrokerException('Unknown docker action.', 2),
         };
     }

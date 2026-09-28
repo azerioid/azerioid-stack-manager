@@ -81,6 +81,7 @@ use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
 use AzerioidPanel\Broker\Actions\VhostList;
 use AzerioidPanel\Broker\Actions\VhostOctane;
+use AzerioidPanel\Broker\Actions\DockerRegistry;
 use AzerioidPanel\Broker\Actions\VhostDocker;
 use AzerioidPanel\Broker\Actions\VhostIsolation;
 use AzerioidPanel\Broker\Actions\VhostPm2;
@@ -144,6 +145,14 @@ final class Kernel
         'vhost.docker.logs' => VhostDocker::class,
         'vhost.docker.image.validate' => VhostDocker::class,
         'vhost.docker.image.search' => VhostDocker::class,
+        'vhost.docker.services' => VhostDocker::class,
+        'vhost.docker.settings' => VhostDocker::class,
+        'vhost.docker.settings.set' => VhostDocker::class,
+        'vhost.docker.env' => VhostDocker::class,
+        'vhost.docker.env.set' => VhostDocker::class,
+        'docker.registry.list' => DockerRegistry::class,
+        'docker.registry.set' => DockerRegistry::class,
+        'docker.registry.delete' => DockerRegistry::class,
         'caddy.apply' => CaddyApplyConfig::class,
         'web.reload' => CaddyApplyConfig::class,
         'web.release-site-ports' => WebReleaseSitePorts::class,

@@ -12,6 +12,7 @@ use AzerioidPanel\Broker\Supervisor\SupervisorManager;
 use AzerioidPanel\Broker\Terminal\TerminalManager;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
+use AzerioidPanel\Broker\Vhost\DockerSettings;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostIsolationMigrator;
@@ -73,6 +74,8 @@ final class VhostDel
         if ($mailDropped !== null) {
             $result['mail_dropped'] = $mailDropped;
         }
+        // Container environment and settings (A50) hold secrets and go with the vhost.
+        DockerSettings::remove($runtime, $domain);
         // The files are kept, but the uid and gid they carry now belong to nobody and will
         // be handed to the next account created (A49). Close them before that happens.
         try {

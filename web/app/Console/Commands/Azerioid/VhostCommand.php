@@ -12,7 +12,7 @@ class VhostCommand extends Command
 
     protected $signature = 'azerioid:vhost
         {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status (with docker); status|apply (with isolation)}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation)}
         {--domain= : Vhost domain}
         {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
         {--confirm : Required for isolation apply (moves every vhost identity onto a group of its own)}
@@ -41,6 +41,13 @@ class VhostCommand extends Command
         {--compose= : Compose file relative to docroot (docker enable; default docker-compose.yml)}
         {--dockerfile= : Dockerfile relative to docroot (docker enable; default Dockerfile)}
         {--lines= : Log line count (docker logs; default 100)}
+        {--service= : Compose service that serves the site (docker enable|settings)}
+        {--restart= : always|on-failure|never (docker enable|settings)}
+        {--volume=* : Data directory host:container[:ro], host relative to the app (docker enable|settings; repeatable)}
+        {--no-volumes : Remove every data volume (docker settings)}
+        {--registry= : Saved registry name for private images, or "none" (docker enable|settings)}
+        {--env-file= : KEY=VALUE file for the container environment (docker enable|env-set); values never go on the command line}
+        {--reveal : Show environment values, not only names (docker env)}
         {--runtime= : Create-time runtime intent: traditional|octane|pm2|docker (add; same as UI createRuntime)}
         {--json : JSON output (list / files list / octane / pm2 / docker)}';
 
@@ -833,11 +840,129 @@ class VhostCommand extends Command
             .' program='.(string) ($data['pm2_program'] ?? '?')." ({$state}).";
     }
 
+    /**
+     * Compose services, workload settings and container environment (B4, ADR A50).
+     */
+    private function dockerWorkload(string $op): int
+    {
+        try {
+            $domain = Validator::domain((string) $this->option('domain'));
+            [$action, $input] = match ($op) {
+                'services' => ['vhost.docker.services', $this->option('compose') ? ['compose' => (string) $this->option('compose')] : []],
+                'settings' => ($settings = $this->dockerSettingsInput()) === []
+                    ? ['vhost.docker.settings', []]
+                    : ['vhost.docker.settings.set', $settings],
+                'env' => ['vhost.docker.env', []],
+                'env-set' => ['vhost.docker.env.set', ['env' => $this->readEnvFile((string) $this->option('env-file'))]],
+            };
+            $res = $this->brokerCall($action, [$domain], $input, 300);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+            $data = is_array($res->data) ? $res->data : [];
+            if ($op === 'env' && ! $this->option('reveal')) {
+                $data['env'] = array_fill_keys(array_keys((array) ($data['env'] ?? [])), '(hidden; --reveal to show)');
+            }
+            if ($this->wantsJson()) {
+                return $this->emitData($data);
+            }
+            match ($op) {
+                'services' => $this->line('Services in '.(string) ($data['compose'] ?? '?').': '.implode(', ', (array) ($data['services'] ?? []))
+                    .' (serving: '.(string) ($data['selected'] ?? 'not chosen').')'),
+                'settings' => $this->printDockerSettings((array) ($data['settings'] ?? []), (array) ($data['env_keys'] ?? []), $data['applied'] ?? null),
+                'env' => array_map(fn ($k, $v) => $this->line($k.'='.$v), array_keys((array) $data['env']), (array) $data['env']),
+                'env-set' => $this->line('Environment saved ('.count((array) ($data['env_keys'] ?? [])).' variable(s))'
+                    .(($data['applied'] ?? false) ? '; container restarted.' : '; applies when Docker is enabled.')),
+            };
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function dockerSettingsInput(): array
+    {
+        $input = [];
+        if ($this->option('service')) {
+            $input['service'] = (string) $this->option('service');
+        }
+        if ($this->option('restart')) {
+            $input['restart'] = (string) $this->option('restart');
+        }
+        if ($this->option('registry')) {
+            $registry = (string) $this->option('registry');
+            $input['registry'] = strtolower($registry) === 'none' ? null : $registry;
+        }
+        if ($this->option('no-volumes')) {
+            $input['volumes'] = [];
+        } elseif ((array) $this->option('volume') !== []) {
+            $input['volumes'] = array_map(static function (string $spec): array {
+                $parts = explode(':', $spec);
+                if (count($parts) < 2 || count($parts) > 3 || (isset($parts[2]) && $parts[2] !== 'ro')) {
+                    throw new \InvalidArgumentException("--volume must be host:container or host:container:ro, got {$spec}");
+                }
+
+                return ['host' => $parts[0], 'container' => $parts[1], 'readonly' => ($parts[2] ?? '') === 'ro'];
+            }, (array) $this->option('volume'));
+        }
+
+        return $input;
+    }
+
+    /** @return array<string, string> */
+    private function readEnvFile(string $path): array
+    {
+        if ($path === '' || ! is_file($path) || ! is_readable($path)) {
+            throw new \InvalidArgumentException('--env-file must name a readable KEY=VALUE file.');
+        }
+        $env = [];
+        foreach (preg_split('/\r?\n/', (string) file_get_contents($path)) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            if (str_starts_with($line, 'export ')) {
+                $line = substr($line, 7);
+            }
+            if (! str_contains($line, '=')) {
+                throw new \InvalidArgumentException("Not KEY=VALUE: {$line}");
+            }
+            [$key, $value] = explode('=', $line, 2);
+            $value = trim($value);
+            if (strlen($value) >= 2 && ($value[0] === '"' || $value[0] === "'") && $value[-1] === $value[0]) {
+                $value = substr($value, 1, -1);
+            }
+            $env[trim($key)] = $value;
+        }
+
+        return $env;
+    }
+
+    /** @param array<string, mixed> $settings */
+    private function printDockerSettings(array $settings, array $envKeys, mixed $applied): void
+    {
+        $this->line('Service  : '.(string) ($settings['service'] ?? '(not chosen)'));
+        $this->line('Restart  : '.(string) ($settings['restart'] ?? 'always'));
+        $this->line('Registry : '.(string) ($settings['registry'] ?? '(public)'));
+        foreach ((array) ($settings['volumes'] ?? []) as $v) {
+            $this->line('Volume   : '.$v['host'].' → '.$v['container'].(($v['readonly'] ?? false) ? ' (read-only)' : ''));
+        }
+        $this->line('Env      : '.($envKeys === [] ? '(none)' : implode(', ', $envKeys)));
+        if ($applied === true) {
+            $this->info('Applied: container restarted.');
+        }
+    }
+
     private function docker(): int
     {
         $op = strtolower(trim((string) $this->argument('filesOp')));
+        if (in_array($op, ['services', 'settings', 'env', 'env-set'], true)) {
+            return $this->dockerWorkload($op);
+        }
         if (! in_array($op, ['enable', 'disable', 'build', 'restart', 'logs', 'status'], true)) {
-            $this->error('Unknown docker operation. Use: enable|disable|build|restart|logs|status');
+            $this->error('Unknown docker operation. Use: enable|disable|build|restart|logs|status|services|settings|env|env-set');
 
             return self::INVALID;
         }
@@ -862,6 +987,10 @@ class VhostCommand extends Command
                 }
                 if ($this->option('dockerfile')) {
                     $input['dockerfile'] = (string) $this->option('dockerfile');
+                }
+                $input += $this->dockerSettingsInput();
+                if ($this->option('env-file')) {
+                    $input['env'] = $this->readEnvFile((string) $this->option('env-file'));
                 }
             }
             if ($op === 'logs' && $this->option('lines')) {

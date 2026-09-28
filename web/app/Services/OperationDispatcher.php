@@ -64,7 +64,7 @@ class OperationDispatcher
     /** Inputs that must never be written to the operations table. */
     private const REDACT = [
         'passphrase', 'password', 'secret', 'token', 'spaces',
-        'content_base64', 'html', 'confirm',
+        'content_base64', 'html', 'confirm', 'env',
     ];
 
     public static function isAsync(string $action): bool
