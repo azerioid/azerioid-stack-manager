@@ -32,6 +32,7 @@ Usage:
   azerioid vhost octane disable|reload|status --domain=<d> [--json]
   azerioid vhost pm2 enable  --domain=<d> [--instances=1] [--entry=server.js] [--port=36000-36999]
   azerioid vhost pm2 disable|reload|status|scale --domain=<d> [--instances=N] [--json]
+  azerioid vhost pm2 node --domain=<d> --node=system|20|22|24   # A51; enable also takes --node=
   azerioid vhost docker enable  --domain=<d> --internal-port=N [--mode=image|compose|dockerfile] [--image=…] [--service=web]
                                [--restart=always|on-failure|never] [--volume=data:/data[:ro]]… [--registry=<name>] [--env-file=path]
   azerioid vhost docker disable|build|restart|logs|status --domain=<d>

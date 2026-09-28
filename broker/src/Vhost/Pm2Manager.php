@@ -60,6 +60,8 @@ final class Pm2Manager
             'node_app' => $node['node'],
             'node_app_detail' => $node['detail'],
             'app_dir' => $node['app_dir'],
+            'node' => AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) === self::RUNTIME_PM2 ? $this->nodeOf($domain) : null,
+            'node_runtimes' => (new NodeRuntimes($this->config, $this->runtime))->installed(),
             'docs_url' => self::DOCS_URL,
             'cluster_docs_url' => self::CLUSTER_DOCS_URL,
         ];
@@ -93,15 +95,17 @@ final class Pm2Manager
             $port = $this->allocatePort($reserved);
         }
 
-        $this->ensurePm2Installed();
-        $pm2Runtime = $this->pm2RuntimeBin();
+        $nodes = new NodeRuntimes($this->config, $this->runtime);
+        $nodeChoice = $nodes->resolve($input['node'] ?? null);
+        $nodes->ensurePm2($nodeChoice);
+        $pm2Runtime = $nodes->bin($nodeChoice, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found after install.', 1);
         $pm2Home = $this->ensurePm2Home($domain);
-        $this->writeRestoreMeta($domain, $vhost);
+        $this->writeRestoreMeta($domain, $vhost, $nodeChoice);
 
         $program = self::programName($domain);
         $appName = self::appName($domain);
         $this->upsertProgram($supervisor, $program, [
-            'command' => $this->pm2Command($pm2Runtime, $pm2Home, $port, $appName, $instances, $detected),
+            'command' => $this->pm2Command($pm2Runtime, $pm2Home, $port, $appName, $instances, $detected, $nodeChoice),
             'directory' => $detected['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
@@ -144,6 +148,7 @@ final class Pm2Manager
             'pm2_instances' => $instances,
             'pm2_program' => $program,
             'pm2_entry' => $detected['entry_label'],
+            'node' => $nodeChoice,
             'app_dir' => $detected['app_dir'],
             'apply' => $applied['apply'] ?? null,
             'docs_url' => self::DOCS_URL,
@@ -217,10 +222,11 @@ final class Pm2Manager
         $program = self::programName($domain);
         $appName = self::appName($domain);
         $pm2Home = $this->pm2HomePath($domain);
-        $pm2 = $this->pm2Bin();
+        $nodeChoice = $this->nodeOf($domain);
+        $pm2 = $this->pm2BinFor($nodeChoice);
 
         $reload = $this->runAsSupervised(
-            ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, $pm2, 'reload', $appName],
+            ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, NodeRuntimes::pathEnv($nodeChoice), $pm2, 'reload', $appName],
             (string) ($vhost['root'] ?? '/tmp'),
             120
         );
@@ -271,11 +277,12 @@ final class Pm2Manager
         $program = self::programName($domain);
         $appName = self::appName($domain);
         $pm2Home = $this->pm2HomePath($domain);
-        $pm2 = $this->pm2Bin();
+        $nodeChoice = $this->nodeOf($domain);
+        $pm2 = $this->pm2BinFor($nodeChoice);
         $appDir = (string) ($vhost['root'] ?? '/tmp');
 
         $scale = $this->runAsSupervised(
-            ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, $pm2, 'scale', $appName, (string) $instances],
+            ['/usr/bin/env', 'PM2_HOME=' . $pm2Home, NodeRuntimes::pathEnv($nodeChoice), $pm2, 'scale', $appName, (string) $instances],
             $appDir,
             180
         );
@@ -579,10 +586,13 @@ final class Pm2Manager
         string $appName,
         int $instances,
         array $detected,
+        string $node = NodeRuntimes::SYSTEM,
     ): string {
         $parts = [
             '/usr/bin/env',
             'PM2_HOME=' . $pm2Home,
+            // pm2-runtime and npm start with `#!/usr/bin/env node`: the chosen Node first.
+            NodeRuntimes::pathEnv($node),
             'PORT=' . $port,
             'HOST=127.0.0.1',
             'NODE_ENV=production',
@@ -608,10 +618,94 @@ final class Pm2Manager
         return Validator::supervisorCommand(implode(' ', $parts));
     }
 
+    /**
+     * Move a PM2 vhost to another Node.js major (request #7). The app restarts under it;
+     * node_modules are not rebuilt — native modules compiled for the old major may need
+     * `npm rebuild`, which is the operator's call, not the panel's (A51).
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function setNode(string $domain, array $input): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        if (AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) !== self::RUNTIME_PM2) {
+            throw new BrokerException("PM2 is not enabled for {$domain}.", 3);
+        }
+        $nodes = new NodeRuntimes($this->config, $this->runtime);
+        $from = $this->nodeOf($domain);
+        $to = $nodes->resolve($input['node'] ?? '');
+        if ($to === $from) {
+            return ['domain' => $domain, 'node' => $to, 'changed' => false];
+        }
+        $nodes->ensurePm2($to);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $port = (int) ($vhost['pm2_port'] ?? 0);
+        $instances = (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES);
+        $pm2Runtime = $nodes->bin($to, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found after install.', 1);
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $restore = $this->readRestoreMeta($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain), max(1, $instances), $detected, $to),
+            'directory' => $detected['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => true,
+        ]);
+        $this->runtime->writeFile($this->metaPath($domain), json_encode(array_merge($restore, ['node' => $to]), JSON_THROW_ON_ERROR) . "\n", 0640);
+        $supervisor->control($program, 'restart');
+        if ($port > 0 && !$this->waitForPort($port)) {
+            throw new BrokerException(
+                "{$domain} did not listen on 127.0.0.1:{$port} under Node.js {$to}. Native modules built for "
+                . "Node.js {$from} may need `npm rebuild`; switch back with node={$from}.",
+                1
+            );
+        }
+
+        return [
+            'domain' => $domain,
+            'node' => $to,
+            'previous' => $from,
+            'node_version' => $nodes->version($to),
+            'changed' => true,
+            'note' => 'node_modules were not rebuilt. If the app uses native modules, run `npm rebuild` in its directory.',
+        ];
+    }
+
+    /** The Node choice a PM2 vhost runs on: 'system' unless recorded otherwise. */
+    public function nodeOf(string $domain): string
+    {
+        $node = (string) ($this->readRestoreMeta($domain)['node'] ?? '');
+
+        return in_array($node, NodeRuntimes::MAJORS, true) ? $node : NodeRuntimes::SYSTEM;
+    }
+
+    /** @return list<string> PM2 vhosts that run on the given Node choice */
+    public function vhostsUsingNode(string $node): array
+    {
+        $out = [];
+        foreach (WebServers::for($this->config)->listVhosts($this->runtime, $this->config) as $vhost) {
+            $domain = (string) ($vhost['domain'] ?? '');
+            if ($domain !== '' && AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) === self::RUNTIME_PM2
+                && $this->nodeOf($domain) === $node) {
+                $out[] = $domain;
+            }
+        }
+
+        return $out;
+    }
+
+    private function pm2BinFor(string $node): string
+    {
+        return (new NodeRuntimes($this->config, $this->runtime))->bin($node, 'pm2')
+            ?? throw new BrokerException('pm2 binary not found for Node.js ' . $node . '.', 1);
+    }
+
     private function assertNodeComponentInstalled(): void
     {
-        $node = $this->nodeBin();
-        if ($node === null) {
+        if ((new NodeRuntimes($this->config, $this->runtime))->installed() === []) {
             throw new BrokerException(
                 'Node.js is not installed. Install the Node.js component from Components first.',
                 3
@@ -619,20 +713,6 @@ final class Pm2Manager
         }
     }
 
-    private function ensurePm2Installed(): void
-    {
-        if ($this->pm2RuntimeBinIfPresent() !== null && $this->pm2BinIfPresent() !== null) {
-            return;
-        }
-        $npm = $this->npmBin();
-        if ($npm === null) {
-            throw new BrokerException('npm is required to install PM2 globally.', 1);
-        }
-        $result = $this->runtime->exec([$npm, 'install', '-g', 'pm2@7'], null, 300);
-        if (!$result->ok() || $this->pm2RuntimeBinIfPresent() === null) {
-            throw new BrokerException('npm install -g pm2 failed: ' . self::execDetail($result), 1);
-        }
-    }
 
     private function resolveInstances(mixed $value): int
     {
@@ -702,12 +782,14 @@ final class Pm2Manager
     }
 
     /** @param  array<string, mixed>  $vhost */
-    private function writeRestoreMeta(string $domain, array $vhost): void
+    private function writeRestoreMeta(string $domain, array $vhost, string $node): void
     {
         $payload = json_encode([
             'type' => (string) ($vhost['type'] ?? 'static'),
             'root' => (string) ($vhost['root'] ?? ''),
             'upstream' => (string) ($vhost['reverse_proxy'] ?? ''),
+            // The Node major this vhost runs on (A51). Absent on vhosts enabled before: system.
+            'node' => $node,
         ], JSON_THROW_ON_ERROR);
         $path = $this->metaPath($domain);
         $this->runtime->writeFile($path, $payload . "\n", 0640);
@@ -827,69 +909,11 @@ final class Pm2Manager
         throw new BrokerException('runuser is required to run pm2 as the supervised user.', 1);
     }
 
-    private function nodeBin(): ?string
-    {
-        foreach (['/usr/bin/node', '/usr/local/bin/node'] as $bin) {
-            if ($this->runtime->fileExists($bin)) {
-                return $bin;
-            }
-        }
 
-        return null;
-    }
 
-    private function npmBin(): ?string
-    {
-        foreach (['/usr/bin/npm', '/usr/local/bin/npm'] as $bin) {
-            if ($this->runtime->fileExists($bin)) {
-                return $bin;
-            }
-        }
 
-        return null;
-    }
 
-    private function pm2RuntimeBin(): string
-    {
-        $bin = $this->pm2RuntimeBinIfPresent();
-        if ($bin === null) {
-            throw new BrokerException('pm2-runtime binary not found after install.', 1);
-        }
 
-        return $bin;
-    }
-
-    private function pm2RuntimeBinIfPresent(): ?string
-    {
-        foreach (['/usr/bin/pm2-runtime', '/usr/local/bin/pm2-runtime'] as $bin) {
-            if ($this->runtime->fileExists($bin)) {
-                return $bin;
-            }
-        }
-
-        return null;
-    }
-
-    private function pm2Bin(): string
-    {
-        $bin = $this->pm2BinIfPresent();
-        if ($bin === null) {
-            throw new BrokerException('pm2 binary not found after install.', 1);
-        }
-
-        return $bin;
-    }
-
-    private function pm2BinIfPresent(): ?string
-    {
-        foreach (['/usr/bin/pm2', '/usr/local/bin/pm2'] as $bin) {
-            if ($this->runtime->fileExists($bin)) {
-                return $bin;
-            }
-        }
-
-        return null;
-    }
 
     private static function execDetail(ExecResult $result): string
     {

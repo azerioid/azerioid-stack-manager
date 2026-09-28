@@ -18,6 +18,8 @@ use AzerioidPanel\Broker\Systemd;
 use AzerioidPanel\Broker\Tool\AdminerTool;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
+use AzerioidPanel\Broker\Vhost\NodeRuntimes;
+use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Web\BackendEngineBind;
 use AzerioidPanel\Broker\Web\VhostFrontRouter;
 
@@ -118,6 +120,9 @@ final class ComponentInstaller
                 $firewall = (new MailFirewall($this->runtime))->open();
                 $log->info('Firewall (' . $firewall['backend'] . '): ' . $firewall['detail']);
             }
+            if (NodeRuntimes::isComponent($componentId)) {
+                (new NodeRuntimes($this->config, $this->runtime))->install($definition, $log);
+            }
             if ($componentId === 'docker') {
                 // Never enable rootful docker.service — unit_name is empty; configure rootless only.
                 (new DockerRootlessSetup($this->config, $this->runtime))->configure($log);
@@ -169,6 +174,13 @@ final class ComponentInstaller
         if ($componentId === 'php-8.4' || $componentId === 'php-' . $this->config->panelPhpVersion) {
             throw new BrokerException('Refusing to remove the panel PHP runtime.', 3);
         }
+        if ($componentId === 'nodejs') {
+            $users = (new Pm2Manager($this->config, $this->runtime))->vhostsUsingNode(NodeRuntimes::SYSTEM);
+            if ($users !== []) {
+                throw new BrokerException('Cannot uninstall system Node.js while PM2 vhost(s) run on it: '
+                    . implode(', ', $users) . '. Move them to another Node.js version first.', 3);
+            }
+        }
         if ($componentId === 'docker') {
             $docker = new DockerManager($this->config, $this->runtime);
             $domains = $docker->dockerVhostDomains();
@@ -195,6 +207,9 @@ final class ComponentInstaller
             }
             if ($componentId === 'mail') {
                 $this->teardownMail($os, $options, $log);
+            }
+            if (($major = NodeRuntimes::majorOfComponent($componentId)) !== null) {
+                (new NodeRuntimes($this->config, $this->runtime))->uninstall($major, $log);
             }
             if ($unit !== '') {
                 $log->info("Stopping unit {$unit}");

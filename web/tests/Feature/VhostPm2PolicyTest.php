@@ -56,6 +56,56 @@ class VhostPm2PolicyTest extends TestCase
         $this->assertSame('node.example.com', $fake->supervisorPrograms['pm2-node-example-com']['vhost_domain']);
     }
 
+    public function test_enable_on_a_chosen_node_major_and_switch_later(): void
+    {
+        $this->actingAs($this->admin());
+        $fake = $this->fakeWithPm2Deps();
+        $fake->fakeNodeRuntimes = ['system', '22', '24'];
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->call('askPm2', 'node.example.com')
+            ->assertSet('pm2NodeRuntimes', ['system', '22', '24'])
+            ->set('pm2Node', '22')
+            ->call('enablePm2')
+            ->assertSet('error', null);
+        $this->assertSame('22', $fake->pm2Node['node.example.com']);
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->call('askPm2Node', 'node.example.com')
+            ->assertSet('pm2Node', '22')
+            ->set('pm2Node', '24')
+            ->call('changePm2Node')
+            ->assertSet('error', null)
+            ->assertSet('pm2NodeTarget', null)
+            ->assertSet('flash', fn ($f) => str_contains((string) $f, 'npm rebuild'));
+        $this->assertSame('24', $fake->pm2Node['node.example.com']);
+    }
+
+    public function test_a_node_major_that_is_not_installed_is_refused(): void
+    {
+        $this->actingAs($this->admin());
+        $fake = $this->fakeWithPm2Deps();
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->call('askPm2', 'node.example.com')
+            ->set('pm2Node', '20')
+            ->call('enablePm2')
+            ->assertSet('error', fn ($e) => str_contains((string) $e, 'Node.js 20 is not installed'));
+    }
+
+    public function test_cli_switches_node_major(): void
+    {
+        $fake = $this->fakeWithPm2Deps();
+        $fake->fakeNodeRuntimes = ['system', '24'];
+        \Illuminate\Support\Facades\Artisan::call('azerioid:vhost', ['action' => 'pm2', 'filesOp' => 'enable', '--domain' => 'node.example.com']);
+
+        $code = \Illuminate\Support\Facades\Artisan::call('azerioid:vhost', ['action' => 'pm2', 'filesOp' => 'node', '--domain' => 'node.example.com', '--node' => '24']);
+
+        $out = \Illuminate\Support\Facades\Artisan::output();
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString('now runs on Node.js 24', $out);
+    }
+
     public function test_enable_requires_supervisor_to_be_installed(): void
     {
         $this->actingAs($this->admin());

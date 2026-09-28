@@ -186,6 +186,21 @@ final class FakeRuntime implements Runtime
 
     public function rename(string $from, string $to): void
     {
+        if (!isset($this->files[$from]) && isset($this->dirs[$from])) {
+            // rename(2) moves a directory with everything under it.
+            foreach ([&$this->files, &$this->dirs] as &$map) {
+                foreach (array_keys($map) as $path) {
+                    if ($path === $from || str_starts_with($path, $from . '/')) {
+                        $map[$to . substr($path, strlen($from))] = $map[$path];
+                        unset($map[$path]);
+                    }
+                }
+            }
+            unset($map);
+            $this->dirs[dirname($to)] = true;
+
+            return;
+        }
         if (!isset($this->files[$from])) {
             throw new BrokerException('Could not install the vhost configuration through the broker.', 1);
         }

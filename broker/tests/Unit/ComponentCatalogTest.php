@@ -52,8 +52,11 @@ final class ComponentCatalogTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertTrue($json['ok']);
         $this->assertSame('ubuntu', $json['data']['distro_key']);
-        $this->assertCount(17, $json['data']['components']);
+        $this->assertCount(20, $json['data']['components']);
         $ids = array_column($json['data']['components'], 'id');
+        foreach (['nodejs-20', 'nodejs-22', 'nodejs-24'] as $node) {
+            $this->assertContains($node, $ids);
+        }
         $this->assertContains('redis', $ids);
         $this->assertContains('caddy', $ids);
         $this->assertContains('mongodb', $ids);

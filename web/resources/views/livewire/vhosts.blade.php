@@ -239,9 +239,25 @@
             <label class="mt-3 block text-xs uppercase tracking-wide text-zinc-500">Entry script (optional)
                 <input class="field mt-1 max-w-md font-mono text-sm" wire:model="pm2Entry" placeholder="server.js">
             </label>
+            @include('livewire.partials.pm2-node-select')
             <div class="mt-3 flex gap-2">
                 <button class="btn-primary" wire:click="enablePm2">Enable PM2</button>
                 <button class="btn-ghost" wire:click="cancelPm2">Cancel</button>
+            </div>
+        </div>
+    @endif
+
+    @if ($pm2NodeTarget)
+        <div class="panel border border-warn/40 p-5">
+            <p class="text-sm">Node.js version for <span class="font-mono">{{ $pm2NodeTarget }}</span></p>
+            <p class="mt-2 text-sm text-warn">
+                The app restarts under the chosen version. Its <span class="font-mono">node_modules</span> are not rebuilt:
+                if it uses native modules, run <span class="font-mono">npm rebuild</span> in the app directory afterwards.
+            </p>
+            @include('livewire.partials.pm2-node-select')
+            <div class="mt-3 flex gap-2">
+                <button class="btn-primary" wire:click="changePm2Node">Switch and restart</button>
+                <button class="btn-ghost" wire:click="cancelPm2Node">Cancel</button>
             </div>
         </div>
     @endif

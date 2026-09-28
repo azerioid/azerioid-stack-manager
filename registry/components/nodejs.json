@@ -1,8 +1,8 @@
 {
   "id": "nodejs",
-  "display_name": "Node.js",
+  "display_name": "Node.js (system)",
   "category": "runtime",
-  "description": "Node.js runtime for application servers and build tooling",
+  "description": "One host-wide Node.js from NodeSource at /usr/bin/node (the \"system\" choice for PM2 vhosts). To run several majors side by side, install Node.js 20/22/24 instead.",
   "managed": true,
   "system": false,
   "installable": true,
