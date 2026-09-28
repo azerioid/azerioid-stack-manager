@@ -1428,3 +1428,9 @@ A site put back later lets it into that one site's group again, and out when it 
 sites use it). Image checks before enable (`manifest inspect`) still run as `azerioid-supervised`, which needs
 no daemon and no site files.
 
+**v2.7.1 addendum.** On the Ubuntu host `verify-release` read `migrated:true` in the second between the last
+program move and the removal from the site groups, and reported the account still in 3 groups (it left all
+10 a moment later). Status now counts part 3 as part of done: `migrated` needs the detach marker too, and
+a host with every program moved but the marker missing is still eligible for the automatic run, which
+finishes the removal (it also covers a host that never had a site program at all).
+
