@@ -249,8 +249,8 @@ final class SupervisorManager
             ? self::boolInput($input['autostart'])
             : (bool) ($existing['autostart'] ?? true);
         $autorestart = array_key_exists('autorestart', $input)
-            ? self::boolInput($input['autorestart'])
-            : (bool) ($existing['autorestart'] ?? true);
+            ? self::autorestartInput($input['autorestart'])
+            : self::autorestartInput($existing['autorestart'] ?? true);
 
         if (array_key_exists('user', $input) || array_key_exists('run_as', $input)) {
             $requested = strtolower(trim((string) ($input['user'] ?? $input['run_as'] ?? '')));
@@ -317,7 +317,7 @@ final class SupervisorManager
         $stdout = SupervisedUser::LOG_DIR . '/' . $name . '.stdout.log';
         $stderr = SupervisedUser::LOG_DIR . '/' . $name . '.stderr.log';
         $autostart = ($spec['autostart'] ?? true) ? 'true' : 'false';
-        $autorestart = ($spec['autorestart'] ?? true) ? 'true' : 'false';
+        $autorestart = self::autorestartValue($spec['autorestart'] ?? true);
         $user = SupervisedUser::USERNAME;
         self::rejectRunUser($user);
 
@@ -350,7 +350,7 @@ INI;
             'directory' => $spec['directory'],
             'user' => SupervisedUser::USERNAME,
             'autostart' => (bool) ($spec['autostart'] ?? true),
-            'autorestart' => (bool) ($spec['autorestart'] ?? true),
+            'autorestart' => self::autorestartInput($spec['autorestart'] ?? true),
             'vhost_domain' => $spec['vhost_domain'] ?? null,
             'log_stdout' => SupervisedUser::LOG_DIR . '/' . $name . '.stdout.log',
             'log_stderr' => SupervisedUser::LOG_DIR . '/' . $name . '.stderr.log',
@@ -516,6 +516,26 @@ INI;
             '0', 'false', 'no', 'off' => false,
             default => throw new BrokerException('Expected a boolean value.', 2),
         };
+    }
+
+    /**
+     * Supervisor's autorestart is three-valued: always, never, or only after an exit code the
+     * program did not declare as expected ("unexpected"), which is a restart-on-failure policy.
+     */
+    private static function autorestartInput(mixed $value): bool|string
+    {
+        if (is_string($value) && strtolower(trim($value)) === 'unexpected') {
+            return 'unexpected';
+        }
+
+        return self::boolInput($value);
+    }
+
+    private static function autorestartValue(mixed $value): string
+    {
+        $v = self::autorestartInput($value);
+
+        return $v === 'unexpected' ? 'unexpected' : ($v ? 'true' : 'false');
     }
 
     private function grantDirectoryAccess(string $directory): void

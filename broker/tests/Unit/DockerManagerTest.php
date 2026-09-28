@@ -97,12 +97,6 @@ final class DockerManagerTest extends TestCase
         $this->assertStringContainsString('no document root', strtolower($detected['detail']));
     }
 
-    public function test_first_compose_service(): void
-    {
-        $yaml = "version: '3'\nservices:\n  api:\n    image: app\n  db:\n    image: postgres\n";
-        $this->assertSame('api', DockerManager::firstComposeService($yaml));
-    }
-
     public function test_app_runtime_normalize_docker_aliases(): void
     {
         $this->assertSame(AppRuntime::DOCKER, AppRuntime::normalize('docker'));

@@ -14,6 +14,8 @@ use AzerioidPanel\Broker\Cron\CronRenderer;
 use AzerioidPanel\Broker\Network\FirewallRule;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\DockerManager;
+use AzerioidPanel\Broker\Vhost\DockerRegistries;
+use AzerioidPanel\Broker\Vhost\DockerSettings;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 
@@ -426,6 +428,17 @@ final class FakeBroker
                 'vhost.docker.logs' => $this->docker('logs', $args, $stdin),
                 'vhost.docker.image.validate' => $this->dockerImageValidate($stdin, $args),
                 'vhost.docker.image.search' => $this->dockerImageSearch($stdin, $args),
+                'vhost.docker.services' => $this->docker('services', $args, $stdin),
+                'vhost.docker.settings' => $this->docker('settings', $args, $stdin),
+                'vhost.docker.settings.set' => $this->docker('settings.set', $args, $stdin),
+                'vhost.docker.env' => $this->docker('env', $args, $stdin),
+                'vhost.docker.env.set' => $this->docker('env.set', $args, $stdin),
+                'docker.registry.list' => ['registries' => array_values(array_map(
+                    static fn (array $r): array => ['name' => $r['name'], 'host' => $r['host'], 'username' => $r['username']],
+                    $this->dockerRegistries
+                ))],
+                'docker.registry.set' => $this->dockerRegistrySet($stdin),
+                'docker.registry.delete' => $this->dockerRegistryDelete((string) ($args[0] ?? ($stdin['name'] ?? ''))),
                 'web.release-site-ports' => [
                     'released' => false,
                     'deprecated' => true,
@@ -993,6 +1006,58 @@ final class FakeBroker
         $this->vhostIsolationConvergeStarts++;
 
         return ['started' => true, 'unit' => 'azerioid-vhost-isolation.service'];
+    }
+
+    /** @var array<string, array<string, mixed>> Docker workload settings per domain (A50) */
+    public array $dockerSettings = [];
+
+    /** @var array<string, array<string, string>> container environment per domain */
+    public array $dockerEnv = [];
+
+    /** @var array<string, list<string>> compose services per domain; default ['web'] */
+    public array $dockerServices = [];
+
+    /** @var array<string, array{name:string, host:string, username:string, password:string}> */
+    public array $dockerRegistries = [];
+
+    /** @return array<string, mixed> */
+    private function dockerRegistrySet(array $stdin): array
+    {
+        try {
+            $name = DockerRegistries::validateName($stdin['name'] ?? '');
+            $host = DockerRegistries::validateHost($stdin['host'] ?? '');
+            $username = DockerRegistries::validateUsername($stdin['username'] ?? '');
+            $password = DockerRegistries::validatePassword($stdin['password'] ?? '');
+        } catch (BrokerException $e) {
+            throw new BrokerCallException($e->getMessage(), $e->errorCode);
+        }
+        $this->dockerRegistries[$name] = ['name' => $name, 'host' => $host, 'username' => $username, 'password' => $password];
+
+        return ['name' => $name, 'host' => $host, 'username' => $username, 'saved' => true];
+    }
+
+    /** @return array<string, mixed> */
+    private function dockerRegistryDelete(string $name): array
+    {
+        if (! isset($this->dockerRegistries[$name])) {
+            throw new BrokerCallException("No saved registry named {$name}.", 3);
+        }
+        $users = array_keys(array_filter($this->dockerSettings, static fn (array $s): bool => ($s['registry'] ?? null) === $name));
+        if ($users !== []) {
+            throw new BrokerCallException("Registry {$name} is used by: ".implode(', ', $users).'. Change those first.', 3);
+        }
+        unset($this->dockerRegistries[$name]);
+
+        return ['name' => $name, 'deleted' => true];
+    }
+
+    private function assertFakeRegistry(string $name): string
+    {
+        if (! isset($this->dockerRegistries[$name])) {
+            throw new BrokerCallException("No saved registry named {$name}. Add it first: azerioid docker registry add {$name}", 3);
+        }
+
+        return $name;
     }
 
     /** @var list<string> domains with SFTP enabled */
@@ -2995,6 +3060,42 @@ final class FakeBroker
         $vhost = $this->vhosts[$index];
         $program = DockerManager::programName($domain);
         $enabled = ($vhost['runtime'] ?? 'fpm') === 'docker';
+        $settings = $this->dockerSettings[$domain] ?? ['service' => null, 'restart' => 'always', 'volumes' => [], 'registry' => null];
+
+        if ($op === 'services') {
+            return [
+                'domain' => $domain,
+                'compose' => (string) ($stdin['compose'] ?? DockerManager::DEFAULT_COMPOSE),
+                'services' => $this->dockerServices[$domain] ?? ['web'],
+                'selected' => $settings['service'],
+            ];
+        }
+        if ($op === 'settings') {
+            return ['domain' => $domain, 'settings' => $settings, 'env_keys' => array_keys($this->dockerEnv[$domain] ?? [])];
+        }
+        if ($op === 'settings.set') {
+            foreach (['service', 'restart', 'volumes', 'registry'] as $key) {
+                if (array_key_exists($key, $stdin)) {
+                    $settings[$key] = match ($key) {
+                        'restart' => DockerSettings::validateRestart($stdin[$key]),
+                        'volumes' => DockerSettings::validateVolumes($stdin[$key]),
+                        'registry' => $stdin[$key] === null || $stdin[$key] === '' ? null : $this->assertFakeRegistry((string) $stdin[$key]),
+                        default => $stdin[$key] === null || $stdin[$key] === '' ? null : DockerSettings::validateService($stdin[$key]),
+                    };
+                }
+            }
+            $this->dockerSettings[$domain] = $settings;
+
+            return ['domain' => $domain, 'settings' => $settings, 'applied' => $enabled];
+        }
+        if ($op === 'env') {
+            return ['domain' => $domain, 'env' => $this->dockerEnv[$domain] ?? []];
+        }
+        if ($op === 'env.set') {
+            $this->dockerEnv[$domain] = DockerSettings::validateEnv($stdin['env'] ?? []);
+
+            return ['domain' => $domain, 'env_keys' => array_keys($this->dockerEnv[$domain]), 'applied' => $enabled];
+        }
 
         if ($op === 'status') {
             return [
@@ -3014,6 +3115,8 @@ final class FakeBroker
                 'docker_app' => (bool) ($vhost['docker_app'] ?? false),
                 'docker_app_detail' => $vhost['docker_app_detail'] ?? null,
                 'docs_url' => DockerManager::DOCS_URL,
+                'settings' => $settings,
+                'env_keys' => array_keys($this->dockerEnv[$domain] ?? []),
             ];
         }
 
@@ -3035,10 +3138,30 @@ final class FakeBroker
                 $image = DockerManager::validateImage($stdin['image'] ?? null);
             } elseif ($mode === DockerManager::MODE_COMPOSE) {
                 $compose = (string) ($stdin['compose'] ?? DockerManager::DEFAULT_COMPOSE);
+                $services = $this->dockerServices[$domain] ?? ['web'];
+                $service = $stdin['service'] ?? $settings['service'];
+                if ($service === null || $service === '') {
+                    if (count($services) !== 1) {
+                        throw new BrokerCallException("{$compose} defines ".count($services).' services ('.implode(', ', $services).'). Choose the one that serves the site: service=<name>.', 2);
+                    }
+                    $service = $services[0];
+                } elseif (! in_array($service, $services, true)) {
+                    throw new BrokerCallException("Service {$service} is not in {$compose} (".implode(', ', $services).').', 2);
+                }
+                $settings['service'] = $service;
             } else {
                 $dockerfile = (string) ($stdin['dockerfile'] ?? DockerManager::DEFAULT_DOCKERFILE);
                 $image = DockerManager::builtImageTag($domain);
             }
+            foreach (['restart', 'volumes'] as $key) {
+                if (array_key_exists($key, $stdin)) {
+                    $settings[$key] = $key === 'restart' ? DockerSettings::validateRestart($stdin[$key]) : DockerSettings::validateVolumes($stdin[$key]);
+                }
+            }
+            if (array_key_exists('registry', $stdin)) {
+                $settings['registry'] = $stdin['registry'] === null || $stdin['registry'] === '' ? null : $this->assertFakeRegistry((string) $stdin['registry']);
+            }
+            $this->dockerSettings[$domain] = $settings;
             $this->vhosts[$index]['docker_prev_type'] = (string) ($vhost['type'] ?? 'static');
             $this->vhosts[$index]['runtime'] = 'docker';
             $this->vhosts[$index]['type'] = 'proxy';

@@ -51,6 +51,22 @@ class VhostsPage extends Component
     /** @var list<array{repo_name:string}> */
     public array $dockerImageSuggestions = [];
     public ?string $dockerImageError = null;
+    public string $dockerService = '';
+    /** @var list<string> services the compose file defines, as compose reports them */
+    public array $dockerServices = [];
+    public string $dockerRestart = 'always';
+    public string $dockerRegistry = '';
+    /** One "host:container" or "host:container:ro" per line (A50). */
+    public string $dockerVolumesText = '';
+    /** One KEY=VALUE per line; saved on its own, never inside a queued payload. */
+    public string $dockerEnvText = '';
+    /** @var list<array{name:string, host:string, username:string}> */
+    public array $dockerRegistries = [];
+    public ?string $dockerSettingsTarget = null;
+    public string $registryName = '';
+    public string $registryHost = '';
+    public string $registryUsername = '';
+    public string $registryPassword = '';
 
     public ?string $editingDomain = null;
     public string $editRoot = '';
@@ -330,6 +346,7 @@ class VhostsPage extends Component
             if ($dockerfile !== '') {
                 $input['dockerfile'] = $dockerfile;
             }
+            $input += $this->dockerWorkloadInput();
             $res = $broker->call('vhost.docker.enable', [$domain], $input, 900);
 
             return $res->ok ? null : (string) $res->error;
@@ -723,6 +740,8 @@ class VhostsPage extends Component
         $this->dockerInternalPort = '8080';
         $this->dockerCompose = '';
         $this->dockerDockerfile = '';
+        $this->resetDockerWorkloadFields();
+        $this->loadDockerRegistries(app(BrokerClient::class));
         foreach ($this->vhosts as $v) {
             if (($v['domain'] ?? '') !== $domain) {
                 continue;
@@ -753,6 +772,219 @@ class VhostsPage extends Component
         );
         $this->dockerMode = 'image';
         $this->dockerInternalPort = '8080';
+        $this->resetDockerWorkloadFields();
+    }
+
+    private function resetDockerWorkloadFields(): void
+    {
+        $this->dockerService = '';
+        $this->dockerServices = [];
+        $this->dockerRestart = 'always';
+        $this->dockerRegistry = '';
+        $this->dockerVolumesText = '';
+        $this->dockerEnvText = '';
+        $this->registryName = '';
+        $this->registryHost = '';
+        $this->registryUsername = '';
+        $this->registryPassword = '';
+    }
+
+    /**
+     * Service, restart policy, registry and volumes from the form (A50). The environment is
+     * not here: it is saved with its own call so it never sits in a queued job's payload.
+     *
+     * @return array<string, mixed>
+     */
+    private function dockerWorkloadInput(): array
+    {
+        $input = [
+            'restart' => $this->dockerRestart,
+            'registry' => trim($this->dockerRegistry) === '' ? null : trim($this->dockerRegistry),
+            'volumes' => $this->parseDockerVolumes($this->dockerVolumesText),
+        ];
+        if (trim($this->dockerService) !== '') {
+            $input['service'] = trim($this->dockerService);
+        }
+
+        return $input;
+    }
+
+    /** @return list<array{host:string, container:string, readonly:bool}> */
+    private function parseDockerVolumes(string $text): array
+    {
+        $out = [];
+        foreach (preg_split('/\r?\n/', $text) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            $parts = explode(':', $line);
+            if (count($parts) < 2 || count($parts) > 3 || (isset($parts[2]) && $parts[2] !== 'ro')) {
+                throw new \RuntimeException("Volume lines are host:container or host:container:ro — got \"{$line}\".");
+            }
+            $out[] = ['host' => $parts[0], 'container' => $parts[1], 'readonly' => ($parts[2] ?? '') === 'ro'];
+        }
+
+        return $out;
+    }
+
+    /** @return array<string, string> */
+    private function parseDockerEnv(string $text): array
+    {
+        $env = [];
+        foreach (preg_split('/\r?\n/', $text) ?: [] as $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            if (! str_contains($trimmed, '=')) {
+                throw new \RuntimeException("Environment lines are KEY=VALUE — got \"{$trimmed}\".");
+            }
+            [$key, $value] = explode('=', $trimmed, 2);
+            $env[trim($key)] = $value;
+        }
+
+        return $env;
+    }
+
+    private function saveDockerEnv(BrokerClient $broker, string $domain): void
+    {
+        $res = $broker->call('vhost.docker.env.set', [$domain], ['env' => $this->parseDockerEnv($this->dockerEnvText)], 300);
+        if (! $res->ok) {
+            throw new \RuntimeException((string) $res->error);
+        }
+    }
+
+    private function loadDockerRegistries(BrokerClient $broker): void
+    {
+        $res = $broker->call('docker.registry.list', [], [], 30, false);
+        $this->dockerRegistries = $res->ok ? array_values((array) ($res->data['registries'] ?? [])) : [];
+    }
+
+    public function loadDockerServices(BrokerClient $broker): void
+    {
+        $this->error = null;
+        $domain = (string) ($this->dockerSettingsTarget ?? $this->dockerTarget);
+        $input = trim($this->dockerCompose) !== '' ? ['compose' => trim($this->dockerCompose)] : [];
+        $res = $broker->call('vhost.docker.services', [$domain], $input, 60, false);
+        if (! $res->ok) {
+            $this->error = $this->operatorMessage((string) $res->error);
+
+            return;
+        }
+        $this->dockerServices = array_values((array) ($res->data['services'] ?? []));
+        if ($this->dockerService === '' && count($this->dockerServices) === 1) {
+            $this->dockerService = $this->dockerServices[0];
+        }
+    }
+
+    public function askDockerSettings(BrokerClient $broker, string $domain): void
+    {
+        $this->error = null;
+        $this->flash = null;
+        $this->showForm = false;
+        $this->resetDockerWorkloadFields();
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            $settings = $broker->call('vhost.docker.settings', [$domain], [], 30, false);
+            $env = $broker->call('vhost.docker.env', [$domain], [], 30, false);
+            if (! $settings->ok || ! $env->ok) {
+                throw new \RuntimeException((string) ($settings->error ?: $env->error));
+            }
+            $s = (array) ($settings->data['settings'] ?? []);
+            $this->dockerService = (string) ($s['service'] ?? '');
+            $this->dockerRestart = (string) ($s['restart'] ?? 'always');
+            $this->dockerRegistry = (string) ($s['registry'] ?? '');
+            $this->dockerVolumesText = implode("\n", array_map(
+                static fn (array $v): string => $v['host'].':'.$v['container'].(($v['readonly'] ?? false) ? ':ro' : ''),
+                (array) ($s['volumes'] ?? [])
+            ));
+            $this->dockerEnvText = implode("\n", array_map(
+                static fn (string $k, string $v): string => $k.'='.$v,
+                array_keys((array) ($env->data['env'] ?? [])),
+                array_values((array) ($env->data['env'] ?? []))
+            ));
+            $this->loadDockerRegistries($broker);
+            $this->dockerSettingsTarget = $domain;
+            foreach ($this->vhosts as $v) {
+                if (($v['domain'] ?? '') === $domain && ($v['docker_mode'] ?? '') === 'compose') {
+                    $this->dockerCompose = (string) ($v['docker_compose'] ?? '');
+                    $this->loadDockerServices($broker);
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+    }
+
+    public function cancelDockerSettings(): void
+    {
+        $this->dockerSettingsTarget = null;
+        $this->dockerCompose = '';
+        $this->resetDockerWorkloadFields();
+    }
+
+    public function saveDockerSettings(BrokerClient $broker): void
+    {
+        $domain = (string) $this->dockerSettingsTarget;
+        $this->error = null;
+        try {
+            $domain = Validator::domain($domain);
+            $this->assertMutableVhost($domain);
+            // Environment first: the settings call restarts the container once, with both.
+            $this->saveDockerEnv($broker, $domain);
+            $input = $this->dockerWorkloadInput();
+            if (! array_key_exists('service', $input)) {
+                $input['service'] = null;
+            }
+            $res = $broker->call('vhost.docker.settings.set', [$domain], $input, 600);
+            if (! $res->ok) {
+                throw new \RuntimeException((string) $res->error);
+            }
+            $this->flash = "Container settings saved for {$domain}"
+                .(($res->data['applied'] ?? false) ? '; the container was restarted with them.' : '.');
+            $this->cancelDockerSettings();
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
+        }
+        $this->reload($broker);
+    }
+
+    public function addRegistry(BrokerClient $broker): void
+    {
+        $this->error = null;
+        $res = $broker->call('docker.registry.set', [], [
+            'name' => trim($this->registryName),
+            'host' => trim($this->registryHost),
+            'username' => trim($this->registryUsername),
+            'password' => $this->registryPassword,
+        ], 30);
+        // The password never stays in component state, whatever the outcome.
+        $this->registryPassword = '';
+        if (! $res->ok) {
+            $this->error = $this->operatorMessage((string) $res->error);
+
+            return;
+        }
+        $this->flash = 'Saved registry '.(string) ($res->data['name'] ?? '').'.';
+        $this->registryName = '';
+        $this->registryHost = '';
+        $this->registryUsername = '';
+        $this->loadDockerRegistries($broker);
+    }
+
+    public function deleteRegistry(BrokerClient $broker, string $name): void
+    {
+        $this->error = null;
+        $res = $broker->call('docker.registry.delete', [$name], [], 30);
+        if (! $res->ok) {
+            $this->error = $this->operatorMessage((string) $res->error);
+
+            return;
+        }
+        $this->flash = "Deleted registry {$name}.";
+        $this->loadDockerRegistries($broker);
     }
 
     public function enableDocker(BrokerClient $broker, OperationDispatcher $operations): void
@@ -789,6 +1021,12 @@ class VhostsPage extends Component
             $dockerfile = trim($this->dockerDockerfile);
             if ($dockerfile !== '') {
                 $input['dockerfile'] = $dockerfile;
+            }
+            $input += $this->dockerWorkloadInput();
+            if (trim($this->dockerEnvText) !== '') {
+                // Saved now, synchronously: the queued payload below is serialized into the
+                // jobs table, and container secrets must not be.
+                $this->saveDockerEnv($broker, $domain);
             }
             // Queued (B5) in every mode: compose and Dockerfile build an image, and
             // image mode pulls one that is validated against the registry but not
@@ -1133,6 +1371,7 @@ class VhostsPage extends Component
                 $runtimeItems[] = ['label' => 'Scale', 'wireClick' => "askPm2Scale('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Switch off PM2', 'wireClick' => "disablePm2('{$domain}')"];
             } elseif ($runtime === 'docker') {
+                $runtimeItems[] = ['label' => 'Container settings', 'wireClick' => "askDockerSettings('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Rebuild', 'wireClick' => "rebuildDocker('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Restart', 'wireClick' => "restartDocker('{$domain}')"];
                 $runtimeItems[] = ['label' => 'Switch off Docker', 'wireClick' => "disableDocker('{$domain}')"];
