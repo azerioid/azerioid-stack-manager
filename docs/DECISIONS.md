@@ -1015,6 +1015,7 @@ and it is one process identity for all of them. Closing it means **one PHP-FPM p
 as that vhost's identity**, which changes pool management, sockets, SELinux labelling and the Octane
 hand-back. Recorded as the next step for isolation, not done here. A49 closes every path where the
 panel *hands a person or a schedule* a site's identity: Terminal, SFTP, cron and the File Manager.
+*Closed by A55 (v2.5.0): each PHP-FPM site now runs in a pool of its own as its identity.*
 
 **Also not closed:** `azerioid-supervised` (Octane, PM2, Docker, custom programs) is one account for
 every site, as A37/A38 already record.
@@ -1296,3 +1297,65 @@ a local path git removes `-c` settings from upload-pack's environment. The setti
 upload-pack's own command line (`--upload-pack='git -c safe.directory=… upload-pack'`). Making the mirror
 the site's instead was rejected: a site could then plant hooks or config in it that root would run on
 the next fetch. The failure message now says whether the files were changed at all.
+
+## A55 — One PHP-FPM pool per site, running as the site
+
+**Status:** Accepted, shipped in **v2.5.0**. **Closes:** the site PHP residual A49 recorded. **Operator
+decisions (2026-09-28):** migrate every existing site automatically, A49-style, with rollback;
+`pm = ondemand`; `open_basedir` on by default, switchable per site; `disable_functions` left at distro
+defaults.
+
+**Problem.** Every site's PHP ran in the distro's shared `www` pool as one account (`www-data` on apt,
+`apache` on EL). That account had to write every site (uploads, caches, SQLite), so it was a member of
+every vhost group, and any site's PHP code could read and change every other site — including its `.env`.
+A49 closed Terminal, SFTP, cron and the File Manager; the web request path stayed open.
+
+**Decision.** Each PHP-FPM site gets a pool `azv-<site>` on the distro master of its PHP version
+(`/etc/php/<v>/fpm/pool.d/` on apt, `/etc/php-fpm.d/` on EL, Remi's directory for SCL versions):
+
+| Aspect | Decision |
+|--------|----------|
+| Process identity | `user`/`group` = the site's identity and group (A49). The site's PHP can reach exactly what its Terminal can |
+| Socket | `<run dir>/azv-<site>-<version>.sock`, `listen.owner` = web user, `listen.group` = the site group, `0660`. The web server (and a backend Apache/Nginx, a reader) connects; another site's identity cannot. The version is in the name, so during a version change the old pool keeps serving until the web server has moved |
+| Process manager | `ondemand`, at most 5 children, 10 s idle timeout, 500 requests per child: an idle site costs nothing on a 1 GB host |
+| Sessions | `/var/lib/azerioid-php-sessions/<site>`, `0700` identity-owned (the parent `0711`), labelled `httpd_sys_rw_content_t` on SELinux hosts. Moving a site logs its users out once |
+| `open_basedir` | The site's top directory, `/tmp`, its session directory, `/usr/share/php`, `/usr/share/pear`. On by default; `azerioid vhost php-pool set --domain= --open-basedir=off` or the vhost editor turns it off for applications that need other paths. It is defence in depth — the account boundary is what isolates |
+| `disable_functions` | Distro default. PHP runs as the site, so `exec()` grants nothing the site's Terminal does not |
+| Timeouts | The site PHP limits of `SitePhpTimeouts` (`request_terminate_timeout`, `max_execution_time`) are written into every site pool |
+
+**Safety of a pool change.** One bad pool file stops the master every other site on that PHP version runs
+in. So a pool is written, `php-fpm<v> -t` is run, and a refused pool is taken out *before* any reload; a
+reload is graceful (`systemctl reload`, restart only if reload fails), and a pool whose socket does not
+appear is taken out again. The pool is created while the vhost is rendered, so the driver's own
+validate-and-restore covers the web server side; the identity is created first when a new site needs it.
+A site whose identity is still on the pre-A49 shared group, or that the migration put back, is rendered
+against the shared pool.
+
+**Files.** The first pool for a site runs `chown -R -h <identity>:<site group>` and `chmod -R g+rwX` on
+the site's top directory: what the shared account wrote (uploads, caches) becomes the site's, and group
+write stays, so the shared pool could still serve the site if it has to go back. Octane disable hands the
+Laravel writable directories to the identity, not to the shared account.
+
+**Migration.** `vhost.phppool.converge`, started by the scheduler every five minutes in a transient unit
+(`azerioid-site-php-pools.service`), moves pending sites one at a time: HTTP probe → re-render the vhost
+(pool, files, web server) → probe again (three retries). A site that answered below 500 before and 0 or
+5xx after is put back on the shared pool at once, marked with the reason, its pool removed; the other
+sites carry on. A put-back site is not retried automatically; the operator fixes it and runs
+`azerioid vhost php-pool apply --confirm` (typed `ISOLATE-PHP` at the broker, optionally `--domain=`).
+State: `/etc/azerioid-panel/site-php-pools.json` (root, `0600`); per-site switches:
+`/var/lib/azerioid-panel/site-php/<site>.json`. `azerioid vhost php-pool status` is non-zero until every
+site has its pool, and `verify-release.sh` checks the status and that every `azv-*` pool runs as an
+`az-vh-*` account.
+
+**Lifecycle.** A version edit prunes the site's other pools after the web server has moved; deleting a
+site removes its pools, sessions and settings *before* its account (php-fpm will not reload a pool whose
+user is gone); the converge also takes out pools no site uses. `uninstall.sh --drop-db` removes every site
+pool before deleting the identities.
+
+**Not changed / residuals.**
+- The distro `www` pool stays, idle; readers (`www-data`, `apache`, …) stay in every vhost group because
+  the web servers run as them. No site code runs as them any more.
+- `azerioid-supervised` (Octane, PM2, Docker, custom programs) is still one account for every site and a
+  member of every group (A37/A38/A49); as such it can also connect to any site's PHP socket.
+- Adminer keeps its own pool.
+

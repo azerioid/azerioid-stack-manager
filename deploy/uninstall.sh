@@ -157,6 +157,20 @@ purge_released_caddy_state() {
 
 purge_vhost_identities() {
     echo "==> Removing per-vhost users (az-vh-*) and supervised process user"
+    # A55: each PHP site's pool runs as its identity, and php-fpm will not start with a pool
+    # whose user is gone — take the pools out first, then restart the masters.
+    local pool pools_removed=0 unit
+    for pool in /etc/php/*/fpm/pool.d/azv-*.conf /etc/php-fpm.d/azv-*.conf /etc/opt/remi/php*/php-fpm.d/azv-*.conf; do
+        [[ -f "${pool}" ]] || continue
+        rm -f "${pool}"
+        pools_removed=1
+    done
+    rm -rf /var/lib/azerioid-php-sessions /var/lib/azerioid-panel/site-php
+    if [[ "${pools_removed}" -eq 1 ]]; then
+        while read -r unit; do
+            [[ -n "${unit}" ]] && systemctl try-restart "${unit}" 2>/dev/null || true
+        done < <(systemctl list-units --type=service --all --no-legend --plain 'php*fpm*' 2>/dev/null | awk '{print $1}' | grep -v '^azerioid-')
+    fi
     local meta=/var/lib/azerioid-panel/vhost-users.json
     if [[ -f "${meta}" ]]; then
         while IFS= read -r user; do

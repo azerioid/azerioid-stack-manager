@@ -264,6 +264,17 @@ final class DistroPaths
         return $this->phpPathCandidates($version, 'fpm_socket');
     }
 
+    /** The pool directory of a PHP version's FPM master (where A55 site pools go). */
+    public function phpFpmPoolDir(string $version): string
+    {
+        $glob = $this->phpPathCandidates($version, 'fpm_pool_globs')[0] ?? null;
+        if (is_string($glob) && $glob !== '') {
+            return rtrim(dirname($glob), '/');
+        }
+
+        return $this->runtime->isDir('/etc/php/' . $version . '/fpm/pool.d') ? '/etc/php/' . $version . '/fpm/pool.d' : '/etc/php-fpm.d';
+    }
+
     public function phpFpmUnixSocket(string $version): string
     {
         $paths = $this->phpFpmSocketPaths($version);

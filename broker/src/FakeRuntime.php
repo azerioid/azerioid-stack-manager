@@ -95,6 +95,15 @@ final class FakeRuntime implements Runtime
         if ($this->execHook !== null) {
             ($this->execHook)($command, $stdin);
         }
+        // Like PHP-FPM itself: a (re)started master opens the sockets its pool files name.
+        if (($command[0] ?? '') === '/usr/bin/systemctl' && in_array($command[1] ?? '', ['reload', 'restart', 'start'], true)
+            && str_contains((string) ($command[2] ?? ''), 'php') && str_contains((string) ($command[2] ?? ''), 'fpm')) {
+            foreach ($this->files as $path => $body) {
+                if (str_ends_with($path, '.conf') && preg_match('/^listen\s*=\s*(\/\S+)$/m', $body, $m) === 1) {
+                    $this->files[$m[1]] = '';
+                }
+            }
+        }
         if ($this->execFn !== null) {
             $answer = ($this->execFn)($command, $stdin);
             if ($answer !== null) {

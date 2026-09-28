@@ -52,7 +52,7 @@ CADDY;
 
         $this->assertSame(0, $code, $out);
         $conf = $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf'];
-        $this->assertStringContainsString('php_fastcgi unix//run/php/php8.3-fpm.sock', $conf);
+        $this->assertStringContainsString('php_fastcgi unix//run/php/azv-shop-example-com-8.3.sock', $conf);
         $decoded = json_decode($out, true);
         $this->assertSame('8.4', $decoded['data']['before']['php_version']);
         $this->assertSame('8.3', $decoded['data']['after']['php_version']);

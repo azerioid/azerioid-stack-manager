@@ -168,6 +168,14 @@
                         @endforeach
                     </select>
                 </label>
+                @if ($editOpenBasedir !== null)
+                    <label class="md:col-span-2 flex items-start gap-2 text-sm text-zinc-300">
+                        <input type="checkbox" class="mt-1 rounded border-white/10 bg-ink-800" wire:model="editOpenBasedir">
+                        <span>Restrict PHP to this site's directory (open_basedir)
+                            <span class="block text-xs text-zinc-500">The site's PHP already runs as the site's own account and cannot open other sites' files either way. Turn this off only if an application needs paths outside its directory.</span>
+                        </span>
+                    </label>
+                @endif
             @endif
             <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
                 <select class="field mt-1" wire:model="editEngine" @disabled($editType === 'proxy')>

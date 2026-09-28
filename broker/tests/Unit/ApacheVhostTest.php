@@ -61,7 +61,7 @@ final class ApacheVhostTest extends TestCase
         $this->assertArrayHasKey($path, $rt->files);
         $this->assertStringContainsString('ServerName shop.example.com', $rt->files[$path]);
         $this->assertStringContainsString('<VirtualHost 127.0.0.1:8081>', $rt->files[$path]);
-        $this->assertStringContainsString('proxy:unix:/run/php/php8.4-fpm.sock', $rt->files[$path]);
+        $this->assertStringContainsString('proxy:unix:/run/php/azv-shop-example-com-8.4.sock', $rt->files[$path]);
         $this->assertStringContainsString("ProxyFCGISetEnvIf \"req('X-Forwarded-Proto') == 'https'\" REQUEST_SCHEME https", $rt->files[$path]);
         $this->assertStringContainsString('ProxyTimeout 35', $rt->files[$path]);
         $this->assertStringNotContainsString('php_fastcgi', $rt->files[$path]);
@@ -142,7 +142,10 @@ final class ApacheVhostTest extends TestCase
         $result = (new ApacheDriver($cfg))->updateVhost($rt, $cfg, 'shop.example.com', ['php_version' => '8.3']);
 
         $conf = $rt->files['/etc/apache2/sites-available/shop.example.com.conf'];
-        $this->assertStringContainsString('php8.3-fpm.sock', $conf);
+        $this->assertStringContainsString('/run/php/azv-shop-example-com-8.3.sock', $conf);
+        $pools = array_filter(array_keys($rt->files), static fn (string $p): bool => str_ends_with($p, '/azv-shop-example-com.conf'));
+        $this->assertCount(1, $pools, 'the pool of the new version');
+        $this->assertStringContainsString('8.3', (string) reset($pools));
         $this->assertStringNotContainsString('SSLEngine on', $conf);
         $this->assertSame('8.4', $result['before']['php_version']);
         $this->assertSame('8.3', $result['after']['php_version']);

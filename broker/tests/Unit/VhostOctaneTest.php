@@ -296,7 +296,7 @@ CADDY;
         $this->assertSame(0, $code, json_encode($json));
         $this->assertTrue($json['data']['program_removed']);
         $conf = $this->rt->files[self::CONF];
-        $this->assertStringContainsString('php_fastcgi unix//run/php/php8.4-fpm.sock', $conf);
+        $this->assertStringContainsString('php_fastcgi unix//run/php/azv-app-example-com-8.4.sock', $conf);
         $this->assertStringNotContainsString('runtime=octane', $conf);
         $this->assertStringContainsString('root * ' . self::DOCROOT, $conf);
         $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-octane-app-example-com.conf', $this->rt->files);

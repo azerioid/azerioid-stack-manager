@@ -11,11 +11,12 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation}
-        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale|node (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation)}
+        {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation|php-pool}
+        {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale|node (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation); status|apply|set (with php-pool)}
         {--domain= : Vhost domain}
         {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
-        {--confirm : Required for isolation apply (moves every vhost identity onto a group of its own)}
+        {--confirm : Required for isolation apply and php-pool apply}
+        {--open-basedir= : on|off (php-pool set --domain=)}
         {--repair : reconcile: rebuild the projection from the config files}
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
@@ -67,8 +68,83 @@ class VhostCommand extends Command
             'docker' => $this->docker(),
             'reconcile' => $this->reconcile(),
             'isolation' => $this->isolation(),
+            'php-pool', 'phppool' => $this->phpPool(),
             default => $this->invalidAction(),
         };
+    }
+
+    /**
+     * ADR A55: every PHP site in a PHP-FPM pool of its own, running as the site's identity.
+     * Runs automatically from the scheduler; this is the status check, the operator retry
+     * (sites put back on the shared pool) and the per-site open_basedir switch.
+     */
+    private function phpPool(): int
+    {
+        $op = strtolower((string) ($this->argument('filesOp') ?: 'status'));
+        if (! in_array($op, ['status', 'check', 'apply', 'set'], true)) {
+            $this->error('Unknown php-pool op. Use: azerioid vhost php-pool status|apply|set');
+
+            return self::INVALID;
+        }
+        $domain = trim((string) $this->option('domain'));
+
+        try {
+            if ($op === 'set') {
+                $switch = strtolower(trim((string) $this->option('open-basedir')));
+                if ($domain === '' || ! in_array($switch, ['on', 'off'], true)) {
+                    $this->error('Usage: azerioid vhost php-pool set --domain=<site> --open-basedir=on|off');
+
+                    return self::INVALID;
+                }
+                $data = $this->brokerData('vhost.phppool.set', [$domain], ['open_basedir' => $switch === 'on'], 120);
+                $this->info($domain.': open_basedir '.(($data['open_basedir'] ?? true) ? 'on' : 'off').'.');
+
+                return self::SUCCESS;
+            }
+            if ($op === 'apply') {
+                if (! $this->option('confirm')) {
+                    $this->error('Refusing to move sites without --confirm (each moved site\'s PHP restarts in a pool of its own).');
+
+                    return self::INVALID;
+                }
+                $data = $this->brokerData('vhost.phppool.apply', [], array_filter([
+                    'confirm' => Validator::ISOLATE_PHP_CONFIRM,
+                    'domain' => $domain !== '' ? $domain : null,
+                ]), 3600);
+                if ($this->option('json')) {
+                    $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+                    return self::SUCCESS;
+                }
+                foreach ((array) ($data['sites'] ?? []) as $site => $row) {
+                    $this->line('  '.$site.'  '.(string) ($row['result'] ?? '?').'  HTTP '.(int) ($row['before'] ?? 0).' → '.(int) ($row['after'] ?? 0)
+                        .(isset($row['reason']) ? '  — '.(string) $row['reason'] : ''));
+                }
+                foreach ((array) ($data['removed_pools'] ?? []) as $path) {
+                    $this->line('  removed unused pool '.(string) $path);
+                }
+                ($data['result'] ?? '') === 'ok' ? $this->info('Done.') : $this->warn('Some sites were put back on the shared pool; see above.');
+
+                return ($data['result'] ?? '') === 'ok' ? self::SUCCESS : self::FAILURE;
+            }
+            $data = $this->brokerData('vhost.phppool.status', [], [], 120, false);
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->option('json')) {
+            $this->line((string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return ($data['migrated'] ?? false) === true ? self::SUCCESS : self::FAILURE;
+        }
+        foreach ((array) ($data['sites'] ?? []) as $row) {
+            $this->line('  '.(string) ($row['domain'] ?? '?').'  php '.(string) ($row['php_version'] ?? '').'  '.(string) ($row['state'] ?? '')
+                .'  open_basedir '.(($row['open_basedir'] ?? true) ? 'on' : 'off')
+                .(isset($row['reason']) && $row['reason'] !== null ? '  — '.(string) $row['reason'] : ''));
+        }
+        ($data['migrated'] ?? false) === true ? $this->info((string) ($data['verdict'] ?? 'OK')) : $this->warn((string) ($data['verdict'] ?? 'PENDING'));
+
+        return ($data['migrated'] ?? false) === true ? self::SUCCESS : self::FAILURE;
     }
 
     /**
