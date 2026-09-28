@@ -32,9 +32,17 @@ final class ProgramIdentity
      */
     public const DETACHED_MARKER = '/var/lib/azerioid-panel/supervised-detached';
 
+    /**
+     * Version of the removal the marker records. 2 (v2.7.2): also the legacy group, and the
+     * running processes restarted — a process keeps the groups it started with (seen on the
+     * Ubuntu host: the idle shared daemon still held four site groups after v2.7.0's removal).
+     */
+    public const DETACH_VERSION = '2';
+
     public static function detached(Runtime $runtime): bool
     {
-        return $runtime->fileExists(self::DETACHED_MARKER);
+        return $runtime->fileExists(self::DETACHED_MARKER)
+            && strtok($runtime->readFile(self::DETACHED_MARKER), "\n") === self::DETACH_VERSION;
     }
 
     public static function userFor(Runtime $runtime, ?string $domain, string $program = ''): string
