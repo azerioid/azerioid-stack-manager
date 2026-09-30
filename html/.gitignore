@@ -1,0 +1,3 @@
+# Tool state that must never ship with the site.
+.claude-flow/
+.DS_Store

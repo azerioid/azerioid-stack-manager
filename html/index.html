@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AZERIOID Stack Manager — a control panel where every site is its own box</title>
+<meta name="description" content="A free control panel for one Linux server: Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker, installed on demand — with every site isolated under its own account, PHP pool and Docker daemon.">
+<link rel="canonical" href="https://azerioid.dev/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://azerioid.dev/">
+<meta property="og:title" content="AZERIOID Stack Manager">
+<meta property="og:description" content="One server, one panel, every site in its own box. Free. Ubuntu, Debian, AlmaLinux and Rocky Linux with SELinux enforcing.">
+<meta property="og:image" content="https://azerioid.dev/assets/virtual-hosts.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0d0f13">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0f13'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23d6a54c'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0f13;
+    --bg-2: #12151b;
+    --panel: #161a21;
+    --panel-2: #1b2029;
+    --line: #262c37;
+    --line-2: #323a47;
+    --text: #e8e6e1;
+    --muted: #9aa0ab;
+    --dim: #6c7380;
+    --gold: #d6a54c;
+    --gold-2: #e8bd6a;
+    --gold-ink: #1a1307;
+    --green: #5fb88a;
+    --red: #d86a5c;
+    --radius: 12px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  img { max-width: 100%; height: auto; display: block; }
+  a { color: inherit; }
+  code, pre, .mono { font-family: var(--mono); }
+  .wrap { width: 100%; max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .eyebrow {
+    font: 500 12px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--gold);
+  }
+  h1, h2, h3 { margin: 0; line-height: 1.15; letter-spacing: -.01em; }
+  h2 { font-size: clamp(28px, 3.6vw, 40px); font-weight: 600; }
+  h3 { font-size: 18px; font-weight: 600; }
+  p { margin: 0; }
+  .lead { color: var(--muted); font-size: 18px; max-width: 62ch; }
+  section { padding: 96px 0; border-top: 1px solid var(--line); }
+  .section-head { display: grid; gap: 14px; margin-bottom: 44px; max-width: 760px; }
+
+  /* nav */
+  .nav {
+    position: sticky; top: 0; z-index: 20; background: rgba(13,15,19,.82);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line);
+  }
+  .nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(95,184,138,.14); }
+  .brand b { font: 600 17px/1 var(--mono); letter-spacing: .04em; }
+  .brand small { display: block; font: 500 9.5px/1 var(--mono); letter-spacing: .28em; color: var(--dim); margin-top: 5px; }
+  .nav-links { display: flex; gap: 26px; align-items: center; }
+  .nav-links a { text-decoration: none; color: var(--muted); font-size: 14.5px; }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px; border-radius: 9px; padding: 11px 18px;
+    font: 600 15px/1 var(--sans); text-decoration: none; border: 1px solid transparent; cursor: pointer;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-gold { background: var(--gold); color: var(--gold-ink); }
+  .btn-gold:hover { background: var(--gold-2); }
+  .btn-ghost { border-color: var(--line-2); color: var(--text); background: transparent; }
+  .btn-ghost:hover { border-color: var(--dim); background: rgba(255,255,255,.03); }
+  .btn svg { width: 17px; height: 17px; }
+  .nav .btn { padding: 9px 14px; font-size: 14px; }
+
+  /* hero */
+  .hero { padding: 88px 0 72px; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -200px -10% auto; height: 620px; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 0%, rgba(214,165,76,.16), transparent 62%);
+  }
+  .hero .wrap { position: relative; display: grid; gap: 28px; justify-items: center; text-align: center; }
+  .hero h1 { font-size: clamp(36px, 6vw, 66px); font-weight: 700; max-width: 16ch; }
+  .hero h1 em { font-style: normal; color: var(--gold); }
+  .hero .lead { font-size: clamp(17px, 2vw, 20px); text-align: center; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .chip {
+    font: 500 12.5px/1 var(--mono); color: var(--muted); border: 1px solid var(--line-2);
+    padding: 7px 10px; border-radius: 999px; background: rgba(255,255,255,.02);
+  }
+  .chip b { color: var(--green); font-weight: 500; }
+  .window {
+    width: 100%; max-width: 1080px; margin-top: 28px; border: 1px solid var(--line-2); border-radius: 14px;
+    overflow: hidden; background: var(--panel); box-shadow: 0 40px 120px -30px rgba(0,0,0,.8), 0 0 0 1px rgba(0,0,0,.4);
+  }
+  .window-bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  .window-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); }
+  .window-bar span { margin-left: 10px; font: 12px/1 var(--mono); color: var(--dim); }
+
+  /* install */
+  .install { display: grid; grid-template-columns: 1fr 1.25fr; gap: 48px; align-items: center; }
+  .term { border: 1px solid var(--line-2); border-radius: var(--radius); background: #0a0c0f; overflow: hidden; }
+  .term-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .term-head span { font: 12px/1 var(--mono); color: var(--dim); }
+  .copy {
+    font: 500 12px/1 var(--mono); color: var(--muted); background: var(--panel-2); border: 1px solid var(--line-2);
+    border-radius: 6px; padding: 7px 10px; cursor: pointer;
+  }
+  .copy:hover { color: var(--text); }
+  .term pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 14px; line-height: 1.85; color: #d7d4cc; }
+  .term .p { color: var(--gold); user-select: none; }
+  .term .c { color: var(--dim); }
+  .steps { display: grid; gap: 18px; margin-top: 26px; }
+  .step { display: grid; grid-template-columns: 30px 1fr; gap: 14px; }
+  .step b {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    font: 500 13px/1 var(--mono); color: var(--gold); border: 1px solid rgba(214,165,76,.35); background: rgba(214,165,76,.07);
+  }
+  .step p { color: var(--muted); }
+  .step strong { color: var(--text); font-weight: 600; }
+
+  /* screens */
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .tab {
+    font: 500 14px/1 var(--sans); color: var(--muted); background: transparent; border: 1px solid var(--line-2);
+    padding: 10px 14px; border-radius: 8px; cursor: pointer;
+  }
+  .tab[aria-selected="true"] { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); }
+  .shot { display: none; }
+  .shot.on { display: block; }
+  .shot figcaption { margin-top: 14px; color: var(--muted); font-size: 15px; }
+
+  /* features */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px;
+    display: grid; gap: 10px; align-content: start;
+  }
+  .card .k { font: 500 11.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .card p { color: var(--muted); font-size: 15px; }
+  .card code { font-size: 13px; color: var(--gold-2); }
+
+  /* isolation */
+  .iso { display: grid; grid-template-columns: .9fr 1.1fr; gap: 56px; align-items: start; }
+  .layers { display: grid; gap: 10px; }
+  .layer {
+    display: grid; grid-template-columns: 44px 1fr; gap: 16px; padding: 18px 20px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--panel);
+  }
+  .layer .n { font: 500 13px/44px var(--mono); color: var(--gold); text-align: center; border: 1px solid var(--line-2); border-radius: 9px; height: 44px; }
+  .layer p { color: var(--muted); font-size: 15px; margin-top: 4px; }
+  .proof {
+    margin-top: 28px; padding: 20px; border: 1px solid rgba(95,184,138,.28); border-radius: var(--radius);
+    background: rgba(95,184,138,.05); display: grid; gap: 10px;
+  }
+  .proof .row { display: flex; justify-content: space-between; gap: 16px; font: 13.5px/1.5 var(--mono); color: var(--muted); border-bottom: 1px dashed var(--line); padding-bottom: 8px; }
+  .proof .row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .proof .ok { color: var(--green); white-space: nowrap; }
+
+  /* stack */
+  .stack { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .stack .card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+  .stack li { font: 14px/1.4 var(--mono); color: var(--text); }
+  .stack li span { color: var(--dim); }
+
+  /* os */
+  .os { width: 100%; border-collapse: collapse; font-size: 15px; }
+  .os th, .os td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .os th { font: 500 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  .os td:first-child { font-weight: 600; }
+  .ok-badge { font: 500 12px/1 var(--mono); color: var(--green); border: 1px solid rgba(95,184,138,.35); padding: 5px 8px; border-radius: 6px; }
+  .no-badge { font: 500 12px/1 var(--mono); color: var(--red); border: 1px solid rgba(216,106,92,.35); padding: 5px 8px; border-radius: 6px; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+
+  /* free */
+  .free { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .big { font: 700 44px/1 var(--sans); color: var(--gold); }
+
+  /* limits + faq */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+  .limits { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+  .limits li { color: var(--muted); padding-left: 22px; position: relative; font-size: 15px; }
+  .limits li::before { content: "—"; position: absolute; left: 0; color: var(--dim); }
+  details { border-bottom: 1px solid var(--line); padding: 16px 0; }
+  details:first-of-type { border-top: 1px solid var(--line); }
+  summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-family: var(--mono); color: var(--gold); }
+  details[open] summary::after { content: "−"; }
+  details p { color: var(--muted); margin-top: 10px; font-size: 15px; }
+
+  /* final cta + footer */
+  .final { text-align: center; }
+  .final .wrap { display: grid; gap: 22px; justify-items: center; }
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--dim); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--text); }
+  footer nav { display: flex; gap: 22px; flex-wrap: wrap; }
+
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 4px; }
+
+  @media (max-width: 980px) {
+    .install, .iso, .two { grid-template-columns: 1fr; gap: 36px; }
+    .features, .free { grid-template-columns: 1fr 1fr; }
+    .stack { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    section { padding: 68px 0; }
+    .nav-links a:not(.btn) { display: none; }
+    .features, .free, .stack { grid-template-columns: 1fr; }
+    .hero { padding: 60px 0 48px; }
+    .term pre { font-size: 12.5px; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="AZERIOID Stack Manager home">
+      <span class="dot" aria-hidden="true"></span>
+      <span><b>AZERIOID</b><small>STACK MANAGER</small></span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#features">Features</a>
+      <a href="#isolation">Isolation</a>
+      <a href="#install">Install</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn btn-ghost" href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <div class="hero grid-bg">
+    <div class="wrap">
+      <span class="eyebrow">Control panel for one Linux server</span>
+      <h1>Every site on your server, in <em>its own box</em>.</h1>
+      <p class="lead">A free web control panel for a VPS or bare-metal host. Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker install on demand — and each site runs under its own account, its own PHP pool and its own Docker daemon.</p>
+      <div class="cta">
+        <a class="btn btn-gold" href="#install">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6l4 4-4 4M10 15h6"/></svg>
+          Install in three commands
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">View the source on GitHub</a>
+      </div>
+      <div class="chips" aria-label="Supported systems">
+        <span class="chip"><b>●</b> Ubuntu 24.04</span>
+        <span class="chip"><b>●</b> Debian 12 / 13</span>
+        <span class="chip"><b>●</b> AlmaLinux · Rocky 9+</span>
+        <span class="chip"><b>●</b> SELinux enforcing</span>
+        <span class="chip">No license fees</span>
+      </div>
+      <div class="window">
+        <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>panel · virtual hosts</span></div>
+        <img src="assets/virtual-hosts.png" width="1500" height="900" alt="The Virtual hosts page: each site with its engine (Caddy, Apache or Nginx), document root, PHP version and runtime — PHP-FPM, Octane, PM2 or Docker.">
+      </div>
+    </div>
+  </div>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">What you get</span>
+        <h2>A real UI for day-two work — and a CLI that does the same thing.</h2>
+        <p class="lead">The bootstrap installs only what the panel needs. Everything else comes from a registry of official upstream packages, when you ask for it.</p>
+      </div>
+      <div class="features">
+        <div class="card"><span class="k">Sites</span><h3>Three engines, one front door</h3><p>Each site picks Caddy, Apache or Nginx. Caddy always owns :80/:443 and terminates TLS; the others run on loopback behind it.</p></div>
+        <div class="card"><span class="k">HTTPS</span><h3>Certificates without thinking</h3><p>Let’s Encrypt over HTTP-01 automatically, DNS-01 through Cloudflare or DigitalOcean for wildcards, or an internal CA for private hosts.</p></div>
+        <div class="card"><span class="k">Runtimes</span><h3>PHP-FPM, Octane, PM2, Docker</h3><p>Per site: plain PHP-FPM, Laravel Octane on FrankenPHP, a PM2 Node cluster on Node 20, 22 or 24, or a rootless Docker container.</p></div>
+        <div class="card"><span class="k">Data</span><h3>Databases and cache</h3><p>MariaDB, PostgreSQL, MongoDB, Redis, Memcached — with per-database access rules and Adminer behind the panel’s login. Elasticsearch too.</p></div>
+        <div class="card"><span class="k">Mail</span><h3>A mail server that tells the truth</h3><p>Postfix, Dovecot and DKIM with copy-paste DNS records. It probes whether port 25 is blocked and steers you to a relay when it is.</p></div>
+        <div class="card"><span class="k">Files</span><h3>File Manager and Terminal</h3><p>Edit files and open a shell in the browser — always as the site’s own account, never as root, confined to that site.</p></div>
+        <div class="card"><span class="k">Backups</span><h3>Whole-site bundles</h3><p>Files, configuration and the site’s databases in one bundle, with per-target schedules and retention, verified by restoring into a scratch database.</p></div>
+        <div class="card"><span class="k">Deploy</span><h3>Git deploy with rollback</h3><p>The deploy key stays with root; code is checked out and your build command runs as the site. Manual or scheduled, one-click rollback.</p></div>
+        <div class="card"><span class="k">Operations</span><h3>CLI, audit, self-update</h3><p><code>azerioid</code> drives the same privileged broker as the UI. Every action is audited; updates install release tags and roll back on failure.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREENS -->
+  <section id="screens">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Inside the panel</span>
+        <h2>Built for the person who is on call.</h2>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Screenshots">
+        <button class="tab" role="tab" aria-selected="true" aria-controls="s1" id="t1">Components</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="s2" id="t2">Files</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="s3" id="t3">Mail</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="s4" id="t4">Security</button>
+      </div>
+      <div class="window" style="margin-top:0">
+        <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>panel</span></div>
+        <figure class="shot on" id="s1" role="tabpanel" aria-labelledby="t1" style="margin:0">
+          <img src="assets/components.png" width="1500" height="900" loading="lazy" alt="The Components page: web engines, databases, runtimes and tools, each installable from official upstream packages.">
+        </figure>
+        <figure class="shot" id="s2" role="tabpanel" aria-labelledby="t2" style="margin:0">
+          <img src="assets/file-manager-editor.png" width="1890" height="1638" loading="lazy" alt="The File Manager with an editor open, working inside one site's directory as that site's own account.">
+        </figure>
+        <figure class="shot" id="s3" role="tabpanel" aria-labelledby="t3" style="margin:0">
+          <img src="assets/mail.png" width="1500" height="900" loading="lazy" alt="The Mail page: service health, outbound delivery check, mail hostname and relay settings.">
+        </figure>
+        <figure class="shot" id="s4" role="tabpanel" aria-labelledby="t4" style="margin:0">
+          <img src="assets/security.png" width="1500" height="900" loading="lazy" alt="The Security page: SSH log audit, firewall rules and fail2ban jails.">
+        </figure>
+      </div>
+      <p class="lead" id="shot-caption" style="margin-top:16px;font-size:15px">Install and remove stack components from a registry of official packages — the panel never runs a package manager itself.</p>
+    </div>
+  </section>
+
+  <!-- ISOLATION -->
+  <section id="isolation" class="grid-bg">
+    <div class="wrap iso">
+      <div>
+        <div class="section-head" style="margin-bottom:0">
+          <span class="eyebrow">The difference</span>
+          <h2>Built as if every site on the server were hostile.</h2>
+          <p class="lead">On most shared servers one compromised site can read every other site’s <code>.env</code>. Here each site is a separate Linux account, and every way code runs — web requests, workers, containers, the terminal — runs as that account.</p>
+        </div>
+        <div class="proof" aria-label="Tested results">
+          <span class="eyebrow" style="color:var(--green)">Tested, not promised</span>
+          <div class="row"><span>Site A’s PHP reads site B’s files</span><span class="ok">denied</span></div>
+          <div class="row"><span>Site A’s worker (Octane / PM2) writes to site B</span><span class="ok">denied</span></div>
+          <div class="row"><span>Site A’s container mounts another daemon’s socket</span><span class="ok">denied</span></div>
+          <div class="row"><span>Same tests on Rocky Linux, SELinux enforcing</span><span class="ok">0 AVC</span></div>
+        </div>
+      </div>
+      <div class="layers">
+        <div class="layer"><span class="n">01</span><div><h3>An account and a group per site</h3><p>Files, SFTP, cron, the Terminal and the File Manager all act as the site’s own <code>az-vh-*</code> account. No shared group opens one site to another.</p></div></div>
+        <div class="layer"><span class="n">02</span><div><h3>A PHP-FPM pool per site</h3><p>PHP runs as the site, on a socket only the web server can reach. On-demand workers: an idle site costs no memory.</p></div></div>
+        <div class="layer"><span class="n">03</span><div><h3>Workers run as their site</h3><p>Octane, PM2 and your own Supervisor programs run under the site they belong to — never under a shared account.</p></div></div>
+        <div class="layer"><span class="n">04</span><div><h3>A Docker daemon per site</h3><p>Rootless Docker, one daemon per Docker site, with its own id range. A container can reach its own site and nothing else.</p></div></div>
+        <div class="layer"><span class="n">05</span><div><h3>A broker, not a root web app</h3><p>The panel runs unprivileged. Every host change goes through a broker that allows a fixed list of actions and validates each one again.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STACK -->
+  <section id="stack">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">The stack</span>
+        <h2>Official packages. Installed when you ask.</h2>
+      </div>
+      <div class="stack">
+        <div class="card"><span class="k">Web</span><ul><li>Caddy <span>front door</span></li><li>Nginx <span>backend</span></li><li>Apache <span>backend</span></li></ul></div>
+        <div class="card"><span class="k">Runtimes</span><ul><li>PHP 8.1 – 8.4</li><li>Node.js 20 · 22 · 24</li><li>Octane · PM2</li><li>Docker <span>rootless</span></li></ul></div>
+        <div class="card"><span class="k">Data</span><ul><li>MariaDB</li><li>PostgreSQL</li><li>MongoDB</li><li>Redis · Memcached</li><li>Elasticsearch</li></ul></div>
+        <div class="card"><span class="k">Mail &amp; tools</span><ul><li>Postfix · Dovecot</li><li>OpenDKIM</li><li>Supervisor</li><li>Adminer</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section id="install" class="grid-bg">
+    <div class="wrap install">
+      <div>
+        <div class="section-head" style="margin-bottom:0">
+          <span class="eyebrow">Install</span>
+          <h2>From a fresh server to a working panel.</h2>
+          <p class="lead">Needs root, outbound HTTPS and <code>git</code>. The installer asks a few questions and never takes a password on the command line.</p>
+        </div>
+        <div class="steps">
+          <div class="step"><b>1</b><p><strong>Run the installer</strong> on Ubuntu, Debian, AlmaLinux or Rocky Linux.</p></div>
+          <div class="step"><b>2</b><p><strong>Choose access</strong> — an SSH tunnel by default, or HTTPS on your own panel domain.</p></div>
+          <div class="step"><b>3</b><p><strong>Add a site</strong> from the dashboard or with <code>azerioid vhost add</code>.</p></div>
+        </div>
+      </div>
+      <div class="term">
+        <div class="term-head"><span>root@server</span><button class="copy" type="button" data-copy="install-cmd">Copy</button></div>
+<pre id="install-cmd"><span class="p">$ </span>git clone https://github.com/azerioid/azerioid-stack-manager.git stack-manager
+<span class="p">$ </span>cd stack-manager
+<span class="p">$ </span>sudo ./stack-manager.sh
+<span class="c"># then, over a tunnel:</span>
+<span class="p">$ </span>ssh -L 3169:127.0.0.1:3169 you@your-server
+<span class="c"># open http://127.0.0.1:3169/setup</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- OS -->
+  <section id="systems">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Supported systems</span>
+        <h2>Verified end to end — SELinux left on.</h2>
+      </div>
+      <div class="table-scroll">
+        <table class="os">
+          <thead><tr><th>System</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Ubuntu 24.04</td><td><span class="ok-badge">supported</span></td><td>Verified</td></tr>
+            <tr><td>Debian 12 / 13</td><td><span class="ok-badge">supported</span></td><td>Verified</td></tr>
+            <tr><td>AlmaLinux 9+</td><td><span class="ok-badge">supported</span></td><td>SELinux enforcing</td></tr>
+            <tr><td>Rocky Linux 9+</td><td><span class="ok-badge">supported</span></td><td>SELinux enforcing</td></tr>
+            <tr><td>CentOS Stream · RHEL · Oracle 9+</td><td><span class="ok-badge">supported</span></td><td>Same EL path</td></tr>
+            <tr><td>Fedora</td><td><span class="no-badge">not supported</span></td><td>The installer refuses it</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- FREE -->
+  <section id="free">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Price</span>
+        <h2>No license, no per-account fee.</h2>
+        <p class="lead">Classic control panels charge per server and per account. This one costs what your server costs.</p>
+      </div>
+      <div class="free">
+        <div class="card"><span class="big">$0</span><h3>Per server, per month</h3><p>Install it on as many servers as you run.</p></div>
+        <div class="card"><span class="big">∞</span><h3>Sites and databases</h3><p>Limited by your hardware, not by a tier.</p></div>
+        <div class="card"><span class="big">1</span><h3>Command to update</h3><p><code>azerioid panel update apply</code> — and an automatic rollback if it fails.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LIMITS + FAQ -->
+  <section id="faq">
+    <div class="wrap two">
+      <div>
+        <div class="section-head">
+          <span class="eyebrow">Honest limits</span>
+          <h2>What it does not do (yet).</h2>
+        </div>
+        <ul class="limits">
+          <li>One administrator — no multi-user roles.</li>
+          <li>Mail has no webmail, spam filter, quotas or catch-all addresses.</li>
+          <li>Deliverability still needs reverse DNS, which you set at your provider.</li>
+          <li>Octane is for Laravel apps, PM2 for Node apps.</li>
+          <li>One server per panel — no cluster management.</li>
+          <li>Each Docker site runs its own daemon: budget about 100–170 MB of RAM per Docker site.</li>
+        </ul>
+      </div>
+      <div>
+        <div class="section-head">
+          <span class="eyebrow">FAQ</span>
+          <h2>Questions.</h2>
+        </div>
+        <details><summary>Does the panel run as root?</summary><p>No. The web panel runs as its own unprivileged account. Anything that changes the host goes through a separate broker that only accepts a fixed list of actions and checks every input again.</p></details>
+        <details><summary>Can I keep using the command line?</summary><p>Yes. The <code>azerioid</code> CLI covers the same operations as the dashboard and goes through the same broker, so both show up in one audit log.</p></details>
+        <details><summary>How much memory does it need?</summary><p>The panel itself runs comfortably on a 1 GB server. Components you add (databases, Docker, Elasticsearch) need their own memory; Elasticsearch asks for 2 GB of physical RAM.</p></details>
+        <details><summary>What happens to my existing sites when I update?</summary><p>Security changes migrate sites one at a time, check each site over HTTP before and after, and put a site back the way it was if it stops answering — then tell you which one and why.</p></details>
+        <details><summary>Is my panel exposed to the internet?</summary><p>Not by default: it listens on 127.0.0.1 and you reach it through an SSH tunnel. You can bind it to your own domain over HTTPS, with optional TOTP, fail2ban and an IP allowlist.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="final grid-bg">
+    <div class="wrap">
+      <span class="eyebrow">Get started</span>
+      <h2>Your server. Your stack. Every site in its own box.</h2>
+      <div class="cta">
+        <a class="btn btn-gold" href="#install">Install now</a>
+        <a class="btn btn-ghost" href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">Star on GitHub</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© <span id="year">2026</span> AZERIOID Stack Manager</span>
+    <nav aria-label="Footer">
+      <a href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">GitHub</a>
+      <a href="https://github.com/azerioid/azerioid-stack-manager/releases" rel="noopener">Releases</a>
+      <a href="https://github.com/azerioid/azerioid-stack-manager/blob/main/docs/DECISIONS.md" rel="noopener">Design decisions</a>
+      <a href="https://github.com/azerioid/azerioid-stack-manager/issues" rel="noopener">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var captions = {
+      t1: 'Install and remove stack components from a registry of official packages — the panel never runs a package manager itself.',
+      t2: 'Files and editor for one site, working as that site’s own account — path traversal and symlink escapes are refused.',
+      t3: 'Mail health, outbound delivery check and relay settings. The relay password is stored root-only and never shown again.',
+      t4: 'SSH log audit, firewall rules and fail2ban jails in one place.'
+    };
+    var tabs = document.querySelectorAll('.tab');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (t) {
+          var on = t === tab;
+          t.setAttribute('aria-selected', on ? 'true' : 'false');
+          document.getElementById(t.getAttribute('aria-controls')).classList.toggle('on', on);
+        });
+        document.getElementById('shot-caption').textContent = captions[tab.id];
+      });
+    });
+    document.querySelectorAll('.copy').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var text = document.getElementById(btn.dataset.copy).innerText
+          .split('\n').filter(function (l) { return l.indexOf('$ ') === 0; })
+          .map(function (l) { return l.slice(2); }).join('\n');
+        var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+        if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done, function () {}); }
+      });
+    });
+    document.getElementById('year').textContent = new Date().getFullYear();
+  })();
+</script>
+</body>
+</html>
