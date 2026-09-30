@@ -237,6 +237,24 @@ final class DefaultSiteTest extends TestCase
         $this->assertArrayNotHasKey($this->cfg->caddyConfD . '/' . DefaultSite::SNIPPET, $this->rt->files);
     }
 
+    /**
+     * A46-E2: default_sni covers only a ClientHello with no SNI (a bare IP). A browser always
+     * sends one, and for an unknown name only fallback_sni hands out the certificate.
+     */
+    public function test_both_sni_options_are_set_and_both_removed(): void
+    {
+        $this->site()->apply(DefaultSite::MODE_PAGE);
+        $caddyfile = $this->rt->files[$this->cfg->caddyfile];
+
+        $this->assertMatchesRegularExpression('/^\s*default_sni ' . preg_quote(DefaultSite::SNI_HOST, '/') . '$/m', $caddyfile);
+        $this->assertMatchesRegularExpression('/^\s*fallback_sni ' . preg_quote(DefaultSite::SNI_HOST, '/') . '$/m', $caddyfile);
+
+        $this->site()->disable();
+        $caddyfile = $this->rt->files[$this->cfg->caddyfile];
+        $this->assertStringNotContainsString('default_sni', $caddyfile);
+        $this->assertStringNotContainsString('fallback_sni', $caddyfile);
+    }
+
     public function test_clear_is_a_noop_when_not_enabled(): void
     {
         $result = $this->site()->disable();

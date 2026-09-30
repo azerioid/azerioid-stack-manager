@@ -1500,3 +1500,25 @@ enabled it keeps the old page until `azerioid panel default-site set --mode=page
 custom page (`--html`) is never replaced. Welcome pages already seeded into sites are the sites' files and
 are not touched.
 
+### A46-E2 — Erratum: the HTTPS catch-all still failed for every real hostname
+
+**What was claimed (A46-E1, v1.8.1):** that the global `default_sni` hands the default site's internal
+certificate "to any unknown SNI", so a hostname no vhost claims completes the TLS handshake.
+
+**What was true:** Caddy uses `default_sni` only when the ClientHello carries **no SNI at all** — a client
+connecting to a bare IP address. A browser always sends the name it asked for, and for a name without a
+certificate Caddy aborts the handshake (`tlsv1 alert internal error`; Chrome: `ERR_SSL_PROTOCOL_ERROR`). So
+every real unknown hostname still failed, from v1.8.1 to v2.8.1. Found on 2026-09-30 when
+`www.azerioid.dev` was pointed at the Ubuntu host before any vhost claimed it.
+
+**Why the check did not see it:** `verify-release.sh` requested `https://127.0.0.1/` with a `Host:` header —
+which sends no SNI, the one case `default_sni` does cover. The check tested the fix's own premise.
+
+**Fix (v2.8.2):** the managed global block sets both `default_sni` (no SNI) and `fallback_sni` (an SNI no
+certificate matches) to the `.invalid` provisioning name. Proven on the host before the release: an unknown
+name went from a failed handshake to the default page. `verify-release.sh` now connects with a real SNI
+(`--resolve nonexistent.invalid:443:127.0.0.1`), and a unit test requires both options. A host that already
+enabled the default site gets the fix when `azerioid panel default-site set --mode=page` runs again.
+
+**Lesson, again:** a check must reproduce the failing client, not a convenient stand-in for it.
+
