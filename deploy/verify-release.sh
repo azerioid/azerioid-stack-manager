@@ -390,8 +390,11 @@ echo "=== spot-check: default site (real TLS handshake, not config shape) ==="
 # `caddy adapt` accepted all of them. Only a real request distinguishes them.
 DS_OUT="$("${PREFIX}/broker" panel.default-site.show </dev/null 2>&1)" || true
 if printf '%s' "${DS_OUT}" | grep -q '"enabled":true'; then
-    DS_CODE="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' -H 'Host: nonexistent.invalid' https://127.0.0.1/ 2>/dev/null || echo 000)"
-    DS_BODY="$(curl -sk -m 8 -H 'Host: nonexistent.invalid' https://127.0.0.1/ 2>/dev/null | grep -c 'not configured on this server' || true)"
+    # With a real SNI, as a browser sends it (A46-E2): requesting https://127.0.0.1/ sends no SNI
+    # at all, and that is the one case default_sni alone covered, so this check used to pass
+    # while every unknown hostname failed its handshake.
+    DS_CODE="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' --resolve nonexistent.invalid:443:127.0.0.1 https://nonexistent.invalid/ 2>/dev/null || echo 000)"
+    DS_BODY="$(curl -sk -m 8 --resolve nonexistent.invalid:443:127.0.0.1 https://nonexistent.invalid/ 2>/dev/null | grep -c 'not configured on this server' || true)"
     echo "DEFAULT_SITE_443_CODE=${DS_CODE}"
     # 000 means the handshake itself failed — the original defect. A 200 with no body means
     # the handshake succeeded but nothing routed, which was the second defect.

@@ -210,12 +210,16 @@ final class DefaultSite
             );
         }
 
+        // Two options, because they cover two different clients (A46-E2). default_sni is used
+        // only when the ClientHello carries no SNI at all (a bare IP address); a browser always
+        // sends one, and for a name no vhost has a certificate for, only fallback_sni applies.
         $block = [
             "\t" . self::GLOBAL_BEGIN,
             "\t# Hands one static internal certificate to any SNI no vhost claims, so the",
             "\t# handshake completes and the default site can answer. Removed by",
             "\t# `azerioid panel default-site disable`.",
             "\tdefault_sni " . self::SNI_HOST,
+            "\tfallback_sni " . self::SNI_HOST,
             "\t" . self::GLOBAL_END,
         ];
         array_splice($lines, $insertAt, 0, $block);
