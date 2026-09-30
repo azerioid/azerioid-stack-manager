@@ -316,7 +316,8 @@ CADDY;
     /**
      * Neutral wording on purpose. A bare 404 tells an attacker less, but tells the
      * operator who just mis-pointed DNS nothing at all — and that is who actually
-     * lands here. It names no software, version or hostname.
+     * lands here. It names no version or hostname; since v2.8.1 it carries the product's
+     * name and links (operator decision, A46 addendum) — the version stays out.
      */
     public static function defaultHtml(): string
     {
@@ -344,6 +345,12 @@ CADDY;
     }
     h1 { font-size: 1.2rem; font-weight: 600; margin: 0 0 0.75rem; color: #fafafa; }
     p { margin: 0.5rem 0; line-height: 1.6; color: #a1a1aa; font-size: 0.95rem; }
+    footer {
+      margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.8rem; color: #71717a;
+    }
+    footer a { color: #c9a227; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -351,6 +358,7 @@ CADDY;
     <h1>This domain is not configured on this server.</h1>
     <p>The request reached the server, but no site is set up for the hostname you used.</p>
     <p>If you own this domain, check that its DNS points here and that a matching site exists.</p>
+    <footer>Served by AZERIOID Stack Manager · <a href="https://azerioid.dev" rel="noopener">azerioid.dev</a> · <a href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">GitHub</a></footer>
   </main>
 </body>
 </html>

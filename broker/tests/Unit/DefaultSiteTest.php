@@ -178,14 +178,20 @@ final class DefaultSiteTest extends TestCase
     }
 
     /** Neutral wording: it must not advertise the software or a hostname. */
-    public function test_default_page_names_no_software_or_host(): void
+    public function test_default_page_names_the_product_but_no_version_stack_or_host(): void
     {
         $html = DefaultSite::defaultHtml();
 
         $this->assertStringContainsString('not configured on this server', $html);
-        foreach (['AZERIOID', 'Caddy', 'nginx', 'Apache', 'PHP', '1.7.0'] as $leak) {
+        // Operator decision (A46 addendum): the product and its links, never what would help
+        // an attacker pick an advisory — the version, the web server, the PHP version.
+        $this->assertStringContainsString('https://azerioid.dev', $html);
+        $this->assertStringContainsString('https://github.com/azerioid/azerioid-stack-manager', $html);
+        $version = trim((string) file_get_contents(__DIR__ . '/../../../VERSION'));
+        foreach (['Caddy', 'nginx', 'Apache', 'PHP', $version, 'v' . $version] as $leak) {
             $this->assertStringNotContainsString($leak, $html, "must not disclose {$leak}");
         }
+        $this->assertDoesNotMatchRegularExpression('/\bv?\d+\.\d+\.\d+\b/', $html, 'no version number of any kind');
     }
 
     public function test_custom_html_is_used_when_supplied(): void

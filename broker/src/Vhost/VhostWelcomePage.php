@@ -100,6 +100,12 @@ PHP;
       background: rgba(201, 162, 39, 0.08); padding: 0.1em 0.35em; border-radius: 0.25rem;
     }
     .meta { margin-top: 1.25rem; font-size: 0.9rem; color: #71717a; }
+    footer {
+      margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.8rem; color: #71717a;
+    }
+    footer a { color: #c9a227; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -108,7 +114,8 @@ PHP;
     <h1>This site is set up and ready.</h1>
     <p><code>{$safeDomain}</code> is live. Upload your site files to replace this page.</p>
     <p>Document root: <code>{$safeRoot}</code></p>
-{$phpLine}  </main>
+{$phpLine}    <footer>Hosted with AZERIOID Stack Manager · <a href="https://azerioid.dev" rel="noopener">azerioid.dev</a> · <a href="https://github.com/azerioid/azerioid-stack-manager" rel="noopener">GitHub</a></footer>
+  </main>
 </body>
 </html>
 HTML;

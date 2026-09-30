@@ -20,6 +20,15 @@ class AuthTest extends TestCase
         $this->get('/setup')->assertOk()->assertSee('127.0.0.1:3169', false);
     }
 
+    public function test_sign_in_pages_link_the_product_but_show_no_version(): void
+    {
+        $page = $this->get('/setup')->assertOk();
+
+        $page->assertSee('https://azerioid.dev', false);
+        $page->assertSee('https://github.com/azerioid/azerioid-stack-manager', false);
+        $page->assertDontSee(trim((string) file_get_contents(base_path('../VERSION'))), false);
+    }
+
     public function test_login_is_a_post_mutation_via_livewire(): void
     {
         $this->get('/login')->assertRedirect('/setup');

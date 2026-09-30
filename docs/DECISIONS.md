@@ -1476,3 +1476,27 @@ it, managed or not. The marker records the removal's version (2); a host whose m
 removal again automatically. `verify-release.sh` now also checks that no running process of the account
 holds a site group.
 
+## A57 — The product's name and links on the sign-in, default and welcome pages
+
+**Status:** Accepted (operator decision 2026-09-30), shipped in **v2.8.1**. **Revises:** A46's "names no
+software" for the default site page.
+
+**Decision.** The pages a visitor can see without signing in carry the product's name and two links —
+`https://azerioid.dev` and the GitHub repository:
+
+| Page | What it shows |
+|------|---------------|
+| Sign-in, setup and 2FA pages (`layouts/guest`) | the links under the form |
+| Default site for unmatched hostnames (A46) | "Served by AZERIOID Stack Manager · azerioid.dev · GitHub" |
+| A new site's welcome page | "Hosted with AZERIOID Stack Manager · azerioid.dev · GitHub" |
+
+**What stays out: the version.** The name tells a scanner which product answers; the version would tell
+it which advisories apply, and that is the part worth withholding. No page shows the panel's version,
+the web server or the PHP version (the welcome page's live PHP line is the site's own, and the operator's
+to remove with the page). Tests enforce this for the default page and the sign-in page.
+
+**Existing hosts.** The default page is written when the feature is applied, so a host that already
+enabled it keeps the old page until `azerioid panel default-site set --mode=page` is run again. A
+custom page (`--html`) is never replaced. Welcome pages already seeded into sites are the sites' files and
+are not touched.
+

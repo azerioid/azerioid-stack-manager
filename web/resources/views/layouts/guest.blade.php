@@ -35,6 +35,12 @@
             Bind: {{ $bindHost }}@if ($bindPort):{{ $bindPort }}@endif
             · {{ $isPublic ? 'public HTTPS (accept the certificate warning once)' : 'access via SSH tunnel' }}
         </p>
+        {{-- Product links, no version: the version would tell a visitor which advisories apply. --}}
+        <p class="mt-3 text-center text-[12px] text-zinc-500">
+            <a href="https://azerioid.dev" target="_blank" rel="noopener" class="text-zinc-400 hover:text-brass-400">azerioid.dev</a>
+            <span class="text-zinc-700">·</span>
+            <a href="https://github.com/azerioid/azerioid-stack-manager" target="_blank" rel="noopener" class="text-zinc-400 hover:text-brass-400">GitHub</a>
+        </p>
     </div>
     @livewireScripts
 </body>
