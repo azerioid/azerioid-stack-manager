@@ -396,11 +396,16 @@ final class VhostBundle
             $site = (string) ($part['site'] ?? basename((string) $manifest['top']));
             $results['files'] = $restore->handle('backup.restore.files', [], $common + [
                 'key' => $part['key'], 'site' => $site, 'apply' => true, 'force' => true, 'confirm' => strtoupper($site),
+                'expected_sha256' => self::requirePartSha($part),
             ], $this->runtime, $this->config);
         }
         if (in_array('config', $wanted, true)) {
             $part = $this->partOf($manifest, 'config');
             $plain = ArchiveCipher::decryptBlob($client !== null ? $client->get($part['key']) : $this->runtime->readFile($part['key']), $passphrase);
+            // A74: bind the decrypted config to the authenticated manifest's checksum.
+            if (!hash_equals(self::requirePartSha($part), hash('sha256', $plain))) {
+                throw new BrokerException('Bundle config part does not match its manifest checksum; refusing to restore a substituted part.', 2);
+            }
             $results['config'] = $this->restoreConfig($domain, (string) $manifest['root'], $plain);
         } elseif (isset($results['files'])) {
             VhostUser::ensure($this->runtime, $this->config, $domain, (string) $manifest['root']);
@@ -413,6 +418,7 @@ final class VhostBundle
                 'key' => $part['key'], 'target' => $part['database'], 'engine' => $part['engine'],
                 'overwrite' => (string) ($input['db_confirm'] ?? '') === 'OVERWRITE',
                 'confirm' => (string) ($input['db_confirm'] ?? ''),
+                'expected_sha256' => self::requirePartSha($part),
             ], $this->runtime, $this->config);
         }
 
@@ -614,6 +620,26 @@ final class VhostBundle
         }
 
         throw new BrokerException("Part {$name} is not in this bundle.", 2);
+    }
+
+    /**
+     * A74: the authenticated manifest records a sha256 per part; a restore must
+     * have one to detect a substituted blob. Fail closed if it is absent or
+     * malformed.
+     *
+     * @param  array<string,mixed>  $part
+     */
+    private static function requirePartSha(array $part): string
+    {
+        $sha = strtolower(trim((string) ($part['sha256'] ?? '')));
+        if (preg_match('/^[a-f0-9]{64}$/', $sha) !== 1) {
+            throw new BrokerException(
+                'Bundle manifest part "' . (string) ($part['part'] ?? '?') . '" has no valid sha256 checksum; refusing to restore.',
+                2
+            );
+        }
+
+        return $sha;
     }
 
     private function partKey(string $destination, string $domain, string $stamp, string $part): string

@@ -1997,3 +1997,23 @@ could not read them, and printed `WARNING:root:could not open file … Permissio
 Terminal session on an unknown command. These files hold only a public repo URL (no secret) and are
 conventionally `0644`. **Fix (v2.8.29):** `repos.sh` now `chmod 0644` each list explicitly, independent of the
 ambient umask. Existing fleet hosts were remediated in place with the same `chmod`.
+
+## A74 — Vhost bundle restore verifies each part against the manifest checksum
+
+A58 deferred lead. A vhost backup bundle is an authenticated `manifest.lacmp2.bin` (parts list with a plaintext
+`sha256` per part, plus domain/identity) and independently LACMP2-encrypted parts (`files`, `config`,
+`db-*`). Restore checked the manifest's `domain` but **never verified a part's recorded sha256** before
+decrypting and applying it. Each part is AES-256-GCM, so tampering without the passphrase already fails — but
+the GCM AAD binds only the per-part header (its own random salt/nonce) and chunk index, **not the part's
+name, domain or stamp**. So a backup-storage writer (a lower-trust principal) could **substitute** one valid
+same-passphrase blob for another — an older `config`, or a different domain's `files` — and the restore
+accepted it, injecting that content (cross-context / cross-tenant) into the target. The manifest's per-part
+sha256 is the binding of which content belongs to a part; it just was not enforced.
+
+**Fix (v2.8.30).** `BackupRestore::handle` verifies the decrypted part against an `expected_sha256` when the
+caller supplies one (constant-time `hash_equals`), and `VhostBundle::restore` passes each part's manifest
+sha256 (`files`, `db-*`) and checks the inline-decrypted `config` the same way; `requirePartSha` fails closed
+if a bundle part lacks a valid 64-hex checksum. The manifest is itself AEAD-authenticated, so its sha256
+values are trustworthy. Direct single-archive `backup.restore.files/db` (no manifest) are unaffected — they
+rely on AEAD, there being no sibling parts to substitute. Regression tests: a swapped `config` and a swapped
+`files` part are both refused.
