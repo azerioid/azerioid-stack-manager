@@ -193,23 +193,38 @@ final class BackupEngineTest extends TestCase
         // not the superuser, so the subsequent restore cannot create
         // superuser-owned objects.
         $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $role = $engine->restoreRoleFor('freshdb');
+        $this->assertStringStartsWith('azerioid_rst_', $role);
         $engine->prepareTarget('freshdb');
 
         $createdb = null;
         $ensuredRole = false;
+        $revokedPublic = false;
         foreach ($this->rt->execLog as $e) {
             $cmd = $e['command'] ?? [];
+            $joined = implode(' ', $cmd);
             if (in_array('/usr/bin/createdb', $cmd, true)) {
                 $createdb = $cmd;
             }
-            if (str_contains(implode(' ', $cmd), 'CREATE ROLE') && str_contains(implode(' ', $cmd), PostgreSqlBackupEngine::RESTORE_ROLE)) {
+            if (str_contains($joined, 'CREATE ROLE') && str_contains($joined, $role)) {
                 $ensuredRole = true;
+            }
+            if (str_contains($joined, 'REVOKE ALL ON DATABASE') && str_contains($joined, 'FROM PUBLIC')) {
+                $revokedPublic = true;
             }
         }
         $this->assertNotNull($createdb, 'createdb must run for a new target');
         $this->assertContains('-O', $createdb);
-        $this->assertContains(PostgreSqlBackupEngine::RESTORE_ROLE, $createdb);
-        $this->assertTrue($ensuredRole, 'the unprivileged restore role must be ensured');
+        $this->assertContains($role, $createdb, 'the fresh DB must be owned by the per-target role');
+        $this->assertTrue($ensuredRole, 'the per-target unprivileged restore role must be ensured');
+        $this->assertTrue($revokedPublic, 'PUBLIC access to the fresh DB must be revoked');
+    }
+
+    public function test_postgres_restore_role_is_unique_per_target(): void
+    {
+        $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $this->assertNotSame($engine->restoreRoleFor('tenant_a'), $engine->restoreRoleFor('tenant_b'));
+        $this->assertSame($engine->restoreRoleFor('tenant_a'), $engine->restoreRoleFor('tenant_a'));
     }
 
     public function test_postgres_restore_runs_under_the_db_owner_role(): void
