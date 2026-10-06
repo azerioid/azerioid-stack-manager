@@ -86,6 +86,10 @@ final class Config
     public ?string $panelDomainTlsKey = null;
     public ?string $panelPublicIp = null;
     public int $terminalIdleSeconds = 1200;
+    // A70: ttyd now binds a per-session UNIX socket under this dir instead of a
+    // loopback TCP port, so only the web user (proxy) can reach it. The port
+    // range is kept for config back-compat but is no longer used.
+    public string $terminalSocketDir = '/run/azerioid-panel/terminal';
     public int $terminalPortMin = 35000;
     public int $terminalPortMax = 35999;
     /** Per-request file-manager payload cap (read/write/upload). Default 20 MiB. */
