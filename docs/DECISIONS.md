@@ -1851,9 +1851,12 @@ boundary (APP_KEY → forge panel sessions / decrypt panel data → escalate to 
 `.env` itself was already `0640` (caddy could not read it); the cache re-exposed the same secrets. Verified:
 `sudo -u caddy cat .../bootstrap/cache/config.php` succeeded on the fleet.
 
-**Fix (v2.8.18).** `PanelUpdater::rebuildCaches` calls `lockBootstrapCache()` after building the caches:
-`chmod -R o-rwx bootstrap/cache`, stripping all "other" access so only the panel user (owner) can read it
-(the directory is panel-owned and unreachable by any site identity, so this is not a site-controlled tree).
+**Fix (v2.8.18, refined v2.8.19).** `PanelUpdater::rebuildCaches` calls `lockBootstrapCache()` after building
+the caches: `chmod 0750 bootstrap/cache` (the directory only). caddy reaches `config.php` solely by traversing
+this directory, so denying its "other" execute bit blocks the read whatever mode the files carry — a single
+chmod on one known, panel-owned path rather than a recursive `chmod -R` dereferencing whatever symlinks a tree
+walk meets as root (v2.8.18 used `-R o-rwx`; not exploitable since only the panel user can write the cache,
+but the narrower op is the correct privileged pattern).
 `verify-release.sh` gains `CHECK_CADDY_CANNOT_READ_PANEL_CONFIG_CACHE`. **Self-update bootstrap gap (A60):**
 `rebuildCaches` runs under the in-process broker during `panel.update.apply`, so the update that *ships* A69
 still re-locks with the old (no-op) code; the fix takes effect on the next update. A host already carrying a
