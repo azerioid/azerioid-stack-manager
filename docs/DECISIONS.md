@@ -1619,3 +1619,36 @@ reaching the socket at all), but the Adminer tool directory lives under the pane
 code. Removing it requires relocating the tool directory out of the panel tree — a migration-sensitive
 change with fleet-outage risk — and is deferred to its own validated pass. The `/tmp` removal already closes
 the root-execution path; the group reach is a remaining defence-in-depth gap.
+
+## A60 — Panel FPM socket: web-user-owned, panel-user-grouped (completes A59)
+
+A background security review flagged A59 (dropping `/tmp` from the panel pool `open_basedir`) as an
+**incomplete** fix, and it was right. The real issue is reachability: the panel FPM socket was grouped to
+`caddy`, so any gid-`caddy` pool (the Adminer tool pool) could open it. A reachable PHP-FPM socket is code
+execution regardless of pool hardening — a malicious FastCGI client can send `PHP_ADMIN_VALUE` to override
+`open_basedir`/`disable_functions`/`auto_prepend_file` for its own request. So no pool-level lock closes it;
+only removing the reach does.
+
+**Why the socket was group-`caddy`.** After the A39 migration the panel worker runs as `azerioid-panel`,
+and `listen.owner` was set to `azerioid-panel` too, so Caddy could only reach the socket through the
+**group** (`caddy`). That group is shared by every web-tier pool.
+
+**Fix (v2.8.5).** Own the socket by the **web user** and group it to the **panel user**:
+`listen.owner = <web user (caddy)>`, `listen.group = azerioid-panel`, mode 0660. Caddy reaches the socket as
+its owner; nothing in the `caddy` group does. The worker still runs as `azerioid-panel`.
+
+- `PanelIdentityMigrator::writePool` sets this for fresh migrations; its verify now expects
+  `<web user>:azerioid-panel`.
+- `PanelUpdater` heals already-migrated hosts on self-update: when the pool worker is the panel user
+  (migrated) and differs from the web user, it rewrites `listen.owner`/`listen.group` and, because a
+  graceful reload does not re-create the listen socket, forces a full FPM **restart** so the new ownership
+  takes effect.
+- Fresh pre-migration installs keep `owner=caddy group=caddy` with a `caddy` worker — same principal, no
+  cross-pool escalation there.
+
+The A59 `/tmp` removal stays as defence in depth. Taking the Adminer pool out of the `caddy` group (so it
+cannot even see the socket) is still worthwhile but needs relocating its tool directory out of the
+panel-owned tree; deferred. With A60 the socket is unreachable by that pool regardless.
+
+**Validate before trusting on a host:** confirm Caddy still serves the panel (`verify-release.sh`
+`CHECK_PANEL_HTTP`) and that a gid-`caddy` process can no longer `connect()` the panel socket.

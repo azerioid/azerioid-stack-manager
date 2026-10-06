@@ -93,7 +93,8 @@ final class PanelIdentityMigratorTest extends TestCase
     private function scriptHealthyCutOver(string $httpCode = '200'): void
     {
         $this->rt->script(['/usr/bin/systemctl', 'is-active', M::UNIT . '.service'], 0, "active\n");
-        $this->rt->script(['/usr/bin/stat', '-c', '%U:%G', '/run/php/azerioid-panel.sock'], 0, M::USER . ":caddy\n");
+        // A60: socket is web-user-owned, panel-user-grouped (not group caddy).
+        $this->rt->script(['/usr/bin/stat', '-c', '%U:%G', '/run/php/azerioid-panel.sock'], 0, "caddy:" . M::USER . "\n");
         $this->rt->script(['/usr/sbin/runuser', '-u', M::USER, '--', '/usr/bin/sudo', '-n', self::BROKER, 'version.all'], 0, '{"ok":true,"data":{}}');
         $this->rt->script(
             ['/usr/bin/curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '10', 'http://127.0.0.1:3169/login'],
@@ -167,8 +168,10 @@ final class PanelIdentityMigratorTest extends TestCase
         $pool = $this->rt->files[M::POOL];
         $this->assertMatchesRegularExpression('/^user = azerioid-panel$/m', $pool);
         $this->assertMatchesRegularExpression('/^group = azerioid-panel$/m', $pool);
-        $this->assertMatchesRegularExpression('/^listen\.owner = azerioid-panel$/m', $pool);
-        $this->assertMatchesRegularExpression('/^listen\.group = caddy$/m', $pool);
+        // A60: socket owned by the web user, grouped to the panel user, so no
+        // other gid-caddy FPM pool can reach the root-equivalent panel socket.
+        $this->assertMatchesRegularExpression('/^listen\.owner = caddy$/m', $pool);
+        $this->assertMatchesRegularExpression('/^listen\.group = azerioid-panel$/m', $pool);
 
         // Own master, own php.ini, which still lets the panel spawn sudo.
         $unit = $this->rt->files[M::UNIT_FILE];

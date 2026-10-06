@@ -362,6 +362,29 @@ if id -u caddy >/dev/null 2>&1; then
         echo "CHECK_CADDY_CANNOT_READ_PANEL_ENV=pass"
     fi
 fi
+# A60: the panel FPM socket must not be owned by the panel worker user with a
+# web-tier group — that is the group-caddy model that let any gid-caddy pool
+# (Adminer) speak FastCGI to it and run code as the root-equivalent panel user.
+# After A60 the socket is owned by the web user and grouped to the panel user;
+# pre-migration it is the web user on both (same principal). Fail only the
+# vulnerable shape: owner == panel worker and group != panel worker.
+panel_sock=/run/php/azerioid-panel.sock
+if [[ -S "${panel_sock}" ]]; then
+    sock_owner="$(stat -c %U "${panel_sock}")"
+    sock_group="$(stat -c %G "${panel_sock}")"
+    panel_worker=""
+    for pf in /etc/azerioid-panel/php-fpm.d/azerioid-panel.conf /etc/php/*/fpm/pool.d/azerioid-panel.conf /etc/opt/remi/*/php-fpm.d/azerioid-panel.conf /etc/php-fpm.d/azerioid-panel.conf; do
+        [[ -f "${pf}" ]] || continue
+        panel_worker="$(sed -n 's/^user[[:space:]]*=[[:space:]]*//p' "${pf}" | head -1)"
+        [[ -n "${panel_worker}" ]] && break
+    done
+    echo "PANEL_SOCKET=${sock_owner}:${sock_group} worker=${panel_worker}"
+    if [[ -n "${panel_worker}" && "${sock_owner}" == "${panel_worker}" && "${sock_group}" != "${panel_worker}" ]]; then
+        echo "CHECK_PANEL_SOCKET_NOT_WEB_GROUP=fail"
+    else
+        echo "CHECK_PANEL_SOCKET_NOT_WEB_GROUP=pass"
+    fi
+fi
 # The distro php.ini carries the operator's own disable_functions again. Only
 # the FPM-only ini of Debian/Ubuntu: on EL/Remi the file also serves the CLI
 # (queue worker, scheduler), so the migrator deliberately leaves it alone.
