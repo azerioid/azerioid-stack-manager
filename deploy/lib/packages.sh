@@ -2,6 +2,33 @@
 # Bootstrap packages: Caddy, PHP 8.4 FPM, SQLite, composer deps.
 set -euo pipefail
 
+# A66: fetch the Composer installer to a temp file and verify its SHA-384
+# against the signature Composer publishes (on composer.github.io, a different
+# origin than getcomposer.org) before running it as root. Piping the installer
+# straight into PHP ran whatever bytes the fetch returned; a compromised origin,
+# active MITM, or redirecting resolver meant root code execution at install.
+install_composer_verified() {
+    local php_bin="$1"
+    local tmp expected actual
+    tmp="$(mktemp)"
+    # Signature first, from the separate composer.github.io origin.
+    expected="$(curl -fsSL https://composer.github.io/installer.sig | tr -d '[:space:]')"
+    if [[ ! "${expected}" =~ ^[a-f0-9]{96}$ ]]; then
+        rm -f "${tmp}"
+        echo "Composer installer signature could not be fetched or is malformed." >&2
+        exit 1
+    fi
+    curl -fsSL https://getcomposer.org/installer -o "${tmp}"
+    actual="$("${php_bin}" -r "echo hash_file('sha384', '${tmp}');")"
+    if [[ "${actual}" != "${expected}" ]]; then
+        rm -f "${tmp}"
+        echo "Composer installer checksum mismatch (expected ${expected}, got ${actual}); refusing to run it." >&2
+        exit 1
+    fi
+    "${php_bin}" "${tmp}" -- --install-dir=/usr/local/bin --filename=composer
+    rm -f "${tmp}"
+}
+
 bootstrap_packages() {
     echo "==> Installing bootstrap packages"
     case "${PKG_MGR}" in
@@ -28,8 +55,7 @@ bootstrap_packages() {
 
     if ! command -v composer >/dev/null 2>&1 && [[ ! -x /usr/local/bin/composer ]]; then
         echo "==> Installing Composer"
-        curl -fsSL https://getcomposer.org/installer \
-            | "$(php_bin)" -- --install-dir=/usr/local/bin --filename=composer
+        install_composer_verified "$(php_bin)"
         chmod 0755 /usr/local/bin/composer
         hash -r 2>/dev/null || true
     fi
