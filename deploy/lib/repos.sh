@@ -25,18 +25,31 @@ REMI_GPG_FPR="6B38FEA7231F87F52B9CA9D8555097595F11735A"   # Remi's RPM repositor
 # hash preimage), and subkeys without a valid binding signature are dropped on
 # import.
 extract_pinned_key() {
-    local src="$1" fingerprint="$2" dest="$3" gnupg rc=0
+    local src="$1" fingerprint="$2" dest="$3" gnupg rc=0 primaries
     gnupg="$(mktemp -d)"
     chmod 0700 "${gnupg}"
     if ! gpg --homedir "${gnupg}" --batch --quiet --import "${src}" 2>/dev/null; then
         rc=1
     elif ! gpg --homedir "${gnupg}" --batch --list-keys "${fingerprint}" >/dev/null 2>&1; then
         rc=1
-    elif ! gpg --homedir "${gnupg}" --batch --yes --export "${fingerprint}" > "${dest}" 2>/dev/null \
-            || [[ ! -s "${dest}" ]]; then
+    elif ! gpg --homedir "${gnupg}" --batch --yes --export-options export-minimal \
+            --export "${fingerprint}" > "${dest}" 2>/dev/null || [[ ! -s "${dest}" ]]; then
         rc=1
+    else
+        # A gpg key selector matches subkey fingerprints too, so export-by-pin
+        # does not by itself guarantee the exported *primary* is the pin (it
+        # would otherwise rest on SHA-1 preimage resistance). Assert it directly
+        # on the reconstructed keyring: exactly one primary (pub) key, equal to
+        # the pin. toupper both sides so case cannot hide a mismatch.
+        primaries="$(gpg --batch --with-colons --show-keys "${dest}" 2>/dev/null \
+            | awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print toupper($10);p=0} $1=="sub"{p=0}')"
+        if [[ "$(printf '%s\n' "${primaries}" | grep -c .)" != "1" \
+                || "${primaries}" != "${fingerprint^^}" ]]; then
+            rc=1
+        fi
     fi
     rm -rf "${gnupg}"
+    [[ ${rc} -eq 0 ]] || rm -f "${dest}"
     return ${rc}
 }
 
