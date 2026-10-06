@@ -229,6 +229,34 @@ final class AuditHardeningTest extends TestCase
         $this->assertTrue($locked, 'bootstrap/cache dir must be denied to the web user after config:cache');
     }
 
+    public function test_harden_content_sweeps_symlinks_and_tightens_env(): void
+    {
+        // A72: per-site hardening sweeps escaping symlinks (bounded by the site
+        // top) and forces .env to 0600 so caddy cannot read site secrets.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $config = new \AzerioidPanel\Broker\Config();
+        $config->wwwRoot = '/data/www';
+        $rt->dirs['/data/www/site'] = true;
+        \AzerioidPanel\Broker\Vhost\VhostUser::hardenContent($rt, $config, '/data/www/site/public');
+
+        $sweptSymlinks = false;
+        $tightenedEnv = false;
+        foreach ($rt->execLog as $e) {
+            $cmd = $e['command'];
+            // boundary is the site top, not the docroot (so storage links survive)
+            if ($cmd === ['/usr/bin/find', '/data/www/site', '-xdev', '-type', 'l']) {
+                $sweptSymlinks = true;
+            }
+            if ($cmd === ['/usr/bin/find', '/data/www/site', '-xdev', '-type', 'f', '-name', '.env',
+                '-exec', '/bin/chmod', '0600', '{}', '+']) {
+                $tightenedEnv = true;
+            }
+        }
+        $this->assertTrue($sweptSymlinks, 'must scan the site top for symlinks');
+        $this->assertTrue($tightenedEnv, 'must force .env to 0600 under the site top');
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

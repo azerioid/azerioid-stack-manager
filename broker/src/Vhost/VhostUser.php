@@ -101,6 +101,7 @@ final class VhostUser
         }
 
         self::applyOwnership($runtime, $root, $username, $group);
+        self::hardenContent($runtime, $config, $root);
         self::claimTop($runtime, $config, $domain, $root, $username, $group);
         self::reclaimCronLogs($runtime, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
@@ -150,6 +151,62 @@ final class VhostUser
         }
         unset($meta['users'][$domain]);
         self::save($runtime, $path, $meta);
+    }
+
+    /**
+     * A72: web-content hardening for a site, bounded by the site's top directory
+     * (wwwRoot/<first component>) so within-site symlinks — e.g. Laravel's
+     * public/storage → ../storage/app/public — are kept.
+     *
+     *  1. Quarantine symlinks whose resolved target escapes the site top. Caddy's
+     *     file_server follows symlinks and caddy is a member of every site group,
+     *     so an escaping symlink in one site's docroot would let caddy serve
+     *     another site's (or a system) file over HTTP. Caddy has no option to
+     *     refuse symlinks, so the link is moved out of the served tree.
+     *  2. Force .env files to 0600 so caddy (group) cannot read a site's secrets
+     *     even through a within-site path.
+     *
+     * Enforced whenever a site is (re)touched (provision, restore, deploy,
+     * terminal, SFTP). Best effort: a site can re-plant between touches and
+     * caddy still follows within-site symlinks — see ADR A72 for the ceiling.
+     */
+    public static function hardenContent(Runtime $runtime, Config $config, string $root): void
+    {
+        if ($runtime->getuid() !== 0) {
+            return;
+        }
+        $www = rtrim($config->wwwRoot, '/') . '/';
+        if (!str_starts_with($root, $www)) {
+            return;
+        }
+        $first = explode('/', substr($root, strlen($www)))[0];
+        if ($first === '') {
+            return;
+        }
+        $top = $www . $first;
+        if (!$runtime->isDir($top)) {
+            return;
+        }
+
+        $links = $runtime->exec(['/usr/bin/find', $top, '-xdev', '-type', 'l'], null, 60);
+        foreach (explode("\n", trim($links->stdout)) as $link) {
+            if ($link === '') {
+                continue;
+            }
+            $target = $runtime->realPath($link);
+            if ($target === $top || str_starts_with($target, $top . '/')) {
+                continue; // resolves within the site — legitimate (e.g. storage link)
+            }
+            // Escaping: move the symlink itself (not its target) out of the served tree.
+            $quarantine = '/var/lib/azerioid-panel/quarantine';
+            $runtime->mkdir($quarantine, 0700);
+            $runtime->exec(['/bin/mv', '-f', $link,
+                $quarantine . '/' . basename($link) . '.' . bin2hex(random_bytes(4))], null, 15);
+        }
+
+        // -type f excludes symlinks named .env, so chmod never follows one out.
+        $runtime->exec(['/usr/bin/find', $top, '-xdev', '-type', 'f', '-name', '.env',
+            '-exec', '/bin/chmod', '0600', '{}', '+'], null, 60);
     }
 
     public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group): void
