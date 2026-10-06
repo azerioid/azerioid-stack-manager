@@ -171,6 +171,37 @@ final class AuditHardeningTest extends TestCase
         $this->assertStringContainsString('no-plugins', $requireCmd);
     }
 
+    public function test_panel_self_update_composer_home_is_not_world_writable_tmp(): void
+    {
+        // A67: the panel self-update COMPOSER_HOME must not be a predictable
+        // /tmp path or the fixed world-writable /tmp — either lets a local user
+        // plant a config.json/auth.json composer reads as the web user.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $config = new \AzerioidPanel\Broker\Config();
+        $updater = new \AzerioidPanel\Broker\Panel\PanelUpdater($config, $rt);
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Panel\PanelUpdater::class, 'panelComposerHome');
+        $m->setAccessible(true);
+        $home = $m->invoke($updater, 'caddy');
+
+        $this->assertStringStartsWith('/var/lib/azerioid-panel-composer/', $home);
+        $this->assertStringNotContainsString('/tmp', $home);
+        // Base is reset to root:root 0711 so no other local user can pre-stage
+        // the random child.
+        $baseRootOwned = false;
+        $homeToWeb = false;
+        foreach ($rt->execLog as $e) {
+            if ($e['command'] === ['/usr/bin/chown', 'root:root', '/var/lib/azerioid-panel-composer']) {
+                $baseRootOwned = true;
+            }
+            if ($e['command'] === ['/usr/bin/chown', '-h', 'caddy:caddy', $home]) {
+                $homeToWeb = true;
+            }
+        }
+        $this->assertTrue($baseRootOwned, 'composer base must be reset to root:root');
+        $this->assertTrue($homeToWeb, 'the per-run home must be handed to the web user');
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

@@ -1780,3 +1780,18 @@ bytes a network fetch returned:
 The `|| true` removal makes a previously-silent EL failure loud; this is the intended fail-closed posture and
 is exercised on the disposable EL host before release. The PanelUpdater self-update Composer `/tmp` variant
 (A65 note) remains tracked separately.
+
+## A67 — Panel self-update Composer home off world-writable /tmp
+
+A58 deferred lead (self-update variant of the A65 Composer finding). `PanelUpdater::deployFileSync` ran
+`composer install` with `COMPOSER_HOME=/tmp/azerioid-composer-<pid>` (predictable, pre-creatable in the
+world-writable sticky `/tmp`) and `composer dump-autoload` with a **fixed** `COMPOSER_HOME=/tmp`. A local user
+could seed `/tmp/config.json` / `/tmp/auth.json` (or pre-create the pid dir) that Composer reads while running
+as the **web user** during `panel.update.apply` — high blast radius (A39). `--no-plugins` was not set.
+
+**Fix (v2.8.14).** `panelComposerHome()` creates a fresh, unguessable (`random_bytes`) home under a root-owned
+0711 base (`/var/lib/azerioid-panel-composer`) — others can traverse but not create entries, so the target
+cannot be pre-staged — hands only that per-run dir to the web user (`chown -h`), and both Composer calls now
+pass `--no-plugins`. Mirrors `OctaneManager` (A65). Note the self-update bootstrap gap (A60): this runs under
+the in-process broker code during an update, so it takes effect on the release *after* the one that ships it;
+the installed code heals on the subsequent update.

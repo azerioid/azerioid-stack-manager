@@ -716,10 +716,7 @@ final class PanelUpdater
         $php = $this->phpBin();
         $composer = $this->composerBin();
         $log->info('composer install --no-dev --optimize-autoloader');
-        $composerHome = '/tmp/azerioid-composer-' . getmypid();
-        $this->runtime->mkdir($composerHome, 0750);
-        $this->runtime->chown($composerHome, $webUser, $webUser);
-
+        $composerHome = $this->panelComposerHome($webUser);
         $composerCmd = $this->runAsWeb([
             '/usr/bin/env',
             'COMPOSER_HOME=' . $composerHome,
@@ -730,6 +727,7 @@ final class PanelUpdater
             '--optimize-autoloader',
             '--no-interaction',
             '--no-scripts',
+            '--no-plugins',
         ], $prefix . '/web', 600);
         $this->runtime->exec(['/bin/rm', '-rf', $composerHome], null, 30);
         if (!$composerCmd->ok()) {
@@ -747,21 +745,47 @@ final class PanelUpdater
             $this->runAsWeb([$php, 'artisan', 'package:discover', '--ansi', '--no-interaction'], $prefix . '/web', 120),
             'artisan package:discover'
         );
+        $dumpHome = $this->panelComposerHome($webUser);
         $dump = $this->runAsWeb([
             '/usr/bin/env',
-            'COMPOSER_HOME=/tmp',
+            'COMPOSER_HOME=' . $dumpHome,
             $php,
             $composer,
             'dump-autoload',
             '-o',
             '--no-interaction',
             '--no-scripts',
+            '--no-plugins',
         ], $prefix . '/web', 180);
+        $this->runtime->exec(['/bin/rm', '-rf', $dumpHome], null, 30);
         if (!$dump->ok()) {
             $log->warn('composer dump-autoload warned: ' . $this->execDetail($dump));
         }
 
         $log->info('Deploy file sync + composer complete.');
+    }
+
+    /**
+     * A67: a COMPOSER_HOME the web user can write but no other local user can
+     * pre-stage. A root-owned 0711 base lets others traverse but not create
+     * entries, so the random child cannot be planted ahead of us. Mirrors
+     * OctaneManager (A65). Replaces COMPOSER_HOME=/tmp/azerioid-composer-<pid>
+     * (predictable, pre-creatable) and the fixed world-writable COMPOSER_HOME=/tmp,
+     * either of which a local user could seed with a config.json/auth.json that
+     * composer reads while running as the web user during self-update.
+     */
+    private function panelComposerHome(string $webUser): string
+    {
+        $base = '/var/lib/azerioid-panel-composer';
+        if (!$this->runtime->isDir($base)) {
+            $this->runtime->mkdir($base, 0711);
+        }
+        $this->runtime->exec(['/usr/bin/chown', 'root:root', $base], null, 15);
+        $this->runtime->chmod($base, 0711);
+        $home = $base . '/' . bin2hex(random_bytes(8));
+        $this->runtime->mkdir($home, 0700);
+        $this->runtime->exec(['/usr/bin/chown', '-h', $webUser . ':' . $webUser, $home], null, 15);
+        return $home;
     }
 
     private function runMigrations(string $prefix, OperationLogger $log): string
