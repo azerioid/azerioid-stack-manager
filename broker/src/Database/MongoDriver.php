@@ -36,7 +36,7 @@ final class MongoDriver implements DatabaseDriver
             throw new BrokerException('MongoDB is not configured in broker.json.', 3);
         }
         $eval = 'JSON.stringify(db.adminCommand({listDatabases:1}))';
-        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 30);
+        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 30, $this->mongoshEnv());
         if (!$result->ok()) {
             throw new BrokerException(
                 trim($result->stderr) !== '' ? $this->redact(trim($result->stderr)) : 'mongosh listDatabases failed.',
@@ -178,7 +178,7 @@ final class MongoDriver implements DatabaseDriver
                 . '});'
                 . 'print(JSON.stringify({users: users}));'
                 . '})()';
-            $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($js), 30);
+            $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($js), 30, $this->mongoshEnv());
             if (!$result->ok()) {
                 return [];
             }
@@ -207,7 +207,7 @@ final class MongoDriver implements DatabaseDriver
 
     private function mongoshMutate(string $eval, string $what): void
     {
-        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 60);
+        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 60, $this->mongoshEnv());
         $this->requireMongoshOk($result, $what);
     }
 
@@ -250,7 +250,11 @@ final class MongoDriver implements DatabaseDriver
      */
     private function mongoshArgv(): array
     {
-        return ['/usr/bin/mongosh', '--quiet'];
+        // --file /dev/stdin runs the piped script as a single program, so an
+        // uncaught throw (e.g. a failed auth guard) aborts before the operation
+        // — unlike bare piped stdin, which mongosh runs as a REPL statement by
+        // statement and would attempt the operation even after the guard threw.
+        return ['/usr/bin/mongosh', '--quiet', '--file', '/dev/stdin'];
     }
 
     /**
@@ -268,10 +272,20 @@ final class MongoDriver implements DatabaseDriver
 
     private function mongoshScript(string $eval): string
     {
-        $user = json_encode($this->config->mongodbUser, JSON_THROW_ON_ERROR);
-        $pass = json_encode($this->config->mongodbPassword, JSON_THROW_ON_ERROR);
-        return 'if (!db.getSiblingDB("admin").auth(' . $user . ', ' . $pass . ')) {'
+        // Credentials are read from the environment (see mongoshEnv), never
+        // embedded as literals — so the script text mongosh might echo on an
+        // error carries no secret to redact.
+        return 'if (!db.getSiblingDB("admin").auth(process.env.AZ_MONGO_USER, process.env.AZ_MONGO_PW)) {'
             . ' throw new Error("MongoDB authentication failed"); }' . "\n" . $eval;
+    }
+
+    /** @return array<string,string> */
+    private function mongoshEnv(): array
+    {
+        return [
+            'AZ_MONGO_USER' => $this->config->mongodbUser,
+            'AZ_MONGO_PW' => $this->config->mongodbPassword,
+        ];
     }
 
     /** @return array<string, mixed> */

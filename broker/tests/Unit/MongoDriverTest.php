@@ -80,7 +80,7 @@ final class MongoDriverTest extends TestCase
         $driver = new MongoDriver($this->config(), $runtime);
         $pass = $this->config()->mongodbPassword;
         $runtime->script(
-            ['/usr/bin/mongosh', '--quiet'],
+            ['/usr/bin/mongosh', '--quiet', '--file', '/dev/stdin'],
             1,
             '',
             'SyntaxError near .auth("azerioid_panel_admin", "' . $pass . '")'
@@ -105,7 +105,10 @@ final class MongoDriverTest extends TestCase
     {
         $cfg = new Config();
         $cfg->mongodbUser = 'azerioid_panel_admin';
-        $cfg->mongodbPassword = 'abcdefghijklmnopqrst';
+        // Distinct from the tenant passwords used in the operations below, so the
+        // "admin password must not be a literal in the script" check is meaningful
+        // (tenant passwords legitimately appear in the stdin operation script).
+        $cfg->mongodbPassword = 'adminSecret_do_not_leak_01';
 
         return $cfg;
     }
@@ -114,16 +117,21 @@ final class MongoDriverTest extends TestCase
     {
         $this->assertNotEmpty($rt->execLog);
         $entry = $rt->execLog[array_key_last($rt->execLog)];
-        // A68: the script and credentials travel on stdin, never argv.
-        $this->assertSame(['/usr/bin/mongosh', '--quiet'], $entry['command']);
+        $pass = $this->config()->mongodbPassword;
+        // A68: argv is fixed and secret-free; --file /dev/stdin runs the piped
+        // script as one program (fail-closed on a thrown auth guard).
+        $this->assertSame(['/usr/bin/mongosh', '--quiet', '--file', '/dev/stdin'], $entry['command']);
+        // The admin password is passed via the child environment, never argv
+        // (/proc/<pid>/cmdline, world-readable) nor the script text (which
+        // mongosh could echo on error).
         foreach ($entry['command'] as $arg) {
-            $this->assertStringNotContainsString(
-                $this->config()->mongodbPassword,
-                (string) $arg,
-                'the mongo password must never appear on argv (/proc/<pid>/cmdline)'
-            );
+            $this->assertStringNotContainsString($pass, (string) $arg);
         }
         $this->assertNotNull($entry['stdin']);
+        $this->assertStringNotContainsString($pass, (string) $entry['stdin'],
+            'the admin password must not be a literal in the mongosh script');
+        $this->assertStringContainsString('process.env.AZ_MONGO_PW', (string) $entry['stdin']);
+        $this->assertSame($pass, $entry['env']['AZ_MONGO_PW'] ?? null);
         $this->assertStringContainsString('.auth(', (string) $entry['stdin']);
 
         return (string) $entry['stdin'];

@@ -25,7 +25,7 @@ final class PosixRuntime implements Runtime
         return new self($socket, $user, $password);
     }
 
-    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30): ExecResult
+    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30, ?array $env = null): ExecResult
     {
         if ($command === []) {
             throw new BrokerException('Refusing to execute an empty command.', 1);
@@ -42,7 +42,16 @@ final class PosixRuntime implements Runtime
             2 => ['pipe', 'w'],
         ];
 
-        $proc = @proc_open($command, $descriptors, $pipes, null, self::childEnv(), [
+        // A68: extra env vars are merged into the hardened child env. Unlike argv
+        // (/proc/<pid>/cmdline, world-readable) a child's environment is only
+        // readable by the same user or root, so this is how a secret is passed.
+        $childEnv = self::childEnv();
+        if ($env !== null) {
+            foreach ($env as $k => $v) {
+                $childEnv[(string) $k] = (string) $v;
+            }
+        }
+        $proc = @proc_open($command, $descriptors, $pipes, null, $childEnv, [
             'bypass_shell' => true,
         ]);
         if (!is_resource($proc)) {
