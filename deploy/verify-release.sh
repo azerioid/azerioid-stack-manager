@@ -361,6 +361,15 @@ if id -u caddy >/dev/null 2>&1; then
     else
         echo "CHECK_CADDY_CANNOT_READ_PANEL_ENV=pass"
     fi
+    # A69: config:cache inlines APP_KEY + DB/mail secrets into this file; caddy
+    # can traverse the group-caddy web root to serve public/, so a 0644 cache
+    # would leak the panel's encryption key.
+    CFG="${PREFIX}/web/bootstrap/cache/config.php"
+    if [[ -f "${CFG}" ]] && runuser -u caddy -- test -r "${CFG}" 2>/dev/null; then
+        echo "CHECK_CADDY_CANNOT_READ_PANEL_CONFIG_CACHE=fail"
+    else
+        echo "CHECK_CADDY_CANNOT_READ_PANEL_CONFIG_CACHE=pass"
+    fi
 fi
 # A60: the panel FPM socket must not be owned by the panel worker user with a
 # web-tier group — that is the group-caddy model that let any gid-caddy pool
