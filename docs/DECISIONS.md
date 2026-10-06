@@ -1795,3 +1795,20 @@ cannot be pre-staged — hands only that per-run dir to the web user (`chown -h`
 pass `--no-plugins`. Mirrors `OctaneManager` (A65). Note the self-update bootstrap gap (A60): this runs under
 the in-process broker code during an update, so it takes effect on the release *after* the one that ships it;
 the installed code heals on the subsequent update.
+
+## A68 — MongoDB admin password off child-process argv
+
+A58 deferred lead (DB credentials on argv). `MongoDriver::mongoshArgv` ran `mongosh -u <user> -p <password>
+--eval <js>`, putting the MongoDB admin password on the child's command line — readable via
+`/proc/<pid>/cmdline` by any local user (a site identity, the web user) for the life of the call. MariaDB
+already used a `--defaults-extra-file` and PostgreSQL authenticates over the local socket, so Mongo was the
+remaining argv exposure.
+
+**Fix (v2.8.15).** `mongoshArgv()` is now just `mongosh --quiet`; the operation and credentials travel on
+**stdin** as a script that authenticates in-session
+(`if (!db.getSiblingDB("admin").auth(user, pass)) throw …`). Neither the password nor the operation appears
+in argv or on disk. Validated against a real MongoDB 7.0 on a disposable host: the piped-stdin script
+authenticates and runs (`listDatabases.ok = 1`), a wrong password throws `AuthenticationFailed` and runs
+nothing, and the password never reaches argv (unit test asserts the invocation is exactly
+`['/usr/bin/mongosh','--quiet']`). This is a broker action (fresh process), so it applies on the release that
+ships it — no self-update bootstrap gap.

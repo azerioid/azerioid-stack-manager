@@ -199,18 +199,11 @@ final class DbAccessTest extends TestCase
         $rt->files['/usr/sbin/ufw'] = '';
         $rt->script(['/usr/sbin/ufw', 'status'], 0, "Status: active\n");
         $rt->script(['/usr/bin/systemctl', 'restart', 'mongod'], 0, '');
-        $eval = 'JSON.stringify(db.adminCommand({listDatabases:1}))';
+        // A68: credentials + script on stdin, so the scripted command is just the
+        // mongosh invocation; FakeRuntime matches on argv.
         $rt->script([
             '/usr/bin/mongosh',
             '--quiet',
-            '-u',
-            'azerioid_panel_admin',
-            '-p',
-            'abcdefghijklmnopqrst',
-            '--authenticationDatabase',
-            'admin',
-            '--eval',
-            $eval,
         ], 0, json_encode([
             'databases' => [
                 ['name' => 'shop', 'sizeOnDisk' => 4096],
