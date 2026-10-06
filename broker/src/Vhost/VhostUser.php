@@ -199,14 +199,22 @@ final class VhostUser
             set -u
             top="$1"
             find "$top" -xdev -type l -print0 2>/dev/null | while IFS= read -r -d '' l; do
-                t=$(realpath -- "$l" 2>/dev/null || printf '%s' "$l")
-                case "$t" in
-                    "$top"|"$top"/*) : ;;
-                    *) rm -f -- "$l" ;;
-                esac
+                if t=$(realpath -e -- "$l" 2>/dev/null); then
+                    case "$t" in
+                        "$top"|"$top"/*) : ;;
+                        *) rm -f -- "$l" ;;
+                    esac
+                else
+                    rm -f -- "$l"
+                fi
             done
-            find "$top" -xdev -type f -name .env -print0 2>/dev/null | xargs -0 -r chmod 0600 --
+            find "$top" -xdev -type f -name .env -print0 2>/dev/null | xargs -0 -r chmod 0600 -- || true
+            exit 0
             SH;
+        // Best effort by design (ADR A72 accepted ceiling): this hardening runs
+        // on top of the isolation model, so a sweep hiccup must not fail the
+        // ensure it rides on (which would break Terminal/File Manager/restore).
+        // The within-site symlink decision is fail-closed (realpath -e above).
         $runtime->exec(
             [self::runuserBin($runtime), '-u', $username, '--', '/bin/bash', '-c', $script, 'azerioid-harden', $top],
             null,
