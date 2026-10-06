@@ -1861,3 +1861,23 @@ but the narrower op is the correct privileged pattern).
 `rebuildCaches` runs under the in-process broker during `panel.update.apply`, so the update that *ships* A69
 still re-locks with the old (no-op) code; the fix takes effect on the next update. A host already carrying a
 `0644` cache is remediated out of band (`chmod -R o-rwx bootstrap/cache`) until then.
+
+## A70 — Terminal ttyd on a per-session UNIX socket, not a loopback TCP port
+
+A58 deferred lead. `TerminalManager` spawned `ttyd -p <port> -i 127.0.0.1 -W … /bin/bash -l` as the session
+identity with **no credential**, fronted only by Caddy `forward_auth` (per-session `reverse_proxy
+127.0.0.1:{port}`). A loopback TCP port is reachable by **any** local process, and the port + session id are
+world-readable (argv / `systemctl`). So during an active terminal session another site identity (via its
+cron/program) or a gid-caddy process could connect straight to the ttyd port, bypass the panel auth, and get
+an interactive shell as the session identity — a cross-principal RCE within the session window.
+
+**Fix (v2.8.20).** ttyd now binds a **per-session UNIX socket** (`-i <dir>/ttyd.sock`, ttyd 1.7.7). The broker
+(root) pre-creates `/run/azerioid-panel/terminal/<id>` owned `<ttyd-user>:<web-user group>` mode **2750**
+(setgid): the unprivileged ttyd (owner) creates the socket, which **inherits the web group** via setgid and
+lands `0660`, so only the web user (the Caddy reverse proxy) and the shell owner can connect — every other
+local user and site identity is denied at the `2750` directory. The Caddy snippet proxies `unix/<socket>`
+(the same mechanism already used for the panel and PHP-FPM sockets) and keeps the `forward_auth` gate as
+defense in depth. Validated on a real host: a web-group member connects through the socket while an unrelated
+user is refused (`srw-rw---- user:webgroup`). Port allocation (`allocatePort`/`portListening`) is removed; the
+socket dir is torn down with the session. This is a broker action (fresh process), so it applies on the
+release that ships it.

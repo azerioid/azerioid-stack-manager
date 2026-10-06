@@ -83,6 +83,43 @@ CADDY;
         $this->assertTrue($spawned, 'expected systemd-run ttyd spawn');
     }
 
+    public function test_ttyd_binds_a_unix_socket_not_a_loopback_port(): void
+    {
+        // A70: ttyd must bind a per-session UNIX socket in a 2750 dir owned by
+        // the shell user with the web group (setgid), and Caddy must proxy that
+        // socket — never a loopback TCP port any local user could reach.
+        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'shop.example.com'], [
+            'admin_user_id' => '1',
+            'source_ip' => '127.0.0.1',
+        ]);
+        $this->assertSame(0, $code, json_encode($json));
+        $id = (string) ($json['data']['ws_path'] ?? '');
+        $id = str_replace('/terminal/', '', $id);
+        $sock = rtrim($this->cfg->terminalSocketDir, '/') . '/' . $id . '/ttyd.sock';
+
+        $routes = $this->rt->files[$this->cfg->terminalCaddyRoutesPath] ?? '';
+        $this->assertStringContainsString('reverse_proxy unix/' . $sock, $routes);
+        $this->assertStringNotContainsString('reverse_proxy 127.0.0.1:', $routes);
+
+        $spawn = '';
+        $chmodded = false;
+        foreach ($this->rt->execLog as $entry) {
+            $cmd = $entry['command'] ?? [];
+            $joined = implode(' ', $cmd);
+            if (str_contains($joined, 'systemd-run') && str_contains($joined, 'az-terminal-')) {
+                $spawn = $joined;
+            }
+            if ($cmd === ['/bin/chmod', '2750', rtrim($this->cfg->terminalSocketDir, '/') . '/' . $id]) {
+                $chmodded = true;
+            }
+        }
+        $this->assertStringContainsString('-i ' . $sock, $spawn, 'ttyd must bind the unix socket');
+        // ttyd no longer binds a loopback port (systemd-run's own -p property
+        // flags are fine; what matters is ttyd gets no 127.0.0.1 bind).
+        $this->assertStringNotContainsString('127.0.0.1', $spawn);
+        $this->assertTrue($chmodded, 'per-session socket dir must be 2750 (setgid, web group)');
+    }
+
     public function test_rejects_readonly_vhost_terminal(): void
     {
         [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'projob.az'], [

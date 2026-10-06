@@ -57,14 +57,12 @@ final class TerminalManager
         }
 
         $sessionId = bin2hex(random_bytes(16));
-        $port = $this->allocatePort();
         $now = time();
         $idle = $this->config->terminalIdleSeconds;
 
         if ($kind === self::KIND_CONTAINER) {
             $session = $this->startContainerSession(
                 $sessionId,
-                $port,
                 $domain,
                 $vhost,
                 $root,
@@ -76,7 +74,6 @@ final class TerminalManager
         } else {
             $session = $this->startHostSession(
                 $sessionId,
-                $port,
                 $domain,
                 $root,
                 $adminId,
@@ -112,7 +109,6 @@ final class TerminalManager
      */
     private function startHostSession(
         string $sessionId,
-        int $port,
         string $domain,
         string $root,
         string $adminId,
@@ -121,7 +117,8 @@ final class TerminalManager
         int $idle,
     ): array {
         $identity = VhostUser::ensure($this->runtime, $this->config, $domain, $root);
-        $pid = $this->spawnTtydHost($sessionId, $port, $identity['username'], $root);
+        $socket = $this->prepareSocketDir($sessionId, $identity['username']);
+        $pid = $this->spawnTtydHost($sessionId, $socket, $identity['username'], $root);
 
         return [
             'id' => $sessionId,
@@ -130,7 +127,7 @@ final class TerminalManager
             'root' => $root,
             'username' => $identity['username'],
             'container' => null,
-            'port' => $port,
+            'socket' => $socket,
             'pid' => $pid,
             'admin_user_id' => $adminId,
             'source_ip' => $sourceIp,
@@ -150,7 +147,6 @@ final class TerminalManager
      */
     private function startContainerSession(
         string $sessionId,
-        int $port,
         string $domain,
         array $vhost,
         string $root,
@@ -178,7 +174,8 @@ final class TerminalManager
             );
         }
         $ctx = $docker->shellContext($domain);
-        $pid = $this->spawnTtydContainer($sessionId, $port, $ctx, $wrapper, $target['name']);
+        $socket = $this->prepareSocketDir($sessionId, $ctx['user']);
+        $pid = $this->spawnTtydContainer($sessionId, $socket, $ctx, $wrapper, $target['name']);
 
         return [
             'id' => $sessionId,
@@ -187,7 +184,7 @@ final class TerminalManager
             'root' => $root,
             'username' => $ctx['user'],
             'container' => $target['name'],
-            'port' => $port,
+            'socket' => $socket,
             'pid' => $pid,
             'admin_user_id' => $adminId,
             'source_ip' => $sourceIp,
@@ -367,7 +364,7 @@ final class TerminalManager
         }
     }
 
-    private function spawnTtydHost(string $sessionId, int $port, string $username, string $root): int
+    private function spawnTtydHost(string $sessionId, string $socket, string $username, string $root): int
     {
         if (!$this->runtime->fileExists('/usr/bin/systemd-run')) {
             throw new BrokerException('systemd-run is not installed; cannot start terminal session.', 3);
@@ -387,8 +384,7 @@ final class TerminalManager
             '-u', $username,
             '--',
             $this->config->ttydBin,
-            '-p', (string) $port,
-            '-i', '127.0.0.1',
+            '-i', $socket,
             '-W',
             '-b', $base,
             '-w', $root,
@@ -410,7 +406,7 @@ final class TerminalManager
      */
     private function spawnTtydContainer(
         string $sessionId,
-        int $port,
+        string $socket,
         array $ctx,
         string $wrapper,
         string $containerName,
@@ -437,8 +433,7 @@ final class TerminalManager
             'DOCKER_HOST=' . $ctx['docker_host'],
             'HOME=' . ($ctx['home'] ?? SupervisedUser::HOME),
             $this->config->ttydBin,
-            '-p', (string) $port,
-            '-i', '127.0.0.1',
+            '-i', $socket,
             '-W',
             '-b', $base,
             '-t', 'disableReconnect=true',
@@ -475,18 +470,35 @@ final class TerminalManager
         return $pid;
     }
 
-    private function allocatePort(): int
+    private function socketDir(string $sessionId): string
     {
-        $used = [];
-        foreach ($this->sessions()['sessions'] as $session) {
-            $used[(int) ($session['port'] ?? 0)] = true;
+        return rtrim($this->config->terminalSocketDir, '/') . '/' . $sessionId;
+    }
+
+    /**
+     * A70: create the per-session directory that ttyd will bind its UNIX socket
+     * in. Owned by the ttyd identity (so the unprivileged ttyd can create the
+     * socket) with the web user's group and the setgid bit, so the socket ttyd
+     * creates inherits that group — the web user (reverse proxy) can connect
+     * while no other local user or site identity can reach the 2750 directory.
+     * Replaces a loopback TCP port, which any local process could connect to.
+     */
+    private function prepareSocketDir(string $sessionId, string $ttydUser): string
+    {
+        $base = rtrim($this->config->terminalSocketDir, '/');
+        if (!$this->runtime->isDir($base)) {
+            $this->runtime->mkdir($base, 0755);
         }
-        for ($port = $this->config->terminalPortMin; $port <= $this->config->terminalPortMax; $port++) {
-            if (!isset($used[$port]) && !$this->portListening($port)) {
-                return $port;
-            }
-        }
-        throw new BrokerException('No free terminal ports available.', 1);
+        $this->runtime->exec(['/usr/bin/chown', 'root:root', $base], null, 15);
+        $this->runtime->exec(['/bin/chmod', '0755', $base], null, 15);
+
+        $dir = $this->socketDir($sessionId);
+        $webGroup = VhostUser::primaryGroup($this->runtime, $this->config->webUser) ?? $this->config->webUser;
+        $this->runtime->mkdir($dir, 0750);
+        $this->runtime->exec(['/usr/bin/chown', $ttydUser . ':' . $webGroup, $dir], null, 15);
+        $this->runtime->exec(['/bin/chmod', '2750', $dir], null, 15);
+
+        return $dir . '/ttyd.sock';
     }
 
     /**
@@ -516,15 +528,15 @@ final class TerminalManager
         $lines = ['# AZERIOID Stack Manager — terminal routes (broker-managed; do not edit)'];
         foreach ($sessions as $session) {
             $id = (string) ($session['id'] ?? '');
-            $port = (int) ($session['port'] ?? 0);
-            if ($id === '' || $port < 1) {
+            $socket = (string) ($session['socket'] ?? '');
+            if ($id === '' || $socket === '') {
                 continue;
             }
             $lines[] = "handle /terminal/{$id}/* {";
             $lines[] = "    forward_auth {$auth} {";
             $lines[] = "        uri /internal/terminal/auth/{$id}";
             $lines[] = '    }';
-            $lines[] = "    reverse_proxy 127.0.0.1:{$port}";
+            $lines[] = "    reverse_proxy unix/{$socket}";
             $lines[] = '}';
         }
 
@@ -594,6 +606,12 @@ final class TerminalManager
         if ($fallbackPid > 0) {
             $this->killProcess($fallbackPid);
         }
+        // A70: remove the per-session socket directory (ttyd unlinks the socket
+        // on exit, but the directory would linger in /run).
+        $dir = $this->socketDir($sessionId);
+        if ($this->runtime->isDir($dir)) {
+            $this->runtime->exec(['/bin/rm', '-rf', $dir], null, 15);
+        }
     }
 
     private function ttydSessionAlive(string $sessionId, int $fallbackPid): bool
@@ -645,23 +663,6 @@ final class TerminalManager
         }
 
         return $this->runtime->exec(['/bin/kill', '-0', (string) $pid], null, 5)->ok();
-    }
-
-    private function portListening(int $port): bool
-    {
-        $ss = null;
-        foreach (['/usr/sbin/ss', '/usr/bin/ss', '/bin/ss'] as $bin) {
-            if ($this->runtime->fileExists($bin)) {
-                $ss = $bin;
-                break;
-            }
-        }
-        if ($ss === null) {
-            return false;
-        }
-        $r = $this->runtime->exec([$ss, '-H', '-tln', 'sport', '=', ':' . $port], null, 5);
-
-        return trim($r->stdout) !== '';
     }
 
     private function runuserBin(): string
