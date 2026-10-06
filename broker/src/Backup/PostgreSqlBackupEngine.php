@@ -109,9 +109,20 @@ final class PostgreSqlBackupEngine implements BackupEngine
             // SET ROLE after connecting, so the objects are owned by the tenant
             // and carry only the tenant's privileges.
             $role = $this->ownerOf($target);
-            $roleArgs = ($role !== null && $role !== '' && $role !== $this->config->postgresqlUser)
-                ? ['--role=' . $role]
-                : [];
+            if ($role === null || $role === '') {
+                // Fail closed: if the owner cannot be resolved we must NOT fall
+                // back to a superuser restore, which is exactly the escalation
+                // this guard exists to prevent. prepareTarget has already run, so
+                // the database exists and a healthy lookup returns its owner.
+                throw new BrokerException(
+                    'Refusing to restore "' . $target . '": could not determine its owning role '
+                    . '(a superuser restore could let a SECURITY DEFINER object in the dump run as superuser).',
+                    1
+                );
+            }
+            // --role is dropped only when the owner is the admin role itself
+            // (an admin-owned database restored by the admin — same principal).
+            $roleArgs = $role !== $this->config->postgresqlUser ? ['--role=' . $role] : [];
             $args = array_merge(
                 ['/usr/bin/pg_restore'],
                 $conn,

@@ -1898,3 +1898,12 @@ superuser connects, so objects are created owned by the tenant and carry only th
 the owner is unknown or is the admin role itself. Validated on a real PostgreSQL: a `SECURITY DEFINER`
 function in a `-Fc` dump restores owned by `postgres` without `--role` and owned by the tenant with it. The
 `pg_dumpall`/`psql` path is a cluster-level operator restore (not tenant-scoped content) and is unchanged.
+
+### A71 erratum — fail closed when the owner is unknown
+
+The first A71 cut omitted `--role` when `ownerOf` returned nothing, silently falling back to the superuser
+restore — the exact escalation the guard prevents (fail-open state drift). `prepareTarget` runs before
+`restoreCommandFor`, so the database exists and a healthy lookup always returns an owner; an empty result now
+**aborts the restore** instead. `--role` is still dropped only when the resolved owner is the admin role
+itself (an admin-owned database restored by the admin — same principal). Regression test asserts an unknown
+owner throws.
