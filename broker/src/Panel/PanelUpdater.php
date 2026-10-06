@@ -878,6 +878,7 @@ final class PanelUpdater
             '/etc/php-fpm.d/azerioid-panel.conf',
         ];
         $updated = false;
+        $socketChanged = false;
         foreach ($candidates as $poolFile) {
             if (!$this->runtime->fileExists($poolFile)) {
                 continue;
@@ -896,11 +897,28 @@ final class PanelUpdater
             if (! is_string($new)) {
                 continue;
             }
+            // A60: on an already-migrated host (worker user = panel user, distinct
+            // from the web user), make the panel socket web-user-owned and
+            // panel-user-grouped so no gid-caddy pool can reach it. The migrator
+            // sets this for fresh migrations; this heals hosts migrated before A60.
+            $panelUser = $this->config->panelUser;
+            $webUser = $this->config->webUser;
+            if ($panelUser !== $webUser && $panelUser !== '' && $webUser !== ''
+                && preg_match('/^\s*user\s*=\s*' . preg_quote($panelUser, '/') . '\s*$/m', $new) === 1) {
+                $before = $new;
+                $owned = preg_replace('/^(\s*listen\.owner\s*=\s*)\S+\s*$/m', '${1}' . $webUser, $new, 1);
+                $new = is_string($owned) ? $owned : $new;
+                $grouped = preg_replace('/^(\s*listen\.group\s*=\s*)\S+\s*$/m', '${1}' . $panelUser, $new, 1);
+                $new = is_string($grouped) ? $grouped : $new;
+                if ($new !== $before) {
+                    $socketChanged = true;
+                }
+            }
             if ($new === $contents) {
-                $log->info('FPM open_basedir already current in ' . $poolFile);
+                $log->info('FPM pool already current in ' . $poolFile);
             } else {
                 $this->runtime->writeFile($poolFile, $new, 0644);
-                $log->info('Refreshed FPM open_basedir in ' . $poolFile);
+                $log->info('Refreshed FPM open_basedir / socket identity in ' . $poolFile);
                 $updated = true;
             }
             // Prefer the first existing pool file (EL uses /etc/azerioid-panel/...).
@@ -910,9 +928,15 @@ final class PanelUpdater
             $unit = $this->config->panelFpmUnit;
             $log->info('Reloading ' . $unit . ' after open_basedir sync.');
             try {
-                Systemd::control($this->runtime, 'reload', $unit);
+                // A graceful reload does not re-create the listen socket, so a
+                // changed listen.owner/listen.group needs a full restart to apply.
+                if ($socketChanged) {
+                    Systemd::control($this->runtime, 'restart', $unit);
+                } else {
+                    Systemd::control($this->runtime, 'reload', $unit);
+                }
             } catch (BrokerException $e) {
-                $log->warn('FPM reload after open_basedir sync failed, trying restart: ' . $e->getMessage());
+                $log->warn('FPM reload/restart after pool sync failed, trying restart: ' . $e->getMessage());
                 Systemd::control($this->runtime, 'restart', $unit);
             }
         }
@@ -924,7 +948,7 @@ final class PanelUpdater
         if (!$this->runtime->fileExists($validator)) {
             throw new BrokerException('web/lib/azerioid-broker/Validator.php missing after deploy.', 1);
         }
-        $openBasedir = $prefix . '/web:/var/lib/azerioid-panel:/tmp:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
+        $openBasedir = $prefix . '/web:/var/lib/azerioid-panel:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
         $php = 'require ' . var_export($prefix . '/web/vendor/autoload.php', true) . ';'
             . 'if (!is_readable(' . var_export($validator, true) . ')) { fwrite(STDERR, "unreadable\\n"); exit(2); }'
             . 'if (!class_exists("AzerioidPanel\\\\Broker\\\\Validator")) { fwrite(STDERR, "missing_class\\n"); exit(3); }'

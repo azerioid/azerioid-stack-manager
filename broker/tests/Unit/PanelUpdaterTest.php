@@ -39,6 +39,39 @@ final class PanelUpdaterTest extends TestCase
         $this->assertStringContainsString('/usr/local/lib/azerioid-panel/web', $line);
     }
 
+    public function test_open_basedir_sync_heals_migrated_socket_identity(): void
+    {
+        // A60: on an already-migrated host the panel socket must become
+        // web-user-owned / panel-user-grouped so no gid-caddy pool can reach it.
+        $runtime = new FakeRuntime();
+        $config = new Config();
+        $config->panelRoot = '/usr/local/lib/azerioid-panel';
+        $config->panelUser = 'azerioid-panel';
+        $config->webUser = 'caddy';
+        $config->panelFpmUnit = 'azerioid-panel-php-fpm';
+        $pool = '/etc/php/8.4/fpm/pool.d/azerioid-panel.conf';
+        $runtime->files[$pool] = "[azerioid-panel]\nuser = azerioid-panel\ngroup = azerioid-panel\n"
+            . "listen.owner = azerioid-panel\nlisten.group = caddy\nlisten.mode = 0660\n"
+            . "php_admin_value[open_basedir] = /usr/local/lib/azerioid-panel/web:/tmp:/dev/urandom\n";
+
+        $m = new \ReflectionMethod(PanelUpdater::class, 'syncPanelFpmOpenBasedir');
+        $m->setAccessible(true);
+        $log = new \AzerioidPanel\Broker\Component\OperationLogger($runtime, '/tmp/az-oplog-test2');
+        $m->invoke(new PanelUpdater($config, $runtime), $config->panelRoot, $log);
+
+        $out = $runtime->files[$pool];
+        $this->assertMatchesRegularExpression('/^listen\.owner = caddy$/m', $out);
+        $this->assertMatchesRegularExpression('/^listen\.group = azerioid-panel$/m', $out);
+        // A changed socket identity needs a full restart (reload keeps the old socket).
+        $restarted = false;
+        foreach ($runtime->execLog as $e) {
+            if ($e['command'] === ['/usr/bin/systemctl', 'restart', 'azerioid-panel-php-fpm']) {
+                $restarted = true;
+            }
+        }
+        $this->assertTrue($restarted, 'socket identity change must force an FPM restart');
+    }
+
     public function test_apply_requires_confirm_phrase(): void
     {
         $runtime = new FakeRuntime();

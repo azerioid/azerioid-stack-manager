@@ -20,8 +20,9 @@ use AzerioidPanel\Broker\Validator;
  *    its own with its own php.ini (/etc/azerioid-panel/php.ini), so the distro
  *    php.ini no longer has to allow `proc_open` for the panel's sake and is
  *    restored to what the operator had before the panel touched it;
- *  - Caddy reaches the panel through the socket group and PanelFileAccess, not
- *    by being the panel.
+ *  - Caddy reaches the panel through the socket (it owns the socket file) and
+ *    PanelFileAccess, not by being the panel. The socket is grouped to the panel
+ *    user, not the caddy group, so no other gid-caddy pool can reach it (A60).
  *
  * This is the single implementation of that end state. A fresh install runs it
  * at the end of install.sh, and an existing host runs it after self-update
@@ -633,18 +634,25 @@ final class PanelIdentityMigrator
 
     private function writePool(array $plan): void
     {
+        $webUser = (string) $plan['from'];
         $body = $this->runtime->readFile($plan['pool']);
+        // Worker runs as the panel user.
         $patched = preg_replace(
-            [
-                '/^(\s*user\s*=\s*)\S+\s*$/m',
-                '/^(\s*group\s*=\s*)\S+\s*$/m',
-                '/^(\s*listen\.owner\s*=\s*)\S+\s*$/m',
-            ],
+            ['/^(\s*user\s*=\s*)\S+\s*$/m', '/^(\s*group\s*=\s*)\S+\s*$/m'],
             '${1}' . self::USER,
             $body
         );
+        // A60: the socket is owned by the WEB user and grouped to the PANEL user.
+        // Caddy reaches it as the owner; nothing in the caddy group does. A
+        // group-caddy socket let any gid-caddy pool (the Adminer tool pool) speak
+        // FastCGI to it and run code as the root-equivalent panel user, which a
+        // reachable FPM socket allows regardless of pool open_basedir/disable_functions
+        // (a malicious FastCGI client can send PHP_ADMIN_VALUE).
         $patched = is_string($patched)
-            ? preg_replace('/^(\s*listen\.group\s*=\s*)\S+\s*$/m', '${1}' . $plan['server_group'], $patched)
+            ? preg_replace('/^(\s*listen\.owner\s*=\s*)\S+\s*$/m', '${1}' . $webUser, $patched)
+            : null;
+        $patched = is_string($patched)
+            ? preg_replace('/^(\s*listen\.group\s*=\s*)\S+\s*$/m', '${1}' . self::USER, $patched)
             : null;
         if (!is_string($patched) || preg_match('/^\s*user\s*=\s*' . preg_quote(self::USER, '/') . '\s*$/m', $patched) !== 1) {
             throw new BrokerException('Panel pool rewrite did not take effect.', 1);
@@ -655,7 +663,7 @@ final class PanelIdentityMigrator
 
         $this->backupFile(self::POOL);
         $this->runtime->writeFile(self::POOL, $patched, 0644);
-        $this->note('wrote ' . self::POOL . ' (user ' . self::USER . ', listen.group ' . $plan['server_group'] . ')');
+        $this->note('wrote ' . self::POOL . ' (worker ' . self::USER . ', socket ' . $webUser . ':' . self::USER . ')');
     }
 
     private function migrateFiles(array $plan): void
@@ -920,7 +928,8 @@ final class PanelIdentityMigrator
         }
         $this->note(self::UNIT . ' active');
 
-        $expected = $user . ':' . $plan['server_group'];
+        // A60: socket is web-user-owned, panel-user-grouped (not group caddy).
+        $expected = (string) $plan['from'] . ':' . $user;
         $owner = $this->socketOwner();
         if ($owner !== $expected) {
             throw new BrokerException('Panel socket ' . $this->config->panelFpmSocket . ' is ' . var_export($owner, true) . ', expected ' . $expected . '.', 1);
