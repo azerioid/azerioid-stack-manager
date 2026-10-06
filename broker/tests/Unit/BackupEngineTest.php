@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\Backup\MongoDbBackupEngine;
 use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\FakeRuntime;
 use PHPUnit\Framework\TestCase;
 
@@ -138,6 +139,24 @@ final class BackupEngineTest extends TestCase
 
         $this->assertSame('pg_restore', $spec['tool']);
         $this->assertContains('/usr/bin/pg_restore', $spec['command']);
+        $this->assertContains('--no-owner', $spec['command']);
+        $this->assertNoSecretsIn($spec['command']);
+    }
+
+    public function test_postgres_restore_runs_under_the_db_owner_role(): void
+    {
+        // A71: a tenant dump can carry a SECURITY DEFINER function; a plain
+        // --no-owner restore as the superuser would own it as the superuser, so
+        // the tenant could call it and run as superuser. pg_restore must SET ROLE
+        // to the target's owning role (--role) so objects are owned by the tenant.
+        $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
+                ? new ExecResult($c, 0, "tenant_role\n", '')
+                : null;
+        $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $spec = $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
+
+        $this->assertContains('--role=tenant_role', $spec['command']);
         $this->assertContains('--no-owner', $spec['command']);
         $this->assertNoSecretsIn($spec['command']);
     }
