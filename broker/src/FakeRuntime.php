@@ -14,7 +14,7 @@ final class FakeRuntime implements Runtime
     /** @var array<string,bool> */
     public array $dirs = [];
 
-    /** @var list<array{command: array, stdin: ?string}> */
+    /** @var list<array{command: array, stdin: ?string, env: ?array}> */
     public array $execLog = [];
 
     /** @var array<string, ExecResult> keyed by implode("\0", $command) */
@@ -89,9 +89,9 @@ final class FakeRuntime implements Runtime
         $this->dirs['/etc/systemd/system'] = true;
     }
 
-    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30): ExecResult
+    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30, ?array $env = null): ExecResult
     {
-        $this->execLog[] = ['command' => $command, 'stdin' => $stdin];
+        $this->execLog[] = ['command' => $command, 'stdin' => $stdin, 'env' => $env];
         if ($this->execHook !== null) {
             ($this->execHook)($command, $stdin);
         }

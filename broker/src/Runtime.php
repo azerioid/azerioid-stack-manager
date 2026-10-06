@@ -5,7 +5,7 @@ namespace AzerioidPanel\Broker;
 
 interface Runtime
 {
-    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30): ExecResult;
+    public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30, ?array $env = null): ExecResult;
 
     public function readFile(string $path): string;
 

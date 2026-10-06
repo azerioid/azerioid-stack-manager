@@ -1820,3 +1820,22 @@ offending source line could carry the secret into its stderr/stdout, which `Mong
 `BrokerException` (and thence the operation log). `redact()` now strips the known password from any mongosh
 output before it is placed in an exception message; raw output is still used for JSON parsing. Regression test
 asserts a mongosh error whose stderr contains the password is surfaced as `[redacted]`.
+
+## A68 erratum 2 — Mongo credentials via env + `--file /dev/stdin` (fail-closed, no redaction dependency)
+
+Two gaps in the first A68 cut (v2.8.15/16):
+1. The password was a literal in the stdin script. If mongosh echoed a source line on error the secret could
+   reach stderr → a `BrokerException`/log. Redaction (erratum 1) only matched the raw string, not the
+   `json_encode` form actually present in the script — a parser differential.
+2. mongosh runs bare piped stdin as a **REPL, statement by statement**, so a `throw` in the auth guard did not
+   stop the following operation statement (the server still rejected it, but the guard was not itself
+   fail-closed).
+
+**Fix (v2.8.17).** The admin credentials are passed through the **child environment** (`Runtime::exec` gained
+an optional `$env` merged into the hardened `childEnv()`; a process environment is readable only by the same
+user or root, unlike world-readable argv), and the script references `process.env.AZ_MONGO_USER/PW` — so no
+admin secret is a literal in argv or the script, and there is nothing for redaction to miss. The script is run
+with `mongosh --quiet --file /dev/stdin`, which executes the piped bytes as a **single program**: a thrown
+auth guard aborts before the operation (validated against a real MongoDB 7.0 — a wrong password runs no
+operation). Tenant passwords in mutation scripts still travel only on stdin (never argv or disk). `redact()`
+remains as defense in depth but is no longer load-bearing.

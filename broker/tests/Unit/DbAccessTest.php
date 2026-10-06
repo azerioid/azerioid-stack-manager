@@ -204,6 +204,8 @@ final class DbAccessTest extends TestCase
         $rt->script([
             '/usr/bin/mongosh',
             '--quiet',
+            '--file',
+            '/dev/stdin',
         ], 0, json_encode([
             'databases' => [
                 ['name' => 'shop', 'sizeOnDisk' => 4096],
