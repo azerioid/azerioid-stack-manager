@@ -1688,3 +1688,17 @@ honours it; the creation paths did not.
 skips claiming a shared top; `SitePool::ensure` confines both the one-time ownership handover and
 `open_basedir` to the site's own docroot instead of the shared top. A sole site under its own top is
 unaffected.
+
+## A63 — Erratum: A62's shared-top guard was order-dependent
+
+A background review found A62 incomplete. `claimTop` records the site (`record()`) *after* it runs, and the
+guard only made the *later* site skip claiming. The site created **first** under a top had already claimed
+it before the second existed, so it kept ownership of the now-shared directory — the isolation held only if
+sites were created in one order.
+
+**Fix (v2.8.8).** When `claimTop` sees the top is shared, it does not just skip: it resets the top to
+`root:root` mode 0711 (neutral, traversable, owned by no site). Whichever site's `ensure()` runs once the
+top has become shared reverts a prior claim, so the outcome no longer depends on creation order; each site
+keeps only its own docroot. The reset is withheld only when the top is itself another site's exact docroot
+(a nested-docroot misconfiguration — resetting would strip that site's own root; that overlap is a
+creation-validation gap, out of scope here). `SitePool`'s A62 confinement already handles the pool side.

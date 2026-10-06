@@ -87,6 +87,38 @@ final class AuditHardeningTest extends TestCase
         ));
     }
 
+    public function test_claiming_a_shared_top_resets_it_to_root_order_independent(): void
+    {
+        // A63: even if site A claimed the top before site B existed, B's ensure()
+        // must reset the shared container to root so neither site owns it.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $config = new \AzerioidPanel\Broker\Config();
+        $config->wwwRoot = '/data/www';
+        $config->managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
+        foreach (['/data/www', '/data/www/app', '/data/www/app/public', '/data/www/app/admin'] as $d) {
+            $rt->dirs[$d] = true;
+        }
+        // A already created and recorded, and already owns the shared top.
+        $rt->files['/var/lib/azerioid-panel/vhost-users.json'] = json_encode(['users' => [
+            'a.test' => ['username' => 'az-vh-a-test', 'root' => '/data/www/app/public'],
+        ]]);
+
+        \AzerioidPanel\Broker\Vhost\VhostUser::ensure($rt, $config, 'b.test', '/data/www/app/admin');
+
+        $reset = false;
+        foreach ($rt->execLog as $e) {
+            if ($e['command'] === ['/usr/bin/chown', '-h', 'root:root', '/data/www/app']) {
+                $reset = true;
+            }
+        }
+        $this->assertTrue($reset, 'a shared top must be reset to root during the second site\'s ensure');
+        // And it must NOT be claimed by b.
+        foreach ($rt->execLog as $e) {
+            $this->assertNotSame(['/usr/bin/chown', '-h', 'az-vh-b-test:az-vh-b-test', '/data/www/app'], $e['command']);
+        }
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

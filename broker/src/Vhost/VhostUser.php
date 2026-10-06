@@ -199,9 +199,22 @@ final class VhostUser
         if ($top === rtrim($root, '/') || !$runtime->isDir($top)) {
             return;
         }
-        // A62: never claim a top directory another site's docroot lives under —
-        // that would hand the sibling's tree to this identity (A49-E1).
+        // A62/A63: never let one site own a top directory another site's docroot
+        // lives under (A49-E1). Skipping the claim is not enough: the FIRST site
+        // created under the top already claimed it before the second existed, so
+        // the check is order-dependent. When the top is shared, actively reset it
+        // to a neutral root-owned, traversable directory so NO site owns it —
+        // each keeps only its own docroot. This is order-independent: whichever
+        // site's ensure() runs after the top became shared reverts it.
         if (self::topSharedByAnotherSite($runtime, $config, $domain, $top)) {
+            // Reset only a pure container (siblings under it). If the top is itself
+            // another site's docroot, resetting would strip that site's ownership
+            // of its own root; leave it (the new nested docroot is a creation-time
+            // misconfiguration, not ours to "fix" by breaking the existing site).
+            if (!self::topIsAnotherSiteDocroot($runtime, $config, $domain, $top)) {
+                $runtime->exec(['/usr/bin/chown', '-h', 'root:root', $top], null, 30);
+                $runtime->exec(['/usr/bin/chmod', '0711', $top], null, 30);
+            }
             return;
         }
         $owner = trim($runtime->exec(['/usr/bin/stat', '-c', '%u', $top], null, 10)->stdout);
@@ -231,6 +244,20 @@ final class VhostUser
                 continue;
             }
             if ($root === $topS || str_starts_with($root . '/', $topS . '/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** True if $top is exactly another site's recorded docroot. */
+    private static function topIsAnotherSiteDocroot(Runtime $runtime, Config $config, string $domain, string $top): bool
+    {
+        $topS = rtrim($top, '/');
+        $meta = self::load($runtime, self::metadataPath($runtime, $config));
+        foreach ($meta['users'] as $otherDomain => $info) {
+            if ($otherDomain !== $domain && rtrim((string) ($info['root'] ?? ''), '/') === $topS) {
                 return true;
             }
         }
