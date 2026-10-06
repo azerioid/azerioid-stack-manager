@@ -1975,3 +1975,15 @@ arbitrary write; iteration uses `find -print0` with `read -d ''` (newline-safe);
 `rm`'d (the link only, target untouched) rather than moved to a root-owned quarantine. Validated on a real
 host: within-site links kept, escaping links removed with their targets intact, `.env` set 0600, and a
 site-user `chmod /etc/shadow` is refused (Operation not permitted) — confirming the sweep cannot escalate.
+
+### A72 erratum 2 — fail closed on an unresolvable symlink target
+
+The site-user sweep fell back to the link's own path when `realpath` failed (`|| printf '%s' "$l"`), so a
+symlink whose target the site user could not resolve — e.g. one pointing into another site's `0750` tree that
+caddy (in that site's group) *can* read — was treated as within-site and **kept** (fail open). The sweep now
+uses `realpath -e` and **removes** any symlink whose target cannot be resolved. Validated on a real host: a
+within-site link the site user resolves is kept, while an escaping link into a directory the site user cannot
+traverse (but that holds a readable secret) is removed, target intact. The sweep remains non-fatal to the
+`ensure` it rides on (ADR A72 accepted best-effort ceiling): coupling it to `ensure` success would break
+Terminal/File Manager/restore on any hiccup, which is disproportionate for a defense-in-depth control layered
+over the isolation model.
