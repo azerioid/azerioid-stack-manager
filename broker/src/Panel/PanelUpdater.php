@@ -863,7 +863,13 @@ final class PanelUpdater
 
     private function syncPanelFpmOpenBasedir(string $prefix, OperationLogger $log): void
     {
-        $expected = $prefix . '/web:/var/lib/azerioid-panel:/tmp:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
+        // A59: no /tmp. The panel socket is group-caddy (Caddy connects to it), so
+        // any gid-caddy PHP pool (e.g. the Adminer tool pool) can speak FastCGI to
+        // it and run code as the root-equivalent panel user. Dropping the only
+        // attacker-writable path from open_basedir removes the place such a client
+        // could stage an auto_prepend_file / SCRIPT_FILENAME payload. The panel's
+        // own temp is storage/framework/tmp (sys_temp_dir/upload_tmp_dir).
+        $expected = $prefix . '/web:/var/lib/azerioid-panel:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel';
         $candidates = [
             '/etc/azerioid-panel/php-fpm.d/azerioid-panel.conf',
             '/etc/php/8.4/fpm/pool.d/azerioid-panel.conf',
