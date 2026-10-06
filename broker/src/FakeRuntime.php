@@ -241,6 +241,14 @@ final class FakeRuntime implements Runtime
         return isset($this->dirs[$path]);
     }
 
+    /** @var array<string,bool> paths a test marks as symlinks */
+    public array $links = [];
+
+    public function isLink(string $path): bool
+    {
+        return isset($this->links[$path]);
+    }
+
     public function mkdir(string $path, int $mode = 0755): void
     {
         $this->dirs[$path] = true;

@@ -37,6 +37,31 @@ final class AuditHardeningTest extends TestCase
         }
     }
 
+    public function test_assert_no_symlink_under_refuses_planted_links(): void
+    {
+        // A61: a symlinked component under a site-owned home must be refused before
+        // root chowns/writes a fixed path there.
+        $rt = new FakeRuntime();
+        $base = '/var/lib/azerioid-docker-home';
+        $home = $base . '/site-com';
+        // All real: passes.
+        \AzerioidPanel\Broker\Vhost\VhostUser::assertNoSymlinkUnder($rt, $base, $home . '/.config');
+        $this->assertTrue(true);
+        // Final component is a symlink: refused.
+        $rt->links[$home . '/.config'] = true;
+        try {
+            \AzerioidPanel\Broker\Vhost\VhostUser::assertNoSymlinkUnder($rt, $base, $home . '/.config');
+            $this->fail('expected a symlink refusal');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('symlink', strtolower($e->getMessage()));
+        }
+        // Intermediate component is a symlink: also refused.
+        $rt2 = new FakeRuntime();
+        $rt2->links[$home . '/.local'] = true;
+        $this->expectException(BrokerException::class);
+        \AzerioidPanel\Broker\Vhost\VhostUser::assertNoSymlinkUnder($rt2, $base, $home . '/.local/share');
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();
