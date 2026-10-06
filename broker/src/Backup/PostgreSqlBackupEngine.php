@@ -117,23 +117,29 @@ final class PostgreSqlBackupEngine implements BackupEngine
             // tenant could then call it and run as superuser. --role issues
             // SET ROLE after connecting, so the objects are owned by the tenant
             // and carry only the tenant's privileges.
-            $role = $this->ownerOf($target);
-            // Fail closed. The restore must run under a non-admin owning role so
-            // a SECURITY DEFINER object in the dump is owned by a limited role,
-            // never the connecting superuser. prepareTarget has already created
-            // a fresh target owned by the unprivileged restore role, so a healthy
-            // lookup returns a non-admin owner; an unknown owner, or one equal to
-            // the connecting admin, means the target is unsafe for tenant content.
-            if ($role === null || $role === '' || $role === $this->config->postgresqlUser) {
+            $owner = $this->ownerOf($target);
+            // Fail closed. The restore must run under a non-superuser owning role
+            // so a SECURITY DEFINER object in the dump cannot be owned by a
+            // superuser. prepareTarget creates a fresh target owned by the
+            // unprivileged restore role, so a healthy lookup returns a safe owner;
+            // an unknown owner, a superuser owner (any superuser, not just the
+            // connecting admin), or the admin role itself means the target is
+            // unsafe for tenant content.
+            if ($owner === null) {
                 throw new BrokerException(
-                    'Refusing to restore "' . $target . '": its owning role is '
-                    . ($role === null || $role === '' ? 'unknown' : 'the admin role')
-                    . ' — restore into a tenant-owned database (a superuser restore could let a '
-                    . 'SECURITY DEFINER object in the dump run as superuser).',
+                    'Refusing to restore "' . $target . '": its owning role could not be determined.',
                     1
                 );
             }
-            $roleArgs = ['--role=' . $role];
+            if ($owner['super'] || $owner['name'] === $this->config->postgresqlUser) {
+                throw new BrokerException(
+                    'Refusing to restore "' . $target . '": it is owned by a superuser/admin role ('
+                    . $owner['name'] . '). Restore into a database owned by an unprivileged role so a '
+                    . 'SECURITY DEFINER object in the dump cannot run as a superuser.',
+                    1
+                );
+            }
+            $roleArgs = ['--role=' . $owner['name']];
             $args = array_merge(
                 ['/usr/bin/pg_restore'],
                 $conn,
@@ -156,10 +162,13 @@ final class PostgreSqlBackupEngine implements BackupEngine
     }
 
     /**
-     * The role that owns $target, or null if it cannot be determined. Used to
-     * restore a tenant dump under the tenant's own role (A71).
+     * The owning role of $target and whether it is a superuser, or null if it
+     * cannot be determined. Used to restore a tenant dump under a limited role
+     * (A71).
+     *
+     * @return array{name:string, super:bool}|null
      */
-    private function ownerOf(string $target): ?string
+    private function ownerOf(string $target): ?array
     {
         $target = Validator::dbName($target);
         $pgpass = $this->pgpassFile();
@@ -169,16 +178,27 @@ final class PostgreSqlBackupEngine implements BackupEngine
                 ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
                 ['-U', $this->config->postgresqlUser, '--no-password', '-tAc'],
                 [
-                    "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '" . $target . "'",
+                    'SELECT r.rolname, r.rolsuper FROM pg_catalog.pg_database d '
+                    . 'JOIN pg_catalog.pg_roles r ON r.oid = d.datdba '
+                    . "WHERE d.datname = '" . $target . "'",
                     'postgres',
                 ]
             ), null, 30);
         } finally {
             ($this->cleanup($pgpass))();
         }
-        $owner = trim($result->stdout);
+        $row = trim($result->stdout);
+        if ($row === '') {
+            return null;
+        }
+        // psql -tA emits "name|t" / "name|f".
+        $parts = explode('|', $row);
+        $name = trim($parts[0]);
+        if ($name === '') {
+            return null;
+        }
 
-        return $owner !== '' ? $owner : null;
+        return ['name' => $name, 'super' => strtolower(trim($parts[1] ?? '')) === 't'];
     }
 
     public function targetExists(string $target): bool

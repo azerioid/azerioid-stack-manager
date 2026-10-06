@@ -135,8 +135,8 @@ final class BackupEngineTest extends TestCase
     public function test_postgres_restore_picks_pg_restore_for_custom_format(): void
     {
         $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
-            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
-                ? new ExecResult($c, 0, "tenant_role\n", '')
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'rolsuper')
+                ? new ExecResult($c, 0, "tenant_role|f\n", '')
                 : null;
         $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
         $spec = $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
@@ -152,7 +152,7 @@ final class BackupEngineTest extends TestCase
         // A71: an unresolved owner must abort, never fall back to a superuser
         // restore (the escalation this guard prevents).
         $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
-            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'rolsuper')
                 ? new ExecResult($c, 0, "\n", '')
                 : null;
         $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
@@ -166,8 +166,21 @@ final class BackupEngineTest extends TestCase
         // owned by the superuser) must not be restored as the admin.
         $this->cfg->postgresqlUser = 'pgadmin';
         $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
-            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
-                ? new ExecResult($c, 0, "pgadmin\n", '')
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'rolsuper')
+                ? new ExecResult($c, 0, "pgadmin|f\n", '')
+                : null;
+        $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $this->expectException(BrokerException::class);
+        $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
+    }
+
+    public function test_postgres_restore_fails_closed_when_owner_is_any_superuser(): void
+    {
+        // A71: refuse a target owned by ANY superuser role, not just the
+        // connecting admin — --role to it would still restore as a superuser.
+        $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'rolsuper')
+                ? new ExecResult($c, 0, "other_super|t\n", '')
                 : null;
         $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
         $this->expectException(BrokerException::class);
@@ -206,8 +219,8 @@ final class BackupEngineTest extends TestCase
         // the tenant could call it and run as superuser. pg_restore must SET ROLE
         // to the target's owning role (--role) so objects are owned by the tenant.
         $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
-            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
-                ? new ExecResult($c, 0, "tenant_role\n", '')
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'rolsuper')
+                ? new ExecResult($c, 0, "tenant_role|f\n", '')
                 : null;
         $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
         $spec = $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
