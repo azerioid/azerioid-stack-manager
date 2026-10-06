@@ -101,7 +101,7 @@ final class VhostUser
         }
 
         self::applyOwnership($runtime, $root, $username, $group);
-        self::hardenContent($runtime, $config, $root);
+        self::hardenContent($runtime, $config, $root, $username);
         self::claimTop($runtime, $config, $domain, $root, $username, $group);
         self::reclaimCronLogs($runtime, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
@@ -170,7 +170,7 @@ final class VhostUser
      * terminal, SFTP). Best effort: a site can re-plant between touches and
      * caddy still follows within-site symlinks — see ADR A72 for the ceiling.
      */
-    public static function hardenContent(Runtime $runtime, Config $config, string $root): void
+    public static function hardenContent(Runtime $runtime, Config $config, string $root, string $username): void
     {
         if ($runtime->getuid() !== 0) {
             return;
@@ -188,25 +188,41 @@ final class VhostUser
             return;
         }
 
-        $links = $runtime->exec(['/usr/bin/find', $top, '-xdev', '-type', 'l'], null, 60);
-        foreach (explode("\n", trim($links->stdout)) as $link) {
-            if ($link === '') {
-                continue;
+        // Run the whole sweep AS THE SITE USER (it owns the tree after
+        // applyOwnership), never as root: a raced directory swap can then only
+        // reach files the site user could already touch, so it can never make
+        // root rm/chmod an arbitrary path. -print0 / read -d '' are newline-safe
+        // (a filename with an embedded newline cannot inject a second path), and
+        // realpath bounds the removal to symlinks whose target escapes the site
+        // top (within-site links such as Laravel's public/storage are kept).
+        $script = <<<'SH'
+            set -u
+            top="$1"
+            find "$top" -xdev -type l -print0 2>/dev/null | while IFS= read -r -d '' l; do
+                t=$(realpath -- "$l" 2>/dev/null || printf '%s' "$l")
+                case "$t" in
+                    "$top"|"$top"/*) : ;;
+                    *) rm -f -- "$l" ;;
+                esac
+            done
+            find "$top" -xdev -type f -name .env -print0 2>/dev/null | xargs -0 -r chmod 0600 --
+            SH;
+        $runtime->exec(
+            [self::runuserBin($runtime), '-u', $username, '--', '/bin/bash', '-c', $script, 'azerioid-harden', $top],
+            null,
+            120
+        );
+    }
+
+    private static function runuserBin(Runtime $runtime): string
+    {
+        foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+            if ($runtime->fileExists($bin)) {
+                return $bin;
             }
-            $target = $runtime->realPath($link);
-            if ($target === $top || str_starts_with($target, $top . '/')) {
-                continue; // resolves within the site — legitimate (e.g. storage link)
-            }
-            // Escaping: move the symlink itself (not its target) out of the served tree.
-            $quarantine = '/var/lib/azerioid-panel/quarantine';
-            $runtime->mkdir($quarantine, 0700);
-            $runtime->exec(['/bin/mv', '-f', $link,
-                $quarantine . '/' . basename($link) . '.' . bin2hex(random_bytes(4))], null, 15);
         }
 
-        // -type f excludes symlinks named .env, so chmod never follows one out.
-        $runtime->exec(['/usr/bin/find', $top, '-xdev', '-type', 'f', '-name', '.env',
-            '-exec', '/bin/chmod', '0600', '{}', '+'], null, 60);
+        return '/usr/sbin/runuser';
     }
 
     public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group): void
