@@ -1757,6 +1757,12 @@ bytes a network fetch returned:
   Verified on a real host: a "legit key + appended attacker key" input exports only the pinned primary; an
   absent pin is rejected. An attacker cannot forge different key material under the pinned fingerprint (hash
   preimage), and subkeys without a valid binding signature are dropped on import.
+
+  **Erratum (v2.8.12).** A gpg key selector also matches *subkey* fingerprints, so `--export <pin>` alone did
+  not guarantee the exported *primary* equalled the pin — it rested on SHA-1 preimage resistance. After the
+  export, `extract_pinned_key` now asserts directly on the reconstructed keyring that there is exactly one
+  primary (`pub`) key and its fingerprint equals the pin (case-insensitive), and exports with
+  `--export-options export-minimal`. The dest keyring is removed on any failure.
   Pinned fingerprints — Caddy `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, Sury
   `15058500A0235D97F5D10063B188E2B695BD4743` — were verified with gpg against both the live upstream key and
   the key already trusted on the production host.
