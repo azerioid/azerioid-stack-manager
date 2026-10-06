@@ -1071,18 +1071,28 @@ final class DockerManager
      */
     private function ensureVolumeDirs(array $spec): void
     {
+        $appDir = rtrim($spec['app_dir'], '/');
         foreach ($spec['volumes'] ?? [] as $volume) {
-            $path = rtrim($spec['app_dir'], '/') . '/' . $volume['host'];
+            $path = $appDir . '/' . $volume['host'];
+            // A64: confine BEFORE mutating. The old code ran mkdir/chown/chmod and
+            // only then called resolveUnderBase, so a symlink the site planted in
+            // its app tree let root create/own a directory outside it. Reject an
+            // escaping or symlinked path first, chown without dereferencing, and
+            // re-check after mkdir in case the create followed a swapped component.
+            VhostUser::assertNoSymlinkUnder($this->runtime, $appDir, $path);
+            if ($this->runtime->resolveUnderBase($path, $appDir) === null) {
+                throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
+            }
             if (!$this->runtime->isDir($path)) {
                 $this->runtime->mkdir($path, 02775);
+                VhostUser::assertNoSymlinkUnder($this->runtime, $appDir, $path);
+                if ($this->runtime->resolveUnderBase($path, $appDir) === null) {
+                    throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
+                }
                 if ($this->runtime->getuid() === 0) {
-                    $this->runtime->chown($path, $this->onSiteDaemon($spec['domain']) ? VhostUser::username($spec['domain']) : SupervisedUser::USERNAME, VhostUser::docrootGroup($this->runtime, $spec['domain']));
+                    $this->runtime->exec(['/usr/bin/chown', '-h', ($this->onSiteDaemon($spec['domain']) ? VhostUser::username($spec['domain']) : SupervisedUser::USERNAME) . ':' . VhostUser::docrootGroup($this->runtime, $spec['domain']), $path], null, 15);
                     $this->runtime->chmod($path, 02775);
                 }
-            }
-            // A symlink planted in the app must not turn a mount into a path outside it.
-            if ($this->runtime->resolveUnderBase($path, $spec['app_dir']) === null) {
-                throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
             }
         }
     }

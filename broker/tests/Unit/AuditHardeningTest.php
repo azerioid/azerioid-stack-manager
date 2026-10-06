@@ -119,6 +119,30 @@ final class AuditHardeningTest extends TestCase
         }
     }
 
+    public function test_docker_volume_refuses_symlinked_path_before_chown(): void
+    {
+        // A64: a symlinked volume component under the site app dir must be refused
+        // before any root mkdir/chown — the old code mutated then checked.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $config = new \AzerioidPanel\Broker\Config();
+        $appDir = '/data/www/site.test';
+        $rt->dirs[$appDir] = true;
+        $rt->links[$appDir . '/data'] = true; // site planted a symlink where the volume goes
+        $mgr = new \AzerioidPanel\Broker\Vhost\DockerManager($config, $rt);
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Vhost\DockerManager::class, 'ensureVolumeDirs');
+        $m->setAccessible(true);
+        try {
+            $m->invoke($mgr, ['domain' => 'site.test', 'app_dir' => $appDir, 'volumes' => [['host' => 'data']]]);
+            $this->fail('expected a symlink refusal');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('symlink', strtolower($e->getMessage()));
+        }
+        foreach ($rt->execLog as $e) {
+            $this->assertNotSame('/usr/bin/chown', $e['command'][0] ?? '', 'no chown may run for a refused volume');
+        }
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();
