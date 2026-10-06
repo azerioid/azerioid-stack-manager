@@ -37,6 +37,20 @@ final class BackupRestore
         // authenticates every chunk, so a tampered archive fails here rather than
         // reaching tar or mysql (A2.2).
         $format = ArchiveCipher::detect($cipher);
+        // A47: legacy LACMP1/LCMP1 is unauthenticated AES-CBC. A backup-storage
+        // writer can IV-flip the first block of a legacy DB dump into a `\!` shell
+        // meta-command that the root-run mysql/psql client executes, or tamper a
+        // file archive. BackupVerify's deep restore already refuses non-LACMP2 for
+        // this reason; do the same for live restore. An operator can still read a
+        // genuinely old archive with an explicit opt-in.
+        if ($format !== 'lacmp2' && empty($input['allow_legacy_unauthenticated'])) {
+            throw new BrokerException(
+                'Refusing to restore an unauthenticated legacy (LACMP1/LCMP1) archive. '
+                . 'Re-create the backup with the current format, or pass '
+                . 'allow_legacy_unauthenticated to override from a trusted source.',
+                2
+            );
+        }
         $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
 
         $storage = $destination === '' ? 'spaces' : $destination;
@@ -117,7 +131,12 @@ final class BackupRestore
         $protected = in_array($site, $config->readonlyVhosts, true);
         RestorePolicy::assertFiles($config, $site, $apply, $force, (string) ($input['confirm'] ?? ''));
 
-        $staging = rtrim($config->stagingDir, '/') . '/restore-' . $site;
+        // A47: a fresh, uniquely named staging dir per call. The old fixed path
+        // (restore-<site>) was never cleaned, so symlinks left by an earlier
+        // archive stayed on disk and defeated ArchiveGuard's lexical link check,
+        // which assumes extraction starts from an empty root. A unique dir makes
+        // every extraction start empty (as VhostBundle::restoreConfig already does).
+        $staging = rtrim($config->stagingDir, '/') . '/restore-' . $site . '-' . bin2hex(random_bytes(8));
         $runtime->mkdir($staging, 0750);
         $archive = $staging . '.tgz';
         $runtime->writeFile($archive, $tgz, 0600);
@@ -187,6 +206,10 @@ final class BackupRestore
         // full copy of the site next to it until the disk filled (A2.5).
         $keepSnapshots = max(0, min(20, (int) ($input['keep_snapshots'] ?? 2)));
         $prunedSnapshots = $this->pruneSnapshots($runtime, $config, $site, $keepSnapshots);
+
+        // The staged source was moved into place; remove the now-empty staging dir
+        // so it cannot accumulate or be reused by a later extraction.
+        $runtime->exec(['/bin/rm', '-rf', $staging], null, 60);
 
         return [
             'destination' => $dest,

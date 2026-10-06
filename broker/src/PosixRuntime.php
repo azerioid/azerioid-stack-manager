@@ -97,27 +97,32 @@ final class PosixRuntime implements Runtime
      */
     private static function childEnv(): array
     {
-        $fallback = is_dir('/var/lib/caddy') ? '/var/lib/caddy' : '/var/lib/azerioid-panel';
-        $home = getenv('HOME');
-        if (! is_string($home) || $home === '' || $home === '/root') {
-            $home = $fallback;
+        // A47: HOME for root children must be a root-owned directory. /var/lib/caddy
+        // is owned by the (lower-trust) Caddy service user, so git/curl/gpg run as
+        // root there would read config that account can write. Use the root-owned
+        // broker home and neutralise per-user tool config explicitly. The caddy CLI
+        // sets its own HOME via CaddyCli::dataEnvPrefix, so it does not need this.
+        $home = '/var/lib/azerioid-broker';
+        // Best-effort ensure the root-owned home exists (broker runs as root).
+        // Suppressed: if we cannot create it, tools simply find no config there,
+        // which is the safe outcome; never fail an action over HOME setup.
+        if (! is_dir($home) && @mkdir($home, 0700, true)) {
+            @chmod($home, 0700);
         }
         $path = getenv('PATH') ?: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
-        $xdgConfig = getenv('XDG_CONFIG_HOME');
-        $xdgData = getenv('XDG_DATA_HOME');
-        if (! is_string($xdgConfig) || $xdgConfig === '' || str_starts_with($xdgConfig, '/root')) {
-            $xdgConfig = $home . '/.config';
-        }
-        if (! is_string($xdgData) || $xdgData === '' || str_starts_with($xdgData, '/root')) {
-            $xdgData = $home . '/.local/share';
-        }
 
         return [
             'HOME' => $home,
-            'XDG_CONFIG_HOME' => $xdgConfig,
-            'XDG_DATA_HOME' => $xdgData,
+            'XDG_CONFIG_HOME' => $home . '/.config',
+            'XDG_DATA_HOME' => $home . '/.local/share',
             'PATH' => $path,
             'LC_ALL' => 'C',
+            // Stop root git/curl/gpg from loading attacker-writable per-user config.
+            'GIT_CONFIG_GLOBAL' => '/dev/null',
+            'GIT_CONFIG_NOSYSTEM' => '1',
+            'CURL_HOME' => $home,
+            'GNUPGHOME' => $home . '/.gnupg',
+            'PYTHONNOUSERSITE' => '1',
         ];
     }
 
@@ -136,7 +141,21 @@ final class PosixRuntime implements Runtime
         if (!is_dir($dir)) {
             throw new BrokerException("Directory does not exist: {$dir}", 1);
         }
-        if (@file_put_contents($path, $contents, LOCK_EX) === false) {
+        // A47: create the file at its final mode before writing, so a secret
+        // (sasl_passwd, Dovecot hashes) is never briefly world-readable. Write a
+        // private temp file in the same directory, then rename over the target.
+        // tempnam creates 0600; narrow/relax to the requested mode before content.
+        $tmp = @tempnam($dir, '.azw');
+        if ($tmp === false) {
+            throw new BrokerException(self::describeIoFailure('write', $path, error_get_last()), 1);
+        }
+        @chmod($tmp, $mode);
+        if (@file_put_contents($tmp, $contents) === false) {
+            @unlink($tmp);
+            throw new BrokerException(self::describeIoFailure('write', $path, error_get_last()), 1);
+        }
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
             throw new BrokerException(self::describeIoFailure('write', $path, error_get_last()), 1);
         }
         @chmod($path, $mode);

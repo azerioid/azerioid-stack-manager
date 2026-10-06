@@ -273,7 +273,12 @@ final class BackupVerifyTest extends TestCase
         $removed = [];
         foreach ($this->rt->execLog as $row) {
             if (($row['command'][0] ?? '') === '/bin/rm') {
-                $removed[] = basename((string) end($row['command']));
+                $name = basename((string) end($row['command']));
+                // A47: restore also rm -rf's its own unique staging dir; this test
+                // is about snapshot pruning, so look only at snapshot names.
+                if (str_starts_with($name, 'shop.lacmp-pre-restore-')) {
+                    $removed[] = $name;
+                }
             }
         }
         sort($removed);

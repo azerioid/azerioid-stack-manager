@@ -83,6 +83,28 @@ final class VhostIsolationTest extends TestCase
         $this->assertNotContains('az-vh-shop-test', $this->groups['azerioid-vhosts']['members']);
     }
 
+    public function test_a_colliding_domain_cannot_adopt_another_sites_identity(): void
+    {
+        // A47: 'a-b.test' and 'a.b.test' both slug to az-vh-a-b-test. The second
+        // vhost must be refused so two tenants never share one uid/group/pool.
+        $this->newVhost('a-b.test');
+        $this->assertSame('az-vh-a-b-test', VhostUser::username('a.b.test'));
+
+        $this->expectException(BrokerException::class);
+        VhostUser::ensure($this->rt, $this->config, 'a.b.test', '/data/www/a.b.test');
+    }
+
+    public function test_deleting_a_vhost_removes_its_sftp_key_file(): void
+    {
+        $this->newVhost('keys.test');
+        $keyFile = \AzerioidPanel\Broker\Sftp\SftpManager::KEY_DIR . '/az-vh-keys-test';
+        $this->rt->files[$keyFile] = "ssh-ed25519 AAAA... tenant\n";
+
+        VhostUser::deprovision($this->rt, $this->config, 'keys.test');
+
+        $this->assertArrayNotHasKey($keyFile, $this->rt->files, 'stale SFTP keys must not survive vhost deletion');
+    }
+
     public function test_two_new_vhosts_cannot_open_each_other(): void
     {
         $this->newVhost('a.test');

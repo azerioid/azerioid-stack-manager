@@ -22,15 +22,19 @@ final class PosixRuntimeIoFailureTest extends TestCase
     {
         $method = new \ReflectionMethod(PosixRuntime::class, 'childEnv');
         $env = $method->invoke(null);
-        $this->assertNotSame('', $env['HOME'] ?? '');
         $this->assertArrayHasKey('PATH', $env);
         $this->assertArrayHasKey('XDG_CONFIG_HOME', $env);
-        if (getenv('HOME') === '/root') {
-            $this->assertNotSame('/root', $env['HOME']);
-            $this->assertStringNotContainsString('/root', $env['XDG_DATA_HOME'] ?? '');
-        } elseif (getenv('HOME') !== false && getenv('HOME') !== '') {
-            $this->assertSame(getenv('HOME'), $env['HOME']);
-        }
+        // A47: HOME for root children is always the root-owned broker home,
+        // never an inherited or lower-trust-writable directory such as
+        // /var/lib/caddy or sudo's /root.
+        $this->assertSame('/var/lib/azerioid-broker', $env['HOME']);
+        $this->assertStringStartsWith('/var/lib/azerioid-broker', $env['XDG_CONFIG_HOME']);
+        $this->assertStringStartsWith('/var/lib/azerioid-broker', $env['XDG_DATA_HOME']);
+        // Per-user tool config is neutralised so root git/curl/gpg cannot load
+        // attacker-writable config.
+        $this->assertSame('/dev/null', $env['GIT_CONFIG_GLOBAL']);
+        $this->assertSame('1', $env['GIT_CONFIG_NOSYSTEM']);
+        $this->assertStringNotContainsString('caddy', $env['HOME']);
     }
 
     public function test_open_basedir_stays_specific(): void

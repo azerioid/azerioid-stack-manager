@@ -33,7 +33,13 @@ final class SupervisedUser
         $runtime->mkdir(self::APPS_DIR, 0750);
         $runtime->mkdir(self::LOG_DIR, 0750);
         $runtime->exec(['/usr/bin/chown', '-R', self::USERNAME . ':' . self::USERNAME, self::HOME], null, 30);
-        $runtime->exec(['/usr/bin/chown', '-R', self::USERNAME . ':' . self::USERNAME, self::LOG_DIR], null, 30);
+        // A47: the log dir stays ROOT-owned (group-readable by the account).
+        // supervisord runs as root and writes these logs itself; if the account
+        // owned the directory it could swap <program>.stdout.log for a symlink and
+        // have root append attacker-controlled bytes to any host file. Owning the
+        // dir is neither needed (root writes the logs) nor safe.
+        $runtime->exec(['/usr/bin/chown', '-R', 'root:' . self::USERNAME, self::LOG_DIR], null, 30);
+        $runtime->chmod(self::LOG_DIR, 0750);
         $g = $runtime->exec(['/usr/bin/getent', 'group', 'azerioid-vhosts'], null, 10);
         if ($g->ok()) {
             $runtime->exec(['/usr/sbin/usermod', '-aG', 'azerioid-vhosts', self::USERNAME], null, 30);
