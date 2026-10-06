@@ -1716,3 +1716,17 @@ symlink + confinement re-check (in case `mkdir` followed a component swapped in 
 is applied with `chown -h` so a swapped leaf symlink is never dereferenced. A narrow mkdir→chown race
 remains theoretically but no longer yields ownership of a path outside the app dir. The compose file itself
 still runs on the per-site rootless daemon.
+
+## A65 — Octane Composer home off world-writable /tmp
+
+A58 lead (h02 variant / supply-chain). `OctaneManager::installOctanePackage` used
+`COMPOSER_HOME=/tmp/azerioid-octane-composer-<pid>`: a predictable, world-writable path. Another local user
+could pre-create it (`PosixRuntime::mkdir` accepts an existing dir; the chown then hands it to the site
+identity), planting a global Composer plugin that runs as that site when `composer require laravel/octane`
+executes — a cross-site / site-escalation vector. `--no-plugins` was also not set.
+
+**Fix (v2.8.10).** Create the Composer home as a fresh, unguessable (`random_bytes`) directory under a
+root-owned 0711 base (`/var/lib/azerioid-octane`): others can traverse it but cannot create entries, so the
+target cannot be pre-staged. Chown the per-run dir to the site with `-h`, and pass `--no-plugins` to
+`composer require`. The PanelUpdater self-update Composer `/tmp` variant remains open (it runs in the
+self-update path; see the bootstrap note) and is tracked separately.
