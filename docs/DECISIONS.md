@@ -1702,3 +1702,17 @@ top has become shared reverts a prior claim, so the outcome no longer depends on
 keeps only its own docroot. The reset is withheld only when the top is itself another site's exact docroot
 (a nested-docroot misconfiguration — resetting would strip that site's own root; that overlap is a
 creation-validation gap, out of scope here). `SitePool`'s A62 confinement already handles the pool side.
+
+## A64 — Docker volume dirs: confine before creating/owning them
+
+A58 deferred lead `h02:DockerManager.ensureVolumeDirs:mutate-before-confine`. For each configured bind-mount
+`ensureVolumeDirs` ran `mkdir`/`chown`/`chmod` on `<app_dir>/<host>` and only *afterwards* called
+`resolveUnderBase`. The app directory is site-owned, so a symlink the site planted in it let root create and
+own a directory outside the app tree before the confinement check fired.
+
+**Fix (v2.8.9).** Confine first: `VhostUser::assertNoSymlinkUnder(app_dir, path)` and `resolveUnderBase`
+run *before* any mutation and reject an escaping or symlinked path; the create is followed by a second
+symlink + confinement re-check (in case `mkdir` followed a component swapped in the window); and ownership
+is applied with `chown -h` so a swapped leaf symlink is never dereferenced. A narrow mkdir→chown race
+remains theoretically but no longer yields ownership of a path outside the app dir. The compose file itself
+still runs on the per-site rootless daemon.
