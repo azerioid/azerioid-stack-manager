@@ -143,6 +143,34 @@ final class AuditHardeningTest extends TestCase
         }
     }
 
+    public function test_octane_composer_home_is_not_predictable_tmp(): void
+    {
+        // A65: COMPOSER_HOME for the Octane install must not be a predictable
+        // /tmp path (pre-creatable by another local user), and plugins are off.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $rt->files['/usr/local/bin/composer'] = '';
+        $rt->files['/usr/sbin/runuser'] = '';
+        $config = new \AzerioidPanel\Broker\Config();
+        $appDir = '/data/www/oct.test';
+        $mgr = new \AzerioidPanel\Broker\Vhost\OctaneManager($config, $rt);
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Vhost\OctaneManager::class, 'installOctanePackage');
+        $m->setAccessible(true);
+        $m->invoke($mgr, $appDir, '/usr/bin/php8.4', 'az-vh-oct-test');
+
+        $requireCmd = '';
+        foreach ($rt->execLog as $e) {
+            $joined = implode(' ', $e['command']);
+            if (str_contains($joined, 'require') && str_contains($joined, 'laravel/octane')) {
+                $requireCmd = $joined;
+            }
+        }
+        $this->assertNotSame('', $requireCmd, 'composer require must run');
+        $this->assertStringNotContainsString('/tmp/azerioid-octane', $requireCmd);
+        $this->assertStringContainsString('/var/lib/azerioid-octane/', $requireCmd);
+        $this->assertStringContainsString('no-plugins', $requireCmd);
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

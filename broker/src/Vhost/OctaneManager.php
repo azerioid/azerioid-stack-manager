@@ -552,9 +552,22 @@ final class OctaneManager
             return;
         }
         $composer = $this->composerBin();
-        $composerHome = '/tmp/azerioid-octane-composer-' . getmypid();
-        $this->runtime->mkdir($composerHome, 0750);
-        $this->runtime->chown($composerHome, $user, VhostUser::primaryGroup($this->runtime, $user) ?? $user);
+        // A65: do not use a predictable world-writable /tmp path as COMPOSER_HOME.
+        // Another local user could pre-create /tmp/azerioid-octane-composer-<pid>
+        // (mkdir accepted an existing dir, chown then handed it to the site) and
+        // plant a global composer plugin that runs as the site identity. Create a
+        // fresh, unguessable home under a root-owned 0711 base — others can
+        // traverse it but cannot create entries in it, so the target cannot be
+        // pre-staged — and pass --no-plugins.
+        $base = '/var/lib/azerioid-octane';
+        if (!$this->runtime->isDir($base)) {
+            $this->runtime->mkdir($base, 0711);
+        }
+        $this->runtime->exec(['/usr/bin/chown', 'root:root', $base], null, 15);
+        $this->runtime->chmod($base, 0711);
+        $composerHome = $base . '/' . bin2hex(random_bytes(8));
+        $this->runtime->mkdir($composerHome, 0700);
+        $this->runtime->exec(['/usr/bin/chown', '-h', $user . ':' . (VhostUser::primaryGroup($this->runtime, $user) ?? $user), $composerHome], null, 15);
 
         $result = $this->runAs($user, [
             '/usr/bin/env',
@@ -564,6 +577,7 @@ final class OctaneManager
             'require',
             'laravel/octane',
             '--no-interaction',
+            '--no-plugins',
         ], $appDir, 600);
         $this->runtime->exec(['/bin/rm', '-rf', $composerHome], null, 30);
 
