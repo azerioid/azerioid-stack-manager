@@ -1919,3 +1919,10 @@ target (`createdb -O azerioid_restore`), and the restore runs under the target's
 unknown **or the connecting admin** now aborts the restore. So objects always land owned by a role with no
 privileges a tenant could abuse. Validated end to end on a real PostgreSQL: a `SECURITY DEFINER` function in a
 dump restored into a fresh database is owned by `azerioid_restore` (rolsuper = false).
+
+### A71 erratum 3 — refuse any superuser-owned target
+
+The owner check only excluded the connecting admin, so a target owned by a *different* superuser role would
+still get `--role=<that superuser>` and restore as a superuser. The owner lookup now also reads `rolsuper`
+(`pg_roles.rolsuper`) and the restore aborts when the owner is **any** superuser (or the admin, or unknown).
+Query output format verified on a real PostgreSQL (`tenant|f`, `postgres|t`).
