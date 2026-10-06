@@ -1926,3 +1926,14 @@ The owner check only excluded the connecting admin, so a target owned by a *diff
 still get `--role=<that superuser>` and restore as a superuser. The owner lookup now also reads `rolsuper`
 (`pg_roles.rolsuper`) and the restore aborts when the owner is **any** superuser (or the admin, or unknown).
 Query output format verified on a real PostgreSQL (`tenant|f`, `postgres|t`).
+
+### A71 erratum 4 — per-target restore role, revoke PUBLIC
+
+A single shared `azerioid_restore` role owned every fresh tenant's restore database, so a SECURITY DEFINER
+object owned by it had the same owner as other tenants' restore databases (cross-tenant privilege sharing;
+bounded by PostgreSQL's per-database isolation, but avoidable). Fix (v2.8.25): each fresh target gets its own
+unprivileged role `azerioid_rst_<sha1(db)[:24]>` (NOSUPERUSER/NOLOGIN, ensured idempotently, dropped with the
+database), and `prepareTarget` runs `REVOKE ALL ON DATABASE <target> FROM PUBLIC` so a fresh target is not
+reachable by any role until the operator grants access (new databases grant PUBLIC CONNECT by default).
+Validated on a real PostgreSQL: the per-target role is unique, and the database ACL loses its PUBLIC CONNECT
+entry after the revoke.

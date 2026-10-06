@@ -29,13 +29,20 @@ final class PostgreSqlBackupEngine implements BackupEngine
     public const CUSTOM_FORMAT_MAGIC = 'PGDMP';
 
     /**
-     * A71: fresh restore targets are created owned by this dedicated,
-     * unprivileged (NOLOGIN, NOSUPERUSER) role, and the restore runs under it,
-     * so a SECURITY DEFINER object in the dump is owned by a powerless role
-     * rather than the connecting superuser. An existing tenant database is
-     * restored under its own owning role instead.
+     * A71: a fresh restore target is created owned by a dedicated, unprivileged
+     * (NOLOGIN, NOSUPERUSER) role unique PER TARGET database, and the restore
+     * runs under it — so a SECURITY DEFINER object in the dump is owned by a
+     * powerless role that owns nothing else (no cross-tenant sharing), not the
+     * connecting superuser. An existing tenant database is restored under its
+     * own owning role instead.
      */
-    public const RESTORE_ROLE = 'azerioid_restore';
+    private const RESTORE_ROLE_PREFIX = 'azerioid_rst_';
+
+    /** Deterministic, bounded (<=63 bytes), injection-safe per-target role name. */
+    public function restoreRoleFor(string $target): string
+    {
+        return self::RESTORE_ROLE_PREFIX . substr(sha1(Validator::dbName($target)), 0, 24);
+    }
 
     public function __construct(
         private readonly Config $config,
@@ -225,39 +232,56 @@ final class PostgreSqlBackupEngine implements BackupEngine
         if ($this->targetExists($target)) {
             return;
         }
-        $this->ensureRestoreRole();
+        $role = $this->ensureRestoreRole($target);
         $pgpass = $this->pgpassFile();
         try {
-            // -O: a fresh database is owned by the unprivileged restore role, so
+            // -O: a fresh database is owned by a per-target unprivileged role, so
             // the restore (run under that role) cannot create superuser-owned
-            // objects. New PostgreSQL databases grant PUBLIC CONNECT and PUBLIC
-            // EXECUTE by default, so a superuser-owned SECURITY DEFINER object
-            // here would otherwise be callable by any tenant.
+            // objects and the owner role owns no other tenant's data.
             $result = $this->runtime->exec(array_merge(
                 ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/createdb'],
                 ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
-                ['-U', $this->config->postgresqlUser, '--no-password', '-O', self::RESTORE_ROLE, $target]
+                ['-U', $this->config->postgresqlUser, '--no-password', '-O', $role, $target]
             ), null, 60);
+            if (!$result->ok()) {
+                throw new BrokerException(
+                    'createdb failed: ' . (trim($result->stderr) !== '' ? trim($result->stderr) : 'unknown error'),
+                    1
+                );
+            }
+            // New databases grant PUBLIC CONNECT (and functions PUBLIC EXECUTE)
+            // by default; revoke so the fresh target is not reachable by any
+            // role until the operator deliberately grants access.
+            $revoke = $this->runtime->exec(array_merge(
+                ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/psql'],
+                ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
+                ['-U', $this->config->postgresqlUser, '--no-password', '-v', 'ON_ERROR_STOP=1', '-tAc',
+                    'REVOKE ALL ON DATABASE "' . $target . '" FROM PUBLIC', 'postgres'],
+            ), null, 30);
+            if (!$revoke->ok()) {
+                throw new BrokerException(
+                    'Could not revoke PUBLIC on the restore target: '
+                    . (trim($revoke->stderr) !== '' ? trim($revoke->stderr) : 'unknown error'),
+                    1
+                );
+            }
         } finally {
             ($this->cleanup($pgpass))();
-        }
-        if (!$result->ok()) {
-            throw new BrokerException(
-                'createdb failed: ' . (trim($result->stderr) !== '' ? trim($result->stderr) : 'unknown error'),
-                1
-            );
         }
     }
 
     /**
-     * Ensure the dedicated unprivileged restore role exists (idempotent). NOLOGIN
-     * and NOSUPERUSER, so owning objects grants it nothing a tenant could abuse.
+     * Ensure the per-target unprivileged restore role exists (idempotent) and
+     * return its name. NOLOGIN and NOSUPERUSER, and unique per database, so
+     * owning the restored objects grants it nothing a tenant could abuse and no
+     * two tenants ever share an owner role.
      */
-    private function ensureRestoreRole(): void
+    private function ensureRestoreRole(string $target): string
     {
+        $role = $this->restoreRoleFor($target);
         $pgpass = $this->pgpassFile();
-        $sql = "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '" . self::RESTORE_ROLE . "') "
-            . 'THEN CREATE ROLE "' . self::RESTORE_ROLE . '" NOSUPERUSER NOCREATEDB NOCREATEROLE NOLOGIN; END IF; END $$;';
+        $sql = "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '" . $role . "') "
+            . 'THEN CREATE ROLE "' . $role . '" NOSUPERUSER NOCREATEDB NOCREATEROLE NOLOGIN; END IF; END $$;';
         try {
             $result = $this->runtime->exec(array_merge(
                 ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/psql'],
@@ -274,6 +298,8 @@ final class PostgreSqlBackupEngine implements BackupEngine
                 1
             );
         }
+
+        return $role;
     }
 
     public function dropTarget(string $target): void
@@ -286,6 +312,15 @@ final class PostgreSqlBackupEngine implements BackupEngine
                 ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
                 ['-U', $this->config->postgresqlUser, '--no-password', '--if-exists', $target]
             ), null, 60);
+            // Drop the per-target restore role too (it owned only this database,
+            // now gone). Best effort: if the database was tenant-owned there is
+            // no such role and DROP ROLE IF EXISTS is a no-op.
+            $this->runtime->exec(array_merge(
+                ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/psql'],
+                ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
+                ['-U', $this->config->postgresqlUser, '--no-password', '-tAc',
+                    'DROP ROLE IF EXISTS "' . $this->restoreRoleFor($target) . '"', 'postgres'],
+            ), null, 30);
         } finally {
             ($this->cleanup($pgpass))();
         }
