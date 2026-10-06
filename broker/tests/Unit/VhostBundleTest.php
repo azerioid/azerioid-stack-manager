@@ -145,6 +145,40 @@ final class VhostBundleTest extends TestCase
         $bundle->restore(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local', 'bundle' => $out['bundle'], 'apply' => true, 'confirm' => 'yes']);
     }
 
+    public function test_restore_refuses_a_substituted_config_part(): void
+    {
+        // A74: a backup-storage writer swaps the config part for a different
+        // valid same-passphrase blob. The authenticated manifest's sha256 must
+        // catch it (AEAD alone does not — the GCM AAD binds no part identity).
+        $bundle = new VhostBundle($this->cfg, $this->rt);
+        $out = $bundle->run(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local']);
+        $dir = '/var/lib/azerioid-panel/backups/vhost/shop.test/' . $out['bundle'];
+        $this->rt->files["{$dir}/config.lacmp2.bin"] = ArchiveCipher::encryptBlob('{"tampered":true}', self::PASS);
+
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('manifest checksum');
+        $bundle->restore(self::DOMAIN, [
+            'passphrase' => self::PASS, 'destination' => 'local', 'bundle' => $out['bundle'],
+            'parts' => ['config'], 'apply' => true, 'confirm' => 'SHOP.TEST',
+        ]);
+    }
+
+    public function test_restore_refuses_a_substituted_files_part(): void
+    {
+        // A74: same, via BackupRestore's expected_sha256 gate on the files part.
+        $bundle = new VhostBundle($this->cfg, $this->rt);
+        $out = $bundle->run(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local']);
+        $dir = '/var/lib/azerioid-panel/backups/vhost/shop.test/' . $out['bundle'];
+        $this->rt->files["{$dir}/files.lacmp2.bin"] = ArchiveCipher::encryptBlob('not the real tarball', self::PASS);
+
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('manifest checksum');
+        $bundle->restore(self::DOMAIN, [
+            'passphrase' => self::PASS, 'destination' => 'local', 'bundle' => $out['bundle'],
+            'parts' => ['files'], 'apply' => true, 'confirm' => 'SHOP.TEST',
+        ]);
+    }
+
     public function test_a_bundle_cannot_be_restored_into_another_domain(): void
     {
         $bundle = new VhostBundle($this->cfg, $this->rt);

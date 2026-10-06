@@ -53,6 +53,23 @@ final class BackupRestore
         }
         $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
 
+        // A74: when the caller holds an authenticated manifest (a vhost bundle),
+        // verify the decrypted part against the sha256 the manifest recorded for
+        // it. Each part is AEAD-encrypted, so tampering without the passphrase
+        // already fails; but a backup-storage writer can SUBSTITUTE one valid
+        // same-passphrase blob for another (an older part, or a different
+        // domain's) because the GCM AAD binds only the per-part header, not the
+        // part's identity. The manifest checksum is the binding of which content
+        // belongs to this part; enforce it.
+        $expectedSha = trim((string) ($input['expected_sha256'] ?? ''));
+        if ($expectedSha !== '' && !hash_equals($expectedSha, hash('sha256', $plain))) {
+            throw new BrokerException(
+                'Backup part does not match its manifest checksum; refusing to restore a substituted '
+                . 'or corrupted part.',
+                2
+            );
+        }
+
         $storage = $destination === '' ? 'spaces' : $destination;
         if ($action === 'backup.restore.db') {
             return $this->restoreDb($runtime, $config, $plain, $input) + [
