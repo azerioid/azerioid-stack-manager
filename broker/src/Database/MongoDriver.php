@@ -39,7 +39,7 @@ final class MongoDriver implements DatabaseDriver
         $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 30);
         if (!$result->ok()) {
             throw new BrokerException(
-                trim($result->stderr) !== '' ? trim($result->stderr) : 'mongosh listDatabases failed.',
+                trim($result->stderr) !== '' ? $this->redact(trim($result->stderr)) : 'mongosh listDatabases failed.',
                 1
             );
         }
@@ -217,7 +217,7 @@ final class MongoDriver implements DatabaseDriver
         $stderr = trim($result->stderr);
         if (!$result->ok()) {
             throw new BrokerException(
-                $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : $what . ' failed.'),
+                $stderr !== '' ? $this->redact($stderr) : ($stdout !== '' ? $this->redact($stdout) : $what . ' failed.'),
                 1
             );
         }
@@ -228,7 +228,7 @@ final class MongoDriver implements DatabaseDriver
             $decoded = $this->decodeJsonObject($stdout);
         } catch (BrokerException) {
             if (preg_match('/MongoServerError|MongoError/i', $stdout . "\n" . $stderr) === 1) {
-                throw new BrokerException($stdout !== '' ? $stdout : $stderr, 1);
+                throw new BrokerException($this->redact($stdout !== '' ? $stdout : $stderr), 1);
             }
 
             return;
@@ -251,6 +251,19 @@ final class MongoDriver implements DatabaseDriver
     private function mongoshArgv(): array
     {
         return ['/usr/bin/mongosh', '--quiet'];
+    }
+
+    /**
+     * A68: the admin password travels in the stdin script now, so if mongosh
+     * ever echoes a source line on error its stderr/stdout could carry the
+     * secret into a BrokerException and the operation log. Strip the known
+     * password from any mongosh output before it is surfaced.
+     */
+    private function redact(string $text): string
+    {
+        $pass = $this->config->mongodbPassword;
+
+        return $pass !== '' ? str_replace($pass, '[redacted]', $text) : $text;
     }
 
     private function mongoshScript(string $eval): string
