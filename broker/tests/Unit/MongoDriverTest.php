@@ -72,6 +72,28 @@ final class MongoDriverTest extends TestCase
 
     private FakeRuntime $runtime;
 
+    public function test_mongosh_output_echoing_the_password_is_redacted_in_errors(): void
+    {
+        // A68: if mongosh echoes the stdin script (which carries the password)
+        // into stderr on error, the surfaced BrokerException must not leak it.
+        $runtime = new FakeRuntime();
+        $driver = new MongoDriver($this->config(), $runtime);
+        $pass = $this->config()->mongodbPassword;
+        $runtime->script(
+            ['/usr/bin/mongosh', '--quiet'],
+            1,
+            '',
+            'SyntaxError near .auth("azerioid_panel_admin", "' . $pass . '")'
+        );
+        try {
+            $driver->list();
+            $this->fail('expected a mongosh failure');
+        } catch (BrokerException $e) {
+            $this->assertStringNotContainsString($pass, $e->getMessage());
+            $this->assertStringContainsString('[redacted]', $e->getMessage());
+        }
+    }
+
     private function driver(): MongoDriver
     {
         $this->runtime = new FakeRuntime();

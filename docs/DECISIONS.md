@@ -1812,3 +1812,11 @@ authenticates and runs (`listDatabases.ok = 1`), a wrong password throws `Authen
 nothing, and the password never reaches argv (unit test asserts the invocation is exactly
 `['/usr/bin/mongosh','--quiet']`). This is a broker action (fresh process), so it applies on the release that
 ships it — no self-update bootstrap gap.
+
+## A68 erratum — redact the Mongo password from surfaced errors
+
+Follow-up to A68 (v2.8.15). With the password moved into the stdin script, a mongosh error that echoes the
+offending source line could carry the secret into its stderr/stdout, which `MongoDriver` surfaces in a
+`BrokerException` (and thence the operation log). `redact()` now strips the known password from any mongosh
+output before it is placed in an exception message; raw output is still used for JSON parsing. Regression test
+asserts a mongosh error whose stderr contains the password is surfaced as `[redacted]`.
