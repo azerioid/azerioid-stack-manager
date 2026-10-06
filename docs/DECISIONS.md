@@ -1987,3 +1987,13 @@ traverse (but that holds a readable secret) is removed, target intact. The sweep
 `ensure` it rides on (ADR A72 accepted best-effort ceiling): coupling it to `ensure` success would break
 Terminal/File Manager/restore on any hiccup, which is disproportionate for a defense-in-depth control layered
 over the isolation model.
+
+## A73 — apt source lists world-readable (quiet command-not-found in site shells)
+
+`repos.sh` wrote `/etc/apt/sources.list.d/{caddy-stable,php-sury}.list` with a plain `echo >`, so their mode
+followed the install-time umask. On a host provisioned under a restrictive umask they landed `0600`; apt reads
+them as root so packaging worked, but Ubuntu's `command-not-found` handler runs as the invoking (site) user,
+could not read them, and printed `WARNING:root:could not open file … Permission denied` into every vhost
+Terminal session on an unknown command. These files hold only a public repo URL (no secret) and are
+conventionally `0644`. **Fix (v2.8.29):** `repos.sh` now `chmod 0644` each list explicitly, independent of the
+ambient umask. Existing fleet hosts were remediated in place with the same `chmod`.
