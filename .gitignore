@@ -15,4 +15,5 @@
 __pycache__/
 *.pyc
 web/lib/
-/.idea/
+/.idea//CLAUDE.md
+/.claude/
