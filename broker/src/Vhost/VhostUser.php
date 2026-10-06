@@ -101,7 +101,7 @@ final class VhostUser
         }
 
         self::applyOwnership($runtime, $root, $username, $group);
-        self::claimTop($runtime, $config, $root, $username, $group);
+        self::claimTop($runtime, $config, $domain, $root, $username, $group);
         self::reclaimCronLogs($runtime, $username, $group);
         self::record($runtime, $config, $domain, $username, $root);
         if ($changed) {
@@ -189,7 +189,7 @@ final class VhostUser
      * open to every other site until the isolation converge closed it (A49-E1). Only a
      * directory root still owns is taken — one another account owns may be shared.
      */
-    private static function claimTop(Runtime $runtime, Config $config, string $root, string $username, string $group): void
+    private static function claimTop(Runtime $runtime, Config $config, string $domain, string $root, string $username, string $group): void
     {
         $www = rtrim($config->wwwRoot, '/') . '/';
         if ($runtime->getuid() !== 0 || !str_starts_with($root, $www)) {
@@ -199,12 +199,43 @@ final class VhostUser
         if ($top === rtrim($root, '/') || !$runtime->isDir($top)) {
             return;
         }
+        // A62: never claim a top directory another site's docroot lives under —
+        // that would hand the sibling's tree to this identity (A49-E1).
+        if (self::topSharedByAnotherSite($runtime, $config, $domain, $top)) {
+            return;
+        }
         $owner = trim($runtime->exec(['/usr/bin/stat', '-c', '%u', $top], null, 10)->stdout);
         if ($owner !== '0') {
             return;
         }
         $runtime->exec(['/usr/bin/chown', '-h', $username . ':' . $group, $top], null, 30);
         $runtime->exec(['/usr/bin/chmod', '2770', $top], null, 30);
+    }
+
+    /**
+     * A62: is the directory $top the root of, or an ancestor of, another site's
+     * docroot? Per ADR A49-E1 a directory shared by two sites is not the isolation
+     * unit — the docroot is. claimTop / SitePool must not hand a shared top to one
+     * site, or that site owns the sibling's tree. Checks the recorded roots.
+     */
+    public static function topSharedByAnotherSite(Runtime $runtime, Config $config, string $domain, string $top): bool
+    {
+        $topS = rtrim($top, '/');
+        $meta = self::load($runtime, self::metadataPath($runtime, $config));
+        foreach ($meta['users'] as $otherDomain => $info) {
+            if ($otherDomain === $domain) {
+                continue;
+            }
+            $root = rtrim((string) ($info['root'] ?? ''), '/');
+            if ($root === '') {
+                continue;
+            }
+            if ($root === $topS || str_starts_with($root . '/', $topS . '/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
