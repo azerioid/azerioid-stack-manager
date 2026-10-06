@@ -85,6 +85,11 @@ install_caddy_repo() {
                 /usr/share/keyrings/caddy-stable-archive-keyring.gpg
             echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/${DISTRO_FAMILY} any-version main" \
                 > /etc/apt/sources.list.d/caddy-stable.list
+            # apt reads this as root, but it holds only a public repo URL and
+            # tools like command-not-found read it as an unprivileged user —
+            # keep it world-readable (apt convention) regardless of the install
+            # umask, which otherwise left it 0600 and spammed site shells.
+            chmod 0644 /etc/apt/sources.list.d/caddy-stable.list
             ;;
         el)
             # Official Caddy docs for RHEL/CentOS use COPR. Cloudsmith rpm/el/$releasever
@@ -106,6 +111,7 @@ install_php_repo() {
                 /usr/share/keyrings/php-sury-archive-keyring.gpg
             echo "deb [signed-by=/usr/share/keyrings/php-sury-archive-keyring.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
                 > /etc/apt/sources.list.d/php-sury.list
+            chmod 0644 /etc/apt/sources.list.d/php-sury.list
             ;;
         el)
             # A66: import Remi's signing key pinned by fingerprint, then install
