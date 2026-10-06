@@ -208,6 +208,27 @@ final class VhostUser
     }
 
     /**
+     * A47/A61: refuse to operate on a path whose components below a trusted base
+     * are symlinks. Root routines that chown/chmod/write fixed names inside a
+     * site-owned home (Docker/PM2 homes) would otherwise follow a symlink the
+     * site planted there and land the operation on an arbitrary host path. $base
+     * must be a root-controlled directory; every segment of $path beneath it,
+     * $path included, must be a real (non-symlink) entry.
+     */
+    public static function assertNoSymlinkUnder(Runtime $runtime, string $base, string $path): void
+    {
+        $base = rtrim($base, '/');
+        $rel = $path === $base ? '' : substr($path, strlen($base) + 1);
+        $cur = $base;
+        foreach (array_filter(explode('/', trim($rel, '/')), static fn ($s) => $s !== '') as $seg) {
+            $cur .= '/' . $seg;
+            if ($runtime->isLink($cur)) {
+                throw new BrokerException('Refusing to follow a symlink at ' . $cur . ' under ' . $base . '.', 3);
+            }
+        }
+    }
+
+    /**
      * Refuse to let a new domain adopt an identity recorded for a different one.
      * Two domains that collapse to the same slug would otherwise share a uid.
      */

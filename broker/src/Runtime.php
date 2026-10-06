@@ -59,6 +59,9 @@ interface Runtime
 
     public function isDir(string $path): bool;
 
+    /** True if $path is a symlink (lstat; does not follow). */
+    public function isLink(string $path): bool;
+
     public function mkdir(string $path, int $mode = 0755): void;
 
     public function listDir(string $path): array;

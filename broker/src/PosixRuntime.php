@@ -343,6 +343,11 @@ final class PosixRuntime implements Runtime
         return is_dir($path);
     }
 
+    public function isLink(string $path): bool
+    {
+        return is_link($path);
+    }
+
     public function mkdir(string $path, int $mode = 0755): void
     {
         if (is_dir($path)) {

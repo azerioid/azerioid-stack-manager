@@ -113,10 +113,14 @@ final class SiteDocker
         $this->runtime->chown(self::HOME_BASE, 'root', 'root');
         $this->runtime->chmod(self::HOME_BASE, 0711);
         foreach ([$home, $home . '/.config', $home . '/.local', $home . '/.local/share'] as $dir) {
+            // A61: the site owns $home, so it can swap these fixed subdirs for a
+            // symlink. Refuse symlinked components and chown without dereferencing,
+            // so root never chowns an arbitrary target the site pointed at.
+            VhostUser::assertNoSymlinkUnder($this->runtime, self::HOME_BASE, $dir);
             if (!$this->runtime->isDir($dir)) {
                 $this->runtime->mkdir($dir, 0700);
             }
-            $this->runtime->chown($dir, $user, $group);
+            $this->runtime->exec(['/usr/bin/chown', '-h', $user . ':' . $group, $dir], null, 15);
         }
         $this->runtime->chmod($home, 0700);
 
@@ -159,6 +163,9 @@ final class SiteDocker
             return $info->ok() && str_contains($info->stdout, 'rootless');
         }, 60, "the rootless Docker daemon of {$domain}");
 
+        // A61: the ready marker lives in the site-owned home; refuse a symlink in
+        // its place so root does not truncate/overwrite an arbitrary file.
+        VhostUser::assertNoSymlinkUnder($this->runtime, self::HOME_BASE, $home . '/' . self::READY);
         $this->runtime->writeFile($home . '/' . self::READY, $this->runtime->now() . "\n", 0600);
     }
 

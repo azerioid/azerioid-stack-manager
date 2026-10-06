@@ -800,12 +800,17 @@ final class Pm2Manager
             $dirs = [SupervisedUser::HOME . '/pm2'];
         }
         $home = $this->pm2HomePath($domain);
+        // A61: both PM2_BASE and the supervised home are root-owned 0711/0750; the
+        // per-site PM2 home below them is site-owned, so refuse symlinked
+        // components and chown without dereferencing.
+        $base = $site ? self::PM2_BASE : SupervisedUser::HOME;
         foreach (array_merge($dirs, [$home, $home . '/logs', $home . '/pids', $home . '/modules']) as $dir) {
+            VhostUser::assertNoSymlinkUnder($this->runtime, $base, $dir);
             if (!$this->runtime->isDir($dir)) {
                 $this->runtime->mkdir($dir, $mode);
             }
             if ($this->runtime->getuid() === 0) {
-                $this->runtime->chown($dir, $user, $group);
+                $this->runtime->exec(['/usr/bin/chown', '-h', $user . ':' . $group, $dir], null, 15);
                 $this->runtime->chmod($dir, $mode);
             }
         }

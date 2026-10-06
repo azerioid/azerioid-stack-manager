@@ -1652,3 +1652,23 @@ panel-owned tree; deferred. With A60 the socket is unreachable by that pool rega
 
 **Validate before trusting on a host:** confirm Caddy still serves the panel (`verify-release.sh`
 `CHECK_PANEL_HTTP`) and that a gid-`caddy` process can no longer `connect()` the panel socket.
+
+## A61 — Root file ops in site-owned Docker/PM2 homes must not follow planted symlinks
+
+A58 deferred lead h02. `SiteDocker::ensure` and `Pm2Manager::ensurePm2Home` create a per-site home under a
+root-owned base (`/var/lib/azerioid-docker-home`, `/var/lib/azerioid-pm2`, both 0711), hand it to the site
+(0700), then on every later call (re-enable, A56 migration, PM2 setNode/reapply) loop over fixed subpaths
+(`.config`, `.local`, `.local/share`; `logs`, `pids`, `modules`) and `chown`/`chmod`/`writeFile` them. Those
+used PHP `chown`/`file_put_contents`, which follow symlinks. The site owns the home, so it can replace a
+subpath with a symlink and have root chown/overwrite an arbitrary target (e.g. `.config -> /etc`), or write
+the `.azerioid-ready` marker over any file.
+
+**Fix (v2.8.6).** Before each such op, `VhostUser::assertNoSymlinkUnder($base, $path)` walks every component
+beneath the root-owned base and refuses if any (final or intermediate) is a symlink (new `Runtime::isLink`,
+`lstat`-based, modelled in FakeRuntime). Ownership is then applied with `chown -h` (exec, no dereference) as
+defence for the final component. A real tree is unaffected; a planted symlink aborts the action.
+
+**Still deferred (same family, separate passes):** `DockerManager::ensureVolumeDirs` mutates (mkdir/chown)
+before `resolveUnderBase` and has a mkdir→chown TOCTOU; `VhostUser::applyOwnership`'s `find … -exec chmod`
+race; `OctaneManager` composer `/tmp`. These need a disposable-VM race/behaviour pass; A61 covers the
+straightforward fixed-path symlink-follow in the two home builders.
