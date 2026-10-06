@@ -1730,3 +1730,36 @@ root-owned 0711 base (`/var/lib/azerioid-octane`): others can traverse it but ca
 target cannot be pre-staged. Chown the per-run dir to the site with `-h`, and pass `--no-plugins` to
 `composer require`. The PanelUpdater self-update Composer `/tmp` variant remains open (it runs in the
 self-update path; see the bootstrap note) and is tracked separately.
+
+## A66 — Installer supply chain: verify Composer and pin repo keys
+
+Run-2 audit (web/ + deploy/) leads `deploy/composer-installer-no-integrity-check` and
+`deploy/repo-trust-root-unpinned-tofu`. Two root-executed acquisitions in the installer trusted whatever
+bytes a network fetch returned:
+
+- `packages.sh` piped `curl https://getcomposer.org/installer | php --` with no integrity check, so a
+  compromised origin/CDN, an active TLS MITM, or a redirecting resolver meant arbitrary code as root at
+  install time.
+- `repos.sh` defined `verify_gpg_key()` (and `REMI_GPG_URL`) but **never called them**: the Caddy and Sury
+  keys were `curl | gpg --dearmor` trust-on-first-use, and the EL Remi release RPM was installed by URL with
+  `|| true` swallowing failure. This directly contradicted **A10** (GPG fingerprint verification), which had
+  been dead code since it was written.
+
+**Fix (v2.8.11).**
+- Composer: fetch the installer to a temp file and compare its SHA-384 against Composer's published signature
+  (`composer.github.io/installer.sig`, a separate origin) before running it; abort on mismatch.
+- apt (Caddy, Sury): fetch each key to a temp file, verify it carries the pinned fingerprint
+  (`verify_gpg_key`, now wired via `fetch_verify_dearmor`), then dearmor into the keyring; abort on mismatch.
+  Pinned fingerprints — Caddy `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, Sury
+  `15058500A0235D97F5D10063B188E2B695BD4743` — were verified with gpg against both the live upstream key and
+  the key already trusted on the production host.
+- EL (Remi): import Remi's signing key pinned by fingerprint (`6B38FEA7231F87F52B9CA9D8555097595F11735A`,
+  from the corrected `RPM-GPG-KEY-remi2018` URL — the old `RPM-GPG-KEY-remirepo` URL 404s), then install
+  remi-release with `localpkg_gpgcheck=1` so dnf verifies the RPM against that key; the `|| true` is removed
+  so the step fails closed.
+- `verify-release.sh` gains `CHECK_REPO_KEYS_PINNED`: the installed Caddy/Sury keyrings must carry the pinned
+  fingerprints on the host.
+
+The `|| true` removal makes a previously-silent EL failure loud; this is the intended fail-closed posture and
+is exercised on the disposable EL host before release. The PanelUpdater self-update Composer `/tmp` variant
+(A65 note) remains tracked separately.

@@ -633,6 +633,25 @@ else
     echo "SFTP=not configured (opt-in; azerioid sftp enable <domain>)"
 fi
 
+# A66: repo signing keys must carry the pinned fingerprints (apt path). A
+# mismatch means a key other than the one the installer pins is trusted.
+if command -v gpg >/dev/null 2>&1; then
+    REPO_KEYS_OK=1
+    check_keyring() {
+        local file="$1" fpr="$2"
+        [[ -f "${file}" ]] || return 0  # repo not on this host; not applicable
+        gpg --show-keys --with-colons "${file}" 2>/dev/null \
+            | awk -F: '$1=="fpr"{print $10}' | grep -qiF "${fpr}" || REPO_KEYS_OK=0
+    }
+    check_keyring /usr/share/keyrings/caddy-stable-archive-keyring.gpg 65760C51EDEA2017CEA2CA15155B6D79CA56EA34
+    check_keyring /usr/share/keyrings/php-sury-archive-keyring.gpg 15058500A0235D97F5D10063B188E2B695BD4743
+    if [[ "${REPO_KEYS_OK}" == "1" ]]; then
+        echo "CHECK_REPO_KEYS_PINNED=pass"
+    else
+        echo "CHECK_REPO_KEYS_PINNED=fail"
+    fi
+fi
+
 echo "VERIFY_REMOTE_DONE"
 EOS
 )
