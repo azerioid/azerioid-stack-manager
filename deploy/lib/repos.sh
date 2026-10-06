@@ -4,7 +4,7 @@ set -euo pipefail
 
 CADDY_GPG_URL="https://dl.cloudsmith.io/public/caddy/stable/gpg.key"
 SURY_GPG_URL="https://packages.sury.org/php/apt.gpg"
-REMI_GPG_URL="https://rpms.remirepo.net/RPM-GPG-KEY-remi2018"
+REMI_GPG_URL="https://rpms.remirepo.net/RPM-GPG-KEY-remi2021"
 
 # A66: pinned primary fingerprints for each repo's signing key. Verified with
 # gpg against both the live upstream key and the key already trusted on the
@@ -12,7 +12,7 @@ REMI_GPG_URL="https://rpms.remirepo.net/RPM-GPG-KEY-remi2018"
 # code until now, so repo keys were trusted on first use.
 CADDY_GPG_FPR="65760C51EDEA2017CEA2CA15155B6D79CA56EA34"  # Caddy Web Server <contact@caddyserver.com>
 SURY_GPG_FPR="15058500A0235D97F5D10063B188E2B695BD4743"   # DEB.SURY.ORG Automatic Signing Key <deb@sury.org>
-REMI_GPG_FPR="6B38FEA7231F87F52B9CA9D8555097595F11735A"   # Remi's RPM repository <remi@remirepo.net>
+REMI_GPG_FPR="B1ABF71E14C9D74897E198A8B19527F1478F8947"   # Remi's RPM repository 2021 — signs remi-release
 
 # Import whatever key material <src> carries into a throwaway keyring, then
 # re-export ONLY the key whose fingerprint equals the pin, into <dest> (binary
@@ -25,14 +25,17 @@ REMI_GPG_FPR="6B38FEA7231F87F52B9CA9D8555097595F11735A"   # Remi's RPM repositor
 # hash preimage), and subkeys without a valid binding signature are dropped on
 # import.
 extract_pinned_key() {
-    local src="$1" fingerprint="$2" dest="$3" gnupg rc=0 primaries
+    local src="$1" fingerprint="$2" dest="$3" fmt="${4:-binary}" gnupg rc=0 primaries
+    local -a armor=()
+    # apt signed-by wants a binary keyring; rpm --import wants an armored key.
+    [[ "${fmt}" == "armor" ]] && armor=(--armor)
     gnupg="$(mktemp -d)"
     chmod 0700 "${gnupg}"
     if ! gpg --homedir "${gnupg}" --batch --quiet --import "${src}" 2>/dev/null; then
         rc=1
     elif ! gpg --homedir "${gnupg}" --batch --list-keys "${fingerprint}" >/dev/null 2>&1; then
         rc=1
-    elif ! gpg --homedir "${gnupg}" --batch --yes --export-options export-minimal \
+    elif ! gpg --homedir "${gnupg}" --batch --yes "${armor[@]}" --export-options export-minimal \
             --export "${fingerprint}" > "${dest}" 2>/dev/null || [[ ! -s "${dest}" ]]; then
         rc=1
     else
@@ -116,7 +119,7 @@ install_php_repo() {
                 echo "Failed to fetch Remi GPG key ${REMI_GPG_URL}" >&2
                 exit 1
             fi
-            if ! extract_pinned_key "${remi_raw}" "${REMI_GPG_FPR}" "${remi_key}"; then
+            if ! extract_pinned_key "${remi_raw}" "${REMI_GPG_FPR}" "${remi_key}" armor; then
                 rm -f "${remi_raw}" "${remi_key}"
                 echo "Remi GPG key does not yield pinned key ${REMI_GPG_FPR}; refusing." >&2
                 exit 1
