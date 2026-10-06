@@ -1963,3 +1963,15 @@ subsystem; a site can re-plant a symlink between touches, and an app can recreat
 until the next `ensure`. Within-site symlinks are still followed by caddy (a site reading its own files is not
 a boundary crossing). Full containment would need an upstream caddy option (`openat2(RESOLVE_BENEATH)`) or a
 per-site web server. A later continuous sweep can reuse `hardenContent` if the residual window proves to matter.
+
+### A72 erratum — run the content sweep as the site user, newline-safe
+
+The first A72 cut ran the symlink `mv` and `.env` `chmod` as **root** over a site-controlled tree, parsing
+`find` output on newlines: a filename with an embedded newline could inject a second path (arbitrary root file
+move), and a raced parent-directory swap could make root `mv`/`chmod` an arbitrary path (TOCTOU). Fixed
+(v2.8.27): `hardenContent` runs the whole sweep **as the site user** via `runuser` (the user owns the tree
+after `applyOwnership`), so a race can only reach files the site user could already touch — never a root
+arbitrary write; iteration uses `find -print0` with `read -d ''` (newline-safe); escaping symlinks are
+`rm`'d (the link only, target untouched) rather than moved to a root-owned quarantine. Validated on a real
+host: within-site links kept, escaping links removed with their targets intact, `.env` set 0600, and a
+site-user `chmod /etc/shadow` is refused (Operation not permitted) — confirming the sweep cannot escalate.
