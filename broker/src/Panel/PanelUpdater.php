@@ -854,7 +854,12 @@ final class PanelUpdater
         if (!$this->runtime->isDir($cacheDir)) {
             return;
         }
-        $this->runtime->exec(['/bin/chmod', '-R', 'o-rwx', $cacheDir], null, 30);
+        // Blocking the directory is sufficient and the smallest safe operation:
+        // caddy reaches config.php only by traversing this dir, so removing its
+        // "other" execute bit denies the read whatever mode the files carry. A
+        // single chmod on one known, panel-owned path — no `-R` walking a tree
+        // and dereferencing whatever symlinks it meets as root.
+        $this->runtime->exec(['/bin/chmod', '0750', $cacheDir], null, 15);
         $log->info('Locked bootstrap/cache against the web user (A69).');
     }
 

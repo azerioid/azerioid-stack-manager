@@ -219,11 +219,14 @@ final class AuditHardeningTest extends TestCase
 
         $locked = false;
         foreach ($rt->execLog as $e) {
-            if ($e['command'] === ['/bin/chmod', '-R', 'o-rwx', $prefix . '/web/bootstrap/cache']) {
+            // The directory itself is denied to "other" (caddy), which blocks
+            // traversal to config.php — a single chmod, no recursive symlink walk.
+            if ($e['command'] === ['/bin/chmod', '0750', $prefix . '/web/bootstrap/cache']) {
                 $locked = true;
             }
+            $this->assertNotSame('-R', $e['command'][1] ?? '', 'no recursive chmod as root over the cache tree');
         }
-        $this->assertTrue($locked, 'bootstrap/cache must be stripped of other-access after config:cache');
+        $this->assertTrue($locked, 'bootstrap/cache dir must be denied to the web user after config:cache');
     }
 
     public function test_web_root_rejects_control_characters(): void
