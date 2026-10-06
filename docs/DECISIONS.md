@@ -1766,10 +1766,14 @@ bytes a network fetch returned:
   Pinned fingerprints — Caddy `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, Sury
   `15058500A0235D97F5D10063B188E2B695BD4743` — were verified with gpg against both the live upstream key and
   the key already trusted on the production host.
-- EL (Remi): import Remi's signing key pinned by fingerprint (`6B38FEA7231F87F52B9CA9D8555097595F11735A`,
-  from the corrected `RPM-GPG-KEY-remi2018` URL — the old `RPM-GPG-KEY-remirepo` URL 404s), then install
-  remi-release with `localpkg_gpgcheck=1` so dnf verifies the RPM against that key; the `|| true` is removed
-  so the step fails closed.
+- EL (Remi): import the key that actually signs `remi-release` — fingerprint
+  `B1ABF71E14C9D74897E198A8B19527F1478F8947` from `RPM-GPG-KEY-remi2021` (verified on a real Rocky 9 host:
+  `remi-release-9.rpm` is signed by key id `B19527F1478F8947`; the old `RPM-GPG-KEY-remirepo` URL 404s and
+  `RPM-GPG-KEY-remi2018` is a different key) — as an **armored** key (`rpm --import` rejects a binary export;
+  `extract_pinned_key` takes a format argument), then install remi-release with `localpkg_gpgcheck=1` so dnf
+  verifies the RPM against that key; the `|| true` is removed so the step fails closed. Validated end to end
+  on Rocky 9.8: `rpm -K` reports `signatures OK` and a wrong pin is refused. The pin tracks Remi's current
+  signing key and must be updated if Remi rotates it (the failure is loud, not silent).
 - `verify-release.sh` gains `CHECK_REPO_KEYS_PINNED`: the installed Caddy/Sury keyrings must carry the pinned
   fingerprints on the host.
 
