@@ -160,6 +160,45 @@ final class BackupEngineTest extends TestCase
         $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
     }
 
+    public function test_postgres_restore_fails_closed_when_owner_is_the_admin(): void
+    {
+        // A71: a target owned by the connecting admin (e.g. a database created
+        // owned by the superuser) must not be restored as the admin.
+        $this->cfg->postgresqlUser = 'pgadmin';
+        $this->rt->execFn = static fn (array $c, ?string $s): ?ExecResult =>
+            in_array('-tAc', $c, true) && str_contains(implode(' ', $c), 'pg_get_userbyid')
+                ? new ExecResult($c, 0, "pgadmin\n", '')
+                : null;
+        $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $this->expectException(BrokerException::class);
+        $engine->restoreCommandFor('shop', 'PGDMP' . "\x01\x0e");
+    }
+
+    public function test_postgres_prepare_target_creates_new_db_owned_by_restore_role(): void
+    {
+        // A71: a fresh restore target is owned by the unprivileged restore role,
+        // not the superuser, so the subsequent restore cannot create
+        // superuser-owned objects.
+        $engine = new PostgreSqlBackupEngine($this->cfg, $this->rt);
+        $engine->prepareTarget('freshdb');
+
+        $createdb = null;
+        $ensuredRole = false;
+        foreach ($this->rt->execLog as $e) {
+            $cmd = $e['command'] ?? [];
+            if (in_array('/usr/bin/createdb', $cmd, true)) {
+                $createdb = $cmd;
+            }
+            if (str_contains(implode(' ', $cmd), 'CREATE ROLE') && str_contains(implode(' ', $cmd), PostgreSqlBackupEngine::RESTORE_ROLE)) {
+                $ensuredRole = true;
+            }
+        }
+        $this->assertNotNull($createdb, 'createdb must run for a new target');
+        $this->assertContains('-O', $createdb);
+        $this->assertContains(PostgreSqlBackupEngine::RESTORE_ROLE, $createdb);
+        $this->assertTrue($ensuredRole, 'the unprivileged restore role must be ensured');
+    }
+
     public function test_postgres_restore_runs_under_the_db_owner_role(): void
     {
         // A71: a tenant dump can carry a SECURITY DEFINER function; a plain

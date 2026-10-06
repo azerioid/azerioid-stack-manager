@@ -1907,3 +1907,15 @@ restore — the exact escalation the guard prevents (fail-open state drift). `pr
 **aborts the restore** instead. `--role` is still dropped only when the resolved owner is the admin role
 itself (an admin-owned database restored by the admin — same principal). Regression test asserts an unknown
 owner throws.
+
+### A71 erratum 2 — fresh targets owned by an unprivileged role; refuse admin-owned targets
+
+The owner==admin branch was still a hole: a restore into a **new** database (a supported flow) had
+`prepareTarget` create it with `createdb` owned by the connecting superuser, so the restore ran as the
+superuser and a `SECURITY DEFINER` object became superuser-owned. New PostgreSQL databases grant PUBLIC
+CONNECT and PUBLIC EXECUTE by default, so any tenant could then call it. **Fix (v2.8.23):** a dedicated
+unprivileged role `azerioid_restore` (NOSUPERUSER/NOLOGIN, ensured idempotently) owns every fresh restore
+target (`createdb -O azerioid_restore`), and the restore runs under the target's owning role; an owner that is
+unknown **or the connecting admin** now aborts the restore. So objects always land owned by a role with no
+privileges a tenant could abuse. Validated end to end on a real PostgreSQL: a `SECURITY DEFINER` function in a
+dump restored into a fresh database is owned by `azerioid_restore` (rolsuper = false).
