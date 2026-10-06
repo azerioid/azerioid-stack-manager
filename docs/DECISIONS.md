@@ -1522,3 +1522,66 @@ enabled the default site gets the fix when `azerioid panel default-site set --mo
 
 **Lesson, again:** a check must reproduce the failing client, not a convenient stand-in for it.
 
+
+## A58 — Broker hardening pass from the first source audit (`broker/src`)
+
+The first full source audit of the root-privileged broker (scope `broker/src`, no prior runs) produced 18
+`needs_validation` leads: paths where a **lower-trust principal** — a site identity (`az-vh-*` code, its
+SFTP/cron/programs/containers), the Caddy service account, a backup-storage writer, or another local user —
+could reach root or another tenant. None reached `confirmed`: the audit host was macOS, which cannot provide
+the OS-enforced sandbox (no memory limit, no Docker, no PHP image) the workflow requires to run target code,
+so every lead is source-grounded but not yet host-demonstrated. The panel user is root-equivalent by design
+(A39: `cron.set`, `component.install`, `panel.update.apply`), so panel-only paths are same-principal and were
+not treated as findings.
+
+This release fixes the subset that is a clear, contained, conservative source change with a FakeRuntime
+regression test. The fixes assert the broker emits the safe behaviour; they are **not** validated on a real
+host (see the open items below).
+
+**Fixed (v2.8.3):**
+
+1. **Root children no longer use a lower-trust HOME.** `PosixRuntime::childEnv` pinned HOME/XDG to
+   `/var/lib/caddy` when present — a directory the Caddy account owns, so root `git`/`curl`/`gpg` would read
+   its config. HOME is now the root-owned `/var/lib/azerioid-broker`, with `GIT_CONFIG_GLOBAL=/dev/null`,
+   `GIT_CONFIG_NOSYSTEM=1`, `CURL_HOME`, `GNUPGHOME`, `PYTHONNOUSERSITE=1`. The caddy CLI keeps its own env
+   via `CaddyCli::dataEnvPrefix`.
+2. **Secret files are created at their final mode.** `PosixRuntime::writeFile` wrote content then chmod'd,
+   leaving `sasl_passwd` and the Dovecot passwd-file briefly 0644. It now writes a private temp file in the
+   same directory and renames it over the target.
+3. **Web-root / supervised-directory values reject control characters,** on input and on the
+   `realpath()`-resolved result, so a site-planted symlink whose target name contains a newline cannot break
+   out of a line in a rendered Caddy/Apache/nginx or supervisor config.
+4. **Database restore refuses unauthenticated legacy archives** (LACMP1/LCMP1) unless an explicit
+   `allow_legacy_unauthenticated` opt-in is set, matching the deep-verify control. An IV-flip of a legacy DB
+   dump could otherwise become a `\!` shell escape in the root `mysql`/`psql` client.
+5. **File restore stages into a fresh, unique directory** (removed after apply) instead of a fixed
+   `restore-<site>` path, so symlinks left by an earlier archive cannot defeat `ArchiveGuard`'s lexical,
+   empty-root link check.
+6. **The supervised log directory stays root-owned** (`root:azerioid-supervised`, group-readable). root
+   `supervisord` writes those logs itself; the account owning the directory let it swap a logfile for a
+   symlink and have root append to any host file.
+7. **Vhost creation rejects an identity-name collision.** Distinct domains that slug to the same `az-vh-`
+   account (e.g. `blog.example.com` / `blog-example.com`) are refused rather than silently sharing one uid,
+   group, pool, SFTP key file and deploy/Docker state.
+8. **Vhost deletion revokes SFTP keys and ends the identity's processes.** `deprovision` now deletes
+   `KEY_DIR/<username>` (so a re-created domain does not inherit a former tenant's keys) and runs
+   `pkill -TERM/-KILL -u` before `userdel` (so a surviving session does not carry into the reused uid).
+
+**Open — require a disposable-VM validation pass before a fix ships** (behaviour depends on real OS/tool
+semantics, or the sink is high-blast-radius self-update code; all remain `needs_validation`):
+
+- Symlink-following root `chown`/`chmod`/`setfacl`/write in site-owned Docker/PM2 homes, Docker volume dirs,
+  supervised program dirs and reused stored docroots (needs `lchown`/`-h`/`openat` redesign).
+- `find … -exec chmod` TOCTOU race in `VhostUser::applyOwnership`.
+- `ttyd` on shared loopback with no credential and the session id in argv.
+- `pg_restore --no-owner` as the superuser admin (restore as the owning role).
+- DB admin passwords on `mongosh`/`mariadb`/`psql` argv.
+- Composer `COMPOSER_HOME` in shared `/tmp` during panel self-update and Octane enable.
+- Shared-top directory handed to one site by `claimTop`/`SitePool`.
+- Panel `bootstrap/cache/config.php` left world-readable under a Caddy-traversable tree after self-update.
+- Caddy access-log creation following a web_user-planted symlink (needs the attacker to run as `caddy` first).
+
+The full audit (`REPORT.md`, `NEEDS-VALIDATION.md`, coverage ledger, per-lead traces and validation plans)
+is kept outside the repo at `~/audits/azerioid-panel/run-1/`. A follow-up run should start with the three
+critic-accepted units deferred for budget, chiefly the Adminer / shared-pool PHP-FPM socket → panel identity
+path.

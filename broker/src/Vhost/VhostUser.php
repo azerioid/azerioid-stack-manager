@@ -67,6 +67,14 @@ final class VhostUser
 
         $username = self::username($domain);
         $group = self::groupName($domain);
+
+        // A47: the identity name is a lossy slug of the domain (every non-[a-z0-9]
+        // run collapses to '-'), so distinct domains such as blog.example.com and
+        // blog-example.com derive the same az-vh- account. Refuse to adopt an
+        // account already recorded for a DIFFERENT domain: otherwise two tenants
+        // would share one uid, group, pool, SFTP key file and deploy/Docker state.
+        self::assertNoIdentityCollision($runtime, $config, $domain, $username);
+
         $exists = self::userExists($runtime, $username);
 
         if ($exists && self::primaryGroup($runtime, $username) === self::LEGACY_GROUP) {
@@ -117,12 +125,28 @@ final class VhostUser
             $username = self::username($domain);
         }
         if ($username !== '' && self::userExists($runtime, $username)) {
+            // A47: end the identity's processes before freeing its uid. useradd
+            // --system reuses a just-freed uid, so a surviving SFTP session or a
+            // detached cron/PHP child would otherwise keep running under the uid the
+            // next vhost is created with. The isolation migrator already does this.
+            $runtime->exec(['/usr/bin/pkill', '-TERM', '-u', $username], null, 10);
+            $runtime->exec(['/usr/bin/pkill', '-KILL', '-u', $username], null, 10);
             $runtime->exec(['/usr/sbin/userdel', '--force', $username], null, 30);
         }
         // userdel keeps a user-private group that still has members, and the readers
         // are members of every vhost group.
         if ($username !== '' && str_starts_with($username, self::PREFIX) && self::groupExists($runtime, $username)) {
             $runtime->exec(['/usr/sbin/groupdel', $username], null, 30);
+        }
+        // A47: remove the SFTP authorized-keys file keyed by this username. The
+        // username derives only from the domain, so if the domain is re-created the
+        // former tenant's keys would otherwise re-authorize against the new identity
+        // once SFTP is enabled again. sshd reads KEY_DIR/%u.
+        if ($username !== '' && str_starts_with($username, self::PREFIX)) {
+            $keyFile = \AzerioidPanel\Broker\Sftp\SftpManager::KEY_DIR . '/' . $username;
+            if ($runtime->fileExists($keyFile)) {
+                $runtime->deleteFile($keyFile);
+            }
         }
         unset($meta['users'][$domain]);
         self::save($runtime, $path, $meta);
@@ -181,6 +205,29 @@ final class VhostUser
         }
         $runtime->exec(['/usr/bin/chown', '-h', $username . ':' . $group, $top], null, 30);
         $runtime->exec(['/usr/bin/chmod', '2770', $top], null, 30);
+    }
+
+    /**
+     * Refuse to let a new domain adopt an identity recorded for a different one.
+     * Two domains that collapse to the same slug would otherwise share a uid.
+     */
+    private static function assertNoIdentityCollision(Runtime $runtime, Config $config, string $domain, string $username): void
+    {
+        $path = dirname($config->managedComponentsPath) . '/vhost-users.json';
+        $meta = self::load($runtime, $path);
+        foreach ($meta['users'] as $recordedDomain => $info) {
+            if ($recordedDomain === $domain) {
+                continue;
+            }
+            if ((string) ($info['username'] ?? '') === $username) {
+                throw new BrokerException(
+                    "Vhost identity '{$username}' is already in use by '{$recordedDomain}'. "
+                    . "The domain '{$domain}' maps to the same system account; choose a domain "
+                    . 'that does not collide after slug normalisation.',
+                    2
+                );
+            }
+        }
     }
 
     /**

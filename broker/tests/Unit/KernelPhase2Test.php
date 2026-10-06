@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace AzerioidPanel\Broker\Tests;
 
 use AzerioidPanel\Broker\ArchiveCrypto;
+use AzerioidPanel\Broker\Backup\ArchiveCipher;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\Kernel;
@@ -372,7 +373,7 @@ final class KernelPhase2Test extends TestCase
     public function test_restore_db_into_new_name(): void
     {
         $plain = "CREATE TABLE t (id int);\n";
-        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCrypto::encrypt($plain, 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob($plain, 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $rt->dbRows = [];
         [$code, $json] = $this->capture(
@@ -387,9 +388,33 @@ final class KernelPhase2Test extends TestCase
         $this->assertStringContainsString('CREATE DATABASE IF NOT EXISTS `projob_restore_1`', $sql);
     }
 
+    public function test_restore_db_refuses_unauthenticated_legacy_archive(): void
+    {
+        // A47: a legacy LACMP1 (unauthenticated AES-CBC) DB archive could be
+        // IV-flipped by a bucket writer into a `\!` shell escape for the root mysql
+        // client. Live restore must refuse it (deep verify already does).
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/legacy.bin', ArchiveCrypto::encrypt("CREATE TABLE t (id int);\n", 'abcdefghijklmnopqrst'));
+        $rt = new FakeRuntime();
+        [$code, $json] = $this->capture(
+            $this->kernel($rt),
+            ['broker', 'backup.restore.db', 'azerioid/db/all/legacy.bin'],
+            $this->stdin() + ['target' => 'legacy_restore']
+        );
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('legacy', strtolower((string) ($json['error'] ?? '')));
+
+        // ...unless an operator explicitly opts in for a trusted old archive.
+        [$code2] = $this->capture(
+            $this->kernel($rt),
+            ['broker', 'backup.restore.db', 'azerioid/db/all/legacy.bin'],
+            $this->stdin() + ['target' => 'legacy_restore', 'allow_legacy_unauthenticated' => true]
+        );
+        $this->assertSame(0, $code2);
+    }
+
     public function test_restore_db_refuses_existing_without_overwrite(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCrypto::encrypt('-- dump --', 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob('-- dump --', 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $rt->dbRows = [['Database' => 'projob']];
         [$code, $json] = $this->capture(
@@ -403,7 +428,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_refuses_projob_without_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $cfg = new Config();
         $cfg->readonlyVhosts = ['projob.az', 'www.projob.az'];
@@ -420,7 +445,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_projob_requires_typed_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCrypto::encrypt(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $rt->dirs['/data/www/projob.az'] = true;
         $rt->dirs['/var/lib/azerioid-panel/staging/restore-projob.az/projob.az'] = true;
