@@ -36,7 +36,7 @@ final class MongoDriver implements DatabaseDriver
             throw new BrokerException('MongoDB is not configured in broker.json.', 3);
         }
         $eval = 'JSON.stringify(db.adminCommand({listDatabases:1}))';
-        $result = $this->runtime->exec($this->mongoshArgv($eval), null, 30);
+        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 30);
         if (!$result->ok()) {
             throw new BrokerException(
                 trim($result->stderr) !== '' ? trim($result->stderr) : 'mongosh listDatabases failed.',
@@ -178,7 +178,7 @@ final class MongoDriver implements DatabaseDriver
                 . '});'
                 . 'print(JSON.stringify({users: users}));'
                 . '})()';
-            $result = $this->runtime->exec($this->mongoshArgv($js), null, 30);
+            $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($js), 30);
             if (!$result->ok()) {
                 return [];
             }
@@ -207,7 +207,7 @@ final class MongoDriver implements DatabaseDriver
 
     private function mongoshMutate(string $eval, string $what): void
     {
-        $result = $this->runtime->exec($this->mongoshArgv($eval), null, 60);
+        $result = $this->runtime->exec($this->mongoshArgv(), $this->mongoshScript($eval), 60);
         $this->requireMongoshOk($result, $what);
     }
 
@@ -238,21 +238,27 @@ final class MongoDriver implements DatabaseDriver
         }
     }
 
-    /** @return list<string> */
-    private function mongoshArgv(string $eval): array
+    /**
+     * A68: credentials and the script go in on stdin, never on argv. mongosh -p
+     * <password> put the admin password on the child's command line, readable
+     * via /proc/<pid>/cmdline by any local user (e.g. a site identity) for the
+     * life of the call. mongosh executes a script piped on stdin; the script
+     * authenticates in-session with db.auth(), so neither the password nor the
+     * operation ever appears in argv.
+     *
+     * @return list<string>
+     */
+    private function mongoshArgv(): array
     {
-        return [
-            '/usr/bin/mongosh',
-            '--quiet',
-            '-u',
-            $this->config->mongodbUser,
-            '-p',
-            $this->config->mongodbPassword,
-            '--authenticationDatabase',
-            'admin',
-            '--eval',
-            $eval,
-        ];
+        return ['/usr/bin/mongosh', '--quiet'];
+    }
+
+    private function mongoshScript(string $eval): string
+    {
+        $user = json_encode($this->config->mongodbUser, JSON_THROW_ON_ERROR);
+        $pass = json_encode($this->config->mongodbPassword, JSON_THROW_ON_ERROR);
+        return 'if (!db.getSiblingDB("admin").auth(' . $user . ', ' . $pass . ')) {'
+            . ' throw new Error("MongoDB authentication failed"); }' . "\n" . $eval;
     }
 
     /** @return array<string, mixed> */

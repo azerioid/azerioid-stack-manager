@@ -91,11 +91,20 @@ final class MongoDriverTest extends TestCase
     private function lastEval(FakeRuntime $rt): string
     {
         $this->assertNotEmpty($rt->execLog);
-        $cmd = $rt->execLog[array_key_last($rt->execLog)]['command'];
-        $i = array_search('--eval', $cmd, true);
-        $this->assertNotFalse($i);
+        $entry = $rt->execLog[array_key_last($rt->execLog)];
+        // A68: the script and credentials travel on stdin, never argv.
+        $this->assertSame(['/usr/bin/mongosh', '--quiet'], $entry['command']);
+        foreach ($entry['command'] as $arg) {
+            $this->assertStringNotContainsString(
+                $this->config()->mongodbPassword,
+                (string) $arg,
+                'the mongo password must never appear on argv (/proc/<pid>/cmdline)'
+            );
+        }
+        $this->assertNotNull($entry['stdin']);
+        $this->assertStringContainsString('.auth(', (string) $entry['stdin']);
 
-        return (string) $cmd[$i + 1];
+        return (string) $entry['stdin'];
     }
 
     /** @return array{0:int,1:array} */
