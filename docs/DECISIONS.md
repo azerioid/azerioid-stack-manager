@@ -1937,3 +1937,29 @@ database), and `prepareTarget` runs `REVOKE ALL ON DATABASE <target> FROM PUBLIC
 reachable by any role until the operator grants access (new databases grant PUBLIC CONNECT by default).
 Validated on a real PostgreSQL: the per-target role is unique, and the database ACL loses its PUBLIC CONNECT
 entry after the revoke.
+
+## A72 — Caddy file_server cross-site symlink reads; per-site content hardening
+
+A58 deferred lead, confirmed on caddy v2.11.4: `file_server` **follows symlinks that escape the docroot**
+(validated serving a sibling-dir file and `/etc/passwd` through planted symlinks). A site identity owns its
+docroot and caddy is a member of every `az-vh-*` group, so a symlink from site A's docroot to
+`/data/www/siteB/.env` (or any file caddy can read) is served to site A's operator over HTTP — a cross-tenant
+secret read. Caddy has no option to refuse symlinks (`file_server` only exposes `--reveal-symlinks` for
+browse display), and a `nosymfollow` mount would break legitimate in-site symlinks such as Laravel's
+`public/storage` → `../storage/app/public`.
+
+**Fix (v2.8.26).** `VhostUser::hardenContent`, run from `ensure` whenever a site is (re)touched (provision,
+restore, deploy, terminal, SFTP), bounded by the **site top** (`wwwRoot/<first component>`):
+  1. quarantines symlinks whose resolved target escapes the site top (within-site links, incl. the Laravel
+     storage link, are kept) by moving the link out of the served tree into `/var/lib/azerioid-panel/quarantine`;
+  2. forces `.env` files to `0600` so caddy (group member) cannot read a site's secrets even via a within-site
+     path.
+Validated on a real host: the Laravel storage link survives, escaping links to another site's `.env` and to
+`/etc/passwd` are quarantined, `.env` lands `0600`.
+
+**Accepted ceiling (the "accept" in 1+2+accept).** Enforcement is event-driven (at `ensure`), not a continuous
+sweep — the converges early-return once migrated, so a dedicated every-5-minute job would be a separate
+subsystem; a site can re-plant a symlink between touches, and an app can recreate `.env` at a looser mode
+until the next `ensure`. Within-site symlinks are still followed by caddy (a site reading its own files is not
+a boundary crossing). Full containment would need an upstream caddy option (`openat2(RESOLVE_BENEATH)`) or a
+per-site web server. A later continuous sweep can reuse `hardenContent` if the residual window proves to matter.
