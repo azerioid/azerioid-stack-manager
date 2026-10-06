@@ -1672,3 +1672,19 @@ defence for the final component. A real tree is unaffected; a planted symlink ab
 before `resolveUnderBase` and has a mkdir→chown TOCTOU; `VhostUser::applyOwnership`'s `find … -exec chmod`
 race; `OctaneManager` composer `/tmp`. These need a disposable-VM race/behaviour pass; A61 covers the
 straightforward fixed-path symlink-follow in the two home builders.
+
+## A62 — A shared www_root top must not be handed to one site (claimTop / SitePool)
+
+A58 deferred leads `claimTop:shared-top-claimed-by-one-site` and `sitepool-shared-top-chown`. When two
+vhosts live under one directory (e.g. `/data/www/app/public` and `/data/www/app/admin`),
+`VhostUser::claimTop` chowned the shared `/data/www/app` to whichever site was created, and
+`SitePool::ensure` ran `chown -R`/`chmod -R g+rwX` over it on first pool creation and set the pool's
+`open_basedir` to it. Either let one site own and rewrite the other's whole tree. ADR A49-E1 already says
+the docroot — not the shared directory — is the isolation unit in that case, and `VhostIsolationMigrator`
+honours it; the creation paths did not.
+
+**Fix (v2.8.7).** `VhostUser::topSharedByAnotherSite(domain, top)` consults the recorded site roots
+(`vhost-users.json`) and reports whether another site's docroot is the top or sits under it. `claimTop`
+skips claiming a shared top; `SitePool::ensure` confines both the one-time ownership handover and
+`open_basedir` to the site's own docroot instead of the shared top. A sole site under its own top is
+unaffected.

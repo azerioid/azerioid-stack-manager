@@ -62,6 +62,31 @@ final class AuditHardeningTest extends TestCase
         \AzerioidPanel\Broker\Vhost\VhostUser::assertNoSymlinkUnder($rt2, $base, $home . '/.local/share');
     }
 
+    public function test_shared_top_is_detected_so_one_site_cannot_claim_it(): void
+    {
+        // A62: two sites under one www_root top — the top is not the isolation unit
+        // (A49-E1), so a new site there must not be able to claim it.
+        $rt = new FakeRuntime();
+        $config = new \AzerioidPanel\Broker\Config();
+        $config->managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
+        $rt->files['/var/lib/azerioid-panel/vhost-users.json'] = json_encode(['users' => [
+            'a.test' => ['username' => 'az-vh-a-test', 'root' => '/data/www/app/public'],
+        ]]);
+
+        // b.test's docroot shares the /data/www/app top with a.test → shared.
+        $this->assertTrue(\AzerioidPanel\Broker\Vhost\VhostUser::topSharedByAnotherSite(
+            $rt, $config, 'b.test', '/data/www/app'
+        ));
+        // A top that no other site lives under → not shared.
+        $this->assertFalse(\AzerioidPanel\Broker\Vhost\VhostUser::topSharedByAnotherSite(
+            $rt, $config, 'b.test', '/data/www/other'
+        ));
+        // The owning site itself does not count as a collision.
+        $this->assertFalse(\AzerioidPanel\Broker\Vhost\VhostUser::topSharedByAnotherSite(
+            $rt, $config, 'a.test', '/data/www/app'
+        ));
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

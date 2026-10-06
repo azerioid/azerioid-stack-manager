@@ -148,7 +148,14 @@ final class SitePool
         $previous = $this->runtime->fileExists($pool) ? $this->runtime->readFile($pool) : null;
         $user = VhostUser::username($domain);
         $group = VhostUser::docrootGroup($this->runtime, $domain);
+        // A62: if another site's docroot lives under this top, the top is not the
+        // isolation unit (A49-E1) — confine the pool (open_basedir and the one-time
+        // ownership handover) to this site's own docroot so it cannot take the
+        // sibling's tree.
         $top = $this->topOf($root);
+        if (VhostUser::topSharedByAnotherSite($this->runtime, $this->config, $domain, $top)) {
+            $top = rtrim($root, '/');
+        }
         $body = $this->render($domain, $version, $user, $group, $top);
         if ($previous === $body && $this->runtime->fileExists($socket)) {
             return $socket;
