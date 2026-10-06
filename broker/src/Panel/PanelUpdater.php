@@ -833,6 +833,29 @@ final class PanelUpdater
         if (!$route->ok()) {
             $log->warn('route:cache skipped/failed (non-fatal): ' . $this->execDetail($route));
         }
+        $this->lockBootstrapCache($prefix, $log);
+    }
+
+    /**
+     * A69: config:cache inlines APP_KEY and the DB/mail secrets into
+     * bootstrap/cache/config.php, and Laravel (re)creates that directory 0755
+     * with the file 0644. The panel web root is group-caddy so the web user can
+     * traverse it to serve public/ — which also lets caddy read a 0644
+     * config.php and recover the panel's encryption key (session forgery /
+     * decryption → escalation past the A59/A60 boundary). .env is already 0640,
+     * so re-lock the generated cache the same way: strip all "other" access so
+     * only the panel user (owner) can read it. The directory is panel-owned and
+     * unreachable by any site identity, so this chmod is not a site-controlled
+     * tree.
+     */
+    private function lockBootstrapCache(string $prefix, OperationLogger $log): void
+    {
+        $cacheDir = $prefix . '/web/bootstrap/cache';
+        if (!$this->runtime->isDir($cacheDir)) {
+            return;
+        }
+        $this->runtime->exec(['/bin/chmod', '-R', 'o-rwx', $cacheDir], null, 30);
+        $log->info('Locked bootstrap/cache against the web user (A69).');
     }
 
     /**

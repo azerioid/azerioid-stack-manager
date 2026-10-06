@@ -202,6 +202,30 @@ final class AuditHardeningTest extends TestCase
         $this->assertTrue($homeToWeb, 'the per-run home must be handed to the web user');
     }
 
+    public function test_bootstrap_cache_is_relocked_against_the_web_user(): void
+    {
+        // A69: config:cache writes config.php 0644 (APP_KEY + DB/mail secrets) in
+        // a 0755 dir; caddy traverses the group-caddy web root, so the cache must
+        // be re-locked (all "other" access stripped) after it is built.
+        $rt = new FakeRuntime();
+        $config = new \AzerioidPanel\Broker\Config();
+        $prefix = $config->panelRoot;
+        $rt->dirs[$prefix . '/web/bootstrap/cache'] = true;
+        $updater = new \AzerioidPanel\Broker\Panel\PanelUpdater($config, $rt);
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Panel\PanelUpdater::class, 'lockBootstrapCache');
+        $m->setAccessible(true);
+        $log = new \AzerioidPanel\Broker\Component\OperationLogger($rt, '/dev/null');
+        $m->invoke($updater, $prefix, $log);
+
+        $locked = false;
+        foreach ($rt->execLog as $e) {
+            if ($e['command'] === ['/bin/chmod', '-R', 'o-rwx', $prefix . '/web/bootstrap/cache']) {
+                $locked = true;
+            }
+        }
+        $this->assertTrue($locked, 'bootstrap/cache must be stripped of other-access after config:cache');
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

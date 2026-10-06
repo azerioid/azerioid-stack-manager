@@ -1839,3 +1839,22 @@ with `mongosh --quiet --file /dev/stdin`, which executes the piped bytes as a **
 auth guard aborts before the operation (validated against a real MongoDB 7.0 — a wrong password runs no
 operation). Tenant passwords in mutation scripts still travel only on stdin (never argv or disk). `redact()`
 remains as defense in depth but is no longer load-bearing.
+
+## A69 — Cached config not readable by the web user
+
+A58 deferred lead, confirmed on the live fleet. `artisan config:cache` inlines APP_KEY and the DB/mail
+secrets from `.env` into `bootstrap/cache/config.php`, and Laravel (re)creates that directory `0755` with the
+file `0644`. The panel web root is `root/azerioid-panel` owned but **group `caddy`** with `r-x` so the web
+user can traverse it to serve `public/` — and `bootstrap`/`bootstrap/cache` at `0755` plus `config.php` at
+`0644` meant **caddy could read `config.php`** and recover the panel's encryption key. That defeats the A59/A60
+boundary (APP_KEY → forge panel sessions / decrypt panel data → escalate to the root-equivalent panel user).
+`.env` itself was already `0640` (caddy could not read it); the cache re-exposed the same secrets. Verified:
+`sudo -u caddy cat .../bootstrap/cache/config.php` succeeded on the fleet.
+
+**Fix (v2.8.18).** `PanelUpdater::rebuildCaches` calls `lockBootstrapCache()` after building the caches:
+`chmod -R o-rwx bootstrap/cache`, stripping all "other" access so only the panel user (owner) can read it
+(the directory is panel-owned and unreachable by any site identity, so this is not a site-controlled tree).
+`verify-release.sh` gains `CHECK_CADDY_CANNOT_READ_PANEL_CONFIG_CACHE`. **Self-update bootstrap gap (A60):**
+`rebuildCaches` runs under the in-process broker during `panel.update.apply`, so the update that *ships* A69
+still re-locks with the old (no-op) code; the fix takes effect on the next update. A host already carrying a
+`0644` cache is remediated out of band (`chmod -R o-rwx bootstrap/cache`) until then.
