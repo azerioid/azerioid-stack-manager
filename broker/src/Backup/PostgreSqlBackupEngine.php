@@ -101,10 +101,22 @@ final class PostgreSqlBackupEngine implements BackupEngine
         ];
 
         if (str_starts_with($payloadPrefix, self::CUSTOM_FORMAT_MAGIC)) {
+            // A71: restore under the target database's owning role, not the
+            // connecting superuser. A tenant dump can carry a SECURITY DEFINER
+            // function; with a plain --no-owner restore every object (that
+            // function included) is created owned by the superuser, so the
+            // tenant could then call it and run as superuser. --role issues
+            // SET ROLE after connecting, so the objects are owned by the tenant
+            // and carry only the tenant's privileges.
+            $role = $this->ownerOf($target);
+            $roleArgs = ($role !== null && $role !== '' && $role !== $this->config->postgresqlUser)
+                ? ['--role=' . $role]
+                : [];
             $args = array_merge(
                 ['/usr/bin/pg_restore'],
                 $conn,
-                ['-d', $target, '--no-owner', '--no-privileges']
+                ['-d', $target, '--no-owner', '--no-privileges'],
+                $roleArgs
             );
             $tool = 'pg_restore';
         } else {
@@ -119,6 +131,32 @@ final class PostgreSqlBackupEngine implements BackupEngine
             'cleanup' => $this->cleanup($pgpass),
             'tool' => $tool,
         ];
+    }
+
+    /**
+     * The role that owns $target, or null if it cannot be determined. Used to
+     * restore a tenant dump under the tenant's own role (A71).
+     */
+    private function ownerOf(string $target): ?string
+    {
+        $target = Validator::dbName($target);
+        $pgpass = $this->pgpassFile();
+        try {
+            $result = $this->runtime->exec(array_merge(
+                ['/usr/bin/env', 'PGPASSFILE=' . $pgpass, '/usr/bin/psql'],
+                ['-h', $this->config->postgresqlHost, '-p', (string) $this->config->postgresqlPort],
+                ['-U', $this->config->postgresqlUser, '--no-password', '-tAc'],
+                [
+                    "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '" . $target . "'",
+                    'postgres',
+                ]
+            ), null, 30);
+        } finally {
+            ($this->cleanup($pgpass))();
+        }
+        $owner = trim($result->stdout);
+
+        return $owner !== '' ? $owner : null;
     }
 
     public function targetExists(string $target): bool

@@ -1881,3 +1881,20 @@ defense in depth. Validated on a real host: a web-group member connects through 
 user is refused (`srw-rw---- user:webgroup`). Port allocation (`allocatePort`/`portListening`) is removed; the
 socket dir is torn down with the session. This is a broker action (fresh process), so it applies on the
 release that ships it.
+
+## A71 — PostgreSQL restore runs under the target's owning role
+
+A58 deferred lead. `PostgreSqlBackupEngine::restoreCommandFor` restored a custom-format dump with
+`pg_restore -d <db> --no-owner` connected as the PostgreSQL **superuser**. A tenant's own database can contain
+a `SECURITY DEFINER` function (or similar); `pg_dump` captures it, and a `--no-owner` restore as the superuser
+creates every object **owned by the superuser**. The tenant could then call that function and execute as the
+superuser — full PostgreSQL compromise, and potentially OS command execution (`COPY … TO PROGRAM`, untrusted
+PLs). The restore is triggered by the operator, but the dump content is tenant-controlled.
+
+**Fix (v2.8.21).** `restoreCommandFor` looks up the target database's owning role
+(`pg_catalog.pg_get_userbyid(datdba)`) and adds `pg_restore --role=<owner>`, which issues `SET ROLE` after the
+superuser connects, so objects are created owned by the tenant and carry only the tenant's privileges — a
+`SECURITY DEFINER` object in the dump is owned by the tenant, not the superuser. `--role` is omitted only when
+the owner is unknown or is the admin role itself. Validated on a real PostgreSQL: a `SECURITY DEFINER`
+function in a `-Fc` dump restores owned by `postgres` without `--role` and owned by the tenant with it. The
+`pg_dumpall`/`psql` path is a cluster-level operator restore (not tenant-scoped content) and is unchanged.
