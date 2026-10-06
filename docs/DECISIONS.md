@@ -1585,3 +1585,37 @@ The full audit (`REPORT.md`, `NEEDS-VALIDATION.md`, coverage ledger, per-lead tr
 is kept outside the repo at `~/audits/azerioid-panel/run-1/`. A follow-up run should start with the three
 critic-accepted units deferred for budget, chiefly the Adminer / shared-pool PHP-FPM socket → panel identity
 path.
+
+## A59 — Panel FPM socket reachable by the Caddy group: drop /tmp from the panel pool open_basedir
+
+The deferred audit unit from A58's second coverage critic: a path from a lower-trust, Caddy-group
+process to root.
+
+**The chain.** The panel PHP-FPM socket is `listen.owner = azerioid-panel`, `listen.group = caddy`,
+mode 0660 — the group must stay `caddy` because after the A39 migration Caddy reaches the panel through the
+socket **group**, not the owner (PanelIdentityMigrator). So any process with gid `caddy` can open the
+socket. The Adminer tool pool runs with group `caddy` (its account is also added to the group), and its
+`disable_functions` leaves `stream_socket_client`/`fsockopen`/`fwrite`, so it can speak raw FastCGI. A
+FastCGI client can set `SCRIPT_FILENAME` and `PHP_VALUE[auto_prepend_file]`; `open_basedir` is locked by
+`php_admin_value` but `auto_prepend_file` is not, so a payload staged anywhere inside the panel pool's
+`open_basedir` would execute **as the panel user**, which holds the NOPASSWD broker sudo grant → root.
+
+**Confirmed on the fleet host (read-only):** panel socket `srw-rw---- azerioid-panel caddy`;
+`azerioid-adminer-tool` is in group `caddy`; the panel pool's `open_basedir` contained `/tmp`.
+
+**Fix (v2.8.3+1).** Remove `/tmp` — the only attacker-writable entry — from the panel pool `open_basedir`,
+in all three authoritative places: `deploy/php-fpm/azerioid-panel.conf`, `deploy/lib/fpm.sh` (install), and
+`PanelUpdater::syncPanelFpmOpenBasedir` (self-update enforces it on existing hosts). After removal the
+remaining entries are not writable by gid `caddy`: `web` and `/var/lib/azerioid-panel` are
+`azerioid-panel:caddy 0750` (group read/traverse only), `/var/log/azerioid-panel` is `root:azerioid-panel`,
+and `/dev/urandom` / `/usr/bin/sudo` are not writable. With no writable path in `open_basedir`, the FastCGI
+client cannot stage an `auto_prepend_file`/`SCRIPT_FILENAME` payload, so code execution as the panel user is
+closed. The panel's own temp stays `storage/framework/tmp` (`sys_temp_dir`/`upload_tmp_dir`).
+
+**Not changed (why).** The socket group cannot move off `caddy` without breaking Caddy→panel after A39.
+Taking the Adminer pool out of the `caddy` group is the stronger defence-in-depth (it would stop that pool
+reaching the socket at all), but the Adminer tool directory lives under the panel-owned
+`/var/lib/azerioid-panel` tree (group `caddy`, 0750), so the pool needs the group to traverse to its own
+code. Removing it requires relocating the tool directory out of the panel tree — a migration-sensitive
+change with fleet-outage risk — and is deferred to its own validated pass. The `/tmp` removal already closes
+the root-execution path; the group reach is a remaining defence-in-depth gap.

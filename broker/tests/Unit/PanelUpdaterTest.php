@@ -11,6 +11,34 @@ use PHPUnit\Framework\TestCase;
 
 final class PanelUpdaterTest extends TestCase
 {
+    public function test_open_basedir_sync_drops_tmp(): void
+    {
+        // A59: the panel pool's open_basedir must not include /tmp — a gid-caddy
+        // pool that reaches the panel socket could otherwise stage an
+        // auto_prepend_file payload there and run code as the panel user.
+        $runtime = new FakeRuntime();
+        $config = new Config();
+        $config->panelRoot = '/usr/local/lib/azerioid-panel';
+        $pool = '/etc/php/8.4/fpm/pool.d/azerioid-panel.conf';
+        $runtime->files[$pool] = "[azerioid-panel]\nuser = azerioid-panel\n"
+            . "php_admin_value[open_basedir] = /usr/local/lib/azerioid-panel/web:/var/lib/azerioid-panel:/tmp:/dev/urandom:/usr/bin/sudo:/var/log/azerioid-panel\n";
+
+        $m = new \ReflectionMethod(PanelUpdater::class, 'syncPanelFpmOpenBasedir');
+        $m->setAccessible(true);
+        $log = new \AzerioidPanel\Broker\Component\OperationLogger($runtime, '/tmp/az-oplog-test');
+        $m->invoke(new PanelUpdater($config, $runtime), $config->panelRoot, $log);
+
+        $line = '';
+        foreach (explode("\n", $runtime->files[$pool]) as $l) {
+            if (str_contains($l, 'open_basedir')) {
+                $line = $l;
+            }
+        }
+        $this->assertStringContainsString('open_basedir', $line);
+        $this->assertStringNotContainsString('/tmp', $line, 'panel pool open_basedir must not contain /tmp');
+        $this->assertStringContainsString('/usr/local/lib/azerioid-panel/web', $line);
+    }
+
     public function test_apply_requires_confirm_phrase(): void
     {
         $runtime = new FakeRuntime();
