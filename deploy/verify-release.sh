@@ -638,10 +638,14 @@ fi
 if command -v gpg >/dev/null 2>&1; then
     REPO_KEYS_OK=1
     check_keyring() {
-        local file="$1" fpr="$2"
+        local file="$1" fpr="$2" primaries
         [[ -f "${file}" ]] || return 0  # repo not on this host; not applicable
-        gpg --show-keys --with-colons "${file}" 2>/dev/null \
-            | awk -F: '$1=="fpr"{print $10}' | grep -qiF "${fpr}" || REPO_KEYS_OK=0
+        # The pinned key must be the ONLY primary key in the keyring (an extra
+        # primary would be trusted by apt's signed-by just the same).
+        primaries="$(gpg --show-keys --with-colons "${file}" 2>/dev/null \
+            | awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10;p=0} $1=="sub"{p=0}')"
+        [[ "$(printf '%s\n' "${primaries}" | grep -c .)" == "1" ]] \
+            && printf '%s' "${primaries}" | grep -qiF "${fpr}" || REPO_KEYS_OK=0
     }
     check_keyring /usr/share/keyrings/caddy-stable-archive-keyring.gpg 65760C51EDEA2017CEA2CA15155B6D79CA56EA34
     check_keyring /usr/share/keyrings/php-sury-archive-keyring.gpg 15058500A0235D97F5D10063B188E2B695BD4743

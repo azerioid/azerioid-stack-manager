@@ -1748,8 +1748,12 @@ bytes a network fetch returned:
 **Fix (v2.8.11).**
 - Composer: fetch the installer to a temp file and compare its SHA-384 against Composer's published signature
   (`composer.github.io/installer.sig`, a separate origin) before running it; abort on mismatch.
-- apt (Caddy, Sury): fetch each key to a temp file, verify it carries the pinned fingerprint
-  (`verify_gpg_key`, now wired via `fetch_verify_dearmor`), then dearmor into the keyring; abort on mismatch.
+- apt (Caddy, Sury): fetch each key, dearmor it, and verify the *dearmored* keyring — the exact bytes apt
+  consumes, so there is no parser differential between the raw fetch and the installed keyring — then install
+  it; abort on mismatch. `verify_gpg_key` requires the pinned fingerprint to be the **only primary key** in
+  the material (listing primaries via the `fpr` record after each `pub`, ignoring subkeys): accepting a file
+  merely *containing* the pinned fpr would let an attacker append their own key, which apt's `signed-by`
+  would then trust equally.
   Pinned fingerprints — Caddy `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, Sury
   `15058500A0235D97F5D10063B188E2B695BD4743` — were verified with gpg against both the live upstream key and
   the key already trusted on the production host.

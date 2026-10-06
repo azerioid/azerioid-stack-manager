@@ -14,32 +14,48 @@ CADDY_GPG_FPR="65760C51EDEA2017CEA2CA15155B6D79CA56EA34"  # Caddy Web Server <co
 SURY_GPG_FPR="15058500A0235D97F5D10063B188E2B695BD4743"   # DEB.SURY.ORG Automatic Signing Key <deb@sury.org>
 REMI_GPG_FPR="6B38FEA7231F87F52B9CA9D8555097595F11735A"   # Remi's RPM repository <remi@remirepo.net>
 
+# True only when the pinned fingerprint is the *only* primary key in the file.
+# A key file can carry more than one key; accepting it because the pinned fpr
+# appears somewhere would let an attacker append their own key and have apt
+# (signed-by trusts every key in the keyring) trust it too. We therefore list
+# every primary-key fingerprint (the fpr record that follows a `pub` record,
+# not subkeys) and require exactly one, equal to the pin.
 verify_gpg_key() {
-    local keyfile="$1" fingerprint="$2"
+    local keyfile="$1" fingerprint="$2" primaries got want
     [[ -f "${keyfile}" ]] || return 1
-    gpg --show-keys --with-colons "${keyfile}" 2>/dev/null \
-        | awk -F: '$1=="fpr" {print $10}' \
-        | grep -qiF "${fingerprint}" 2>/dev/null
+    primaries="$(gpg --show-keys --with-colons "${keyfile}" 2>/dev/null \
+        | awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10;p=0} $1=="sub"{p=0}')"
+    [[ -n "${primaries}" ]] || return 1
+    [[ "$(printf '%s\n' "${primaries}" | grep -c .)" == "1" ]] || return 1
+    got="$(printf '%s' "${primaries}" | tr '[:lower:]' '[:upper:]')"
+    want="$(printf '%s' "${fingerprint}" | tr '[:lower:]' '[:upper:]')"
+    [[ "${got}" == "${want}" ]]
 }
 
-# Fetch an armored key to a temp file, verify it carries the pinned fingerprint,
-# then dearmor it into the destination keyring. Aborts the install on any
-# mismatch so a forged key fetched over a hostile path cannot be pinned.
+# Fetch a key, dearmor it, and verify the *dearmored* keyring (the exact bytes
+# apt will consume, so no parser differential between the raw file and what is
+# installed) carries only the pinned key, then install it. Aborts on any
+# mismatch so a forged or key-padded fetch over a hostile path cannot be pinned.
 fetch_verify_dearmor() {
-    local url="$1" fingerprint="$2" dest="$3" tmp
-    tmp="$(mktemp)"
-    if ! curl -fsSL "${url}" -o "${tmp}"; then
-        rm -f "${tmp}"
+    local url="$1" fingerprint="$2" dest="$3" raw keyring
+    raw="$(mktemp)"; keyring="$(mktemp)"
+    if ! curl -fsSL "${url}" -o "${raw}"; then
+        rm -f "${raw}" "${keyring}"
         echo "Failed to fetch repo key ${url}" >&2
         exit 1
     fi
-    if ! verify_gpg_key "${tmp}" "${fingerprint}"; then
-        rm -f "${tmp}"
-        echo "Repo key ${url} does not match pinned fingerprint ${fingerprint}; refusing." >&2
+    if ! gpg --batch --yes --dearmor -o "${keyring}" < "${raw}"; then
+        rm -f "${raw}" "${keyring}"
+        echo "Failed to parse repo key ${url}" >&2
         exit 1
     fi
-    gpg --batch --yes --dearmor -o "${dest}" < "${tmp}"
-    rm -f "${tmp}"
+    if ! verify_gpg_key "${keyring}" "${fingerprint}"; then
+        rm -f "${raw}" "${keyring}"
+        echo "Repo key ${url} is not exactly the pinned key ${fingerprint}; refusing." >&2
+        exit 1
+    fi
+    install -m 0644 "${keyring}" "${dest}"
+    rm -f "${raw}" "${keyring}"
 }
 
 install_caddy_repo() {
@@ -78,20 +94,25 @@ install_php_repo() {
             # the remi-release RPM with localpkg_gpgcheck so dnf verifies the
             # RPM against that key. The old path installed the RPM by URL with
             # `|| true`, so an unsigned or forged bootstrap RPM was trusted.
-            local remi_key
-            remi_key="$(mktemp)"
-            if ! curl -fsSL "${REMI_GPG_URL}" -o "${remi_key}"; then
-                rm -f "${remi_key}"
+            local remi_raw remi_key
+            remi_raw="$(mktemp)"; remi_key="$(mktemp)"
+            if ! curl -fsSL "${REMI_GPG_URL}" -o "${remi_raw}"; then
+                rm -f "${remi_raw}" "${remi_key}"
                 echo "Failed to fetch Remi GPG key ${REMI_GPG_URL}" >&2
                 exit 1
             fi
+            if ! gpg --batch --yes --dearmor -o "${remi_key}" < "${remi_raw}"; then
+                rm -f "${remi_raw}" "${remi_key}"
+                echo "Failed to parse Remi GPG key ${REMI_GPG_URL}" >&2
+                exit 1
+            fi
             if ! verify_gpg_key "${remi_key}" "${REMI_GPG_FPR}"; then
-                rm -f "${remi_key}"
-                echo "Remi GPG key does not match pinned fingerprint ${REMI_GPG_FPR}; refusing." >&2
+                rm -f "${remi_raw}" "${remi_key}"
+                echo "Remi GPG key is not exactly the pinned key ${REMI_GPG_FPR}; refusing." >&2
                 exit 1
             fi
             rpm --import "${remi_key}"
-            rm -f "${remi_key}"
+            rm -f "${remi_raw}" "${remi_key}"
             dnf -y --setopt=localpkg_gpgcheck=1 install \
                 "https://rpms.remirepo.net/enterprise/remi-release-${OS_MAJOR}.rpm"
             dnf -y module reset php >/dev/null 2>&1 || true
@@ -103,6 +124,19 @@ install_php_repo() {
 
 setup_repos() {
     install -d -m 0755 /etc/apt/keyrings 2>/dev/null || true
+    # A66: key verification needs curl + gpg, and setup_repos runs before
+    # bootstrap_packages. Ensure both are present (idempotent) so a minimal
+    # image cannot skip verification for lack of the gpg binary.
+    case "${PKG_MGR}" in
+        apt-get)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get -o DPkg::Lock::Timeout=120 install -y curl ca-certificates gnupg >/dev/null
+            ;;
+        dnf)
+            dnf -y install curl ca-certificates gnupg2 >/dev/null
+            ;;
+    esac
+    command -v gpg >/dev/null 2>&1 || { echo "gpg is required for repo key verification but is unavailable." >&2; exit 1; }
     install_caddy_repo
     install_php_repo
     case "${PKG_MGR}" in
