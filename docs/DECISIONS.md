@@ -1748,12 +1748,15 @@ bytes a network fetch returned:
 **Fix (v2.8.11).**
 - Composer: fetch the installer to a temp file and compare its SHA-384 against Composer's published signature
   (`composer.github.io/installer.sig`, a separate origin) before running it; abort on mismatch.
-- apt (Caddy, Sury): fetch each key, dearmor it, and verify the *dearmored* keyring — the exact bytes apt
-  consumes, so there is no parser differential between the raw fetch and the installed keyring — then install
-  it; abort on mismatch. `verify_gpg_key` requires the pinned fingerprint to be the **only primary key** in
-  the material (listing primaries via the `fpr` record after each `pub`, ignoring subkeys): accepting a file
-  merely *containing* the pinned fpr would let an attacker append their own key, which apt's `signed-by`
-  would then trust equally.
+- apt (Caddy, Sury) and EL (Remi): `extract_pinned_key` imports the fetched material into a throwaway keyring
+  and **re-exports only the key whose fingerprint equals the pin**; that exported keyring is what gets
+  installed (apt `signed-by`) or `rpm --import`ed. The installed keyring is thus *constructed by gpg* to hold
+  exactly the pinned key rather than being the fetched bytes passed through a check — so no second parser
+  (`--show-keys`, awk) can disagree with what apt/rpm later consume, and a fetch that appends, pads, or
+  shadows keys cannot smuggle an extra trusted key through (apt `signed-by` trusts every key in the keyring).
+  Verified on a real host: a "legit key + appended attacker key" input exports only the pinned primary; an
+  absent pin is rejected. An attacker cannot forge different key material under the pinned fingerprint (hash
+  preimage), and subkeys without a valid binding signature are dropped on import.
   Pinned fingerprints — Caddy `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`, Sury
   `15058500A0235D97F5D10063B188E2B695BD4743` — were verified with gpg against both the live upstream key and
   the key already trusted on the production host.

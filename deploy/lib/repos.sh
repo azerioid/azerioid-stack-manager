@@ -14,48 +14,50 @@ CADDY_GPG_FPR="65760C51EDEA2017CEA2CA15155B6D79CA56EA34"  # Caddy Web Server <co
 SURY_GPG_FPR="15058500A0235D97F5D10063B188E2B695BD4743"   # DEB.SURY.ORG Automatic Signing Key <deb@sury.org>
 REMI_GPG_FPR="6B38FEA7231F87F52B9CA9D8555097595F11735A"   # Remi's RPM repository <remi@remirepo.net>
 
-# True only when the pinned fingerprint is the *only* primary key in the file.
-# A key file can carry more than one key; accepting it because the pinned fpr
-# appears somewhere would let an attacker append their own key and have apt
-# (signed-by trusts every key in the keyring) trust it too. We therefore list
-# every primary-key fingerprint (the fpr record that follows a `pub` record,
-# not subkeys) and require exactly one, equal to the pin.
-verify_gpg_key() {
-    local keyfile="$1" fingerprint="$2" primaries got want
-    [[ -f "${keyfile}" ]] || return 1
-    primaries="$(gpg --show-keys --with-colons "${keyfile}" 2>/dev/null \
-        | awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10;p=0} $1=="sub"{p=0}')"
-    [[ -n "${primaries}" ]] || return 1
-    [[ "$(printf '%s\n' "${primaries}" | grep -c .)" == "1" ]] || return 1
-    got="$(printf '%s' "${primaries}" | tr '[:lower:]' '[:upper:]')"
-    want="$(printf '%s' "${fingerprint}" | tr '[:lower:]' '[:upper:]')"
-    [[ "${got}" == "${want}" ]]
+# Import whatever key material <src> carries into a throwaway keyring, then
+# re-export ONLY the key whose fingerprint equals the pin, into <dest> (binary
+# keyring form). The output is built by gpg itself to contain exactly the pinned
+# key — not the fetched bytes filtered by a check — so no second parser can
+# disagree with what apt/rpm later consume: a fetch that appends, pads, or
+# shadows keys cannot smuggle an extra trusted key through. Returns nonzero if
+# the pinned key is absent from the import or the export is empty. An attacker
+# cannot forge different key material under the pinned fingerprint (that is a
+# hash preimage), and subkeys without a valid binding signature are dropped on
+# import.
+extract_pinned_key() {
+    local src="$1" fingerprint="$2" dest="$3" gnupg rc=0
+    gnupg="$(mktemp -d)"
+    chmod 0700 "${gnupg}"
+    if ! gpg --homedir "${gnupg}" --batch --quiet --import "${src}" 2>/dev/null; then
+        rc=1
+    elif ! gpg --homedir "${gnupg}" --batch --list-keys "${fingerprint}" >/dev/null 2>&1; then
+        rc=1
+    elif ! gpg --homedir "${gnupg}" --batch --yes --export "${fingerprint}" > "${dest}" 2>/dev/null \
+            || [[ ! -s "${dest}" ]]; then
+        rc=1
+    fi
+    rm -rf "${gnupg}"
+    return ${rc}
 }
 
-# Fetch a key, dearmor it, and verify the *dearmored* keyring (the exact bytes
-# apt will consume, so no parser differential between the raw file and what is
-# installed) carries only the pinned key, then install it. Aborts on any
-# mismatch so a forged or key-padded fetch over a hostile path cannot be pinned.
+# Fetch a repo key and install a keyring reconstructed to hold only the pinned
+# key. Aborts the install on any fetch or pin failure so a forged or key-padded
+# fetch over a hostile path cannot be trusted.
 fetch_verify_dearmor() {
-    local url="$1" fingerprint="$2" dest="$3" raw keyring
-    raw="$(mktemp)"; keyring="$(mktemp)"
+    local url="$1" fingerprint="$2" dest="$3" raw
+    raw="$(mktemp)"
     if ! curl -fsSL "${url}" -o "${raw}"; then
-        rm -f "${raw}" "${keyring}"
+        rm -f "${raw}"
         echo "Failed to fetch repo key ${url}" >&2
         exit 1
     fi
-    if ! gpg --batch --yes --dearmor -o "${keyring}" < "${raw}"; then
-        rm -f "${raw}" "${keyring}"
-        echo "Failed to parse repo key ${url}" >&2
+    if ! extract_pinned_key "${raw}" "${fingerprint}" "${dest}"; then
+        rm -f "${raw}" "${dest}"
+        echo "Repo key ${url} does not yield pinned key ${fingerprint}; refusing." >&2
         exit 1
     fi
-    if ! verify_gpg_key "${keyring}" "${fingerprint}"; then
-        rm -f "${raw}" "${keyring}"
-        echo "Repo key ${url} is not exactly the pinned key ${fingerprint}; refusing." >&2
-        exit 1
-    fi
-    install -m 0644 "${keyring}" "${dest}"
-    rm -f "${raw}" "${keyring}"
+    chmod 0644 "${dest}"
+    rm -f "${raw}"
 }
 
 install_caddy_repo() {
@@ -101,14 +103,9 @@ install_php_repo() {
                 echo "Failed to fetch Remi GPG key ${REMI_GPG_URL}" >&2
                 exit 1
             fi
-            if ! gpg --batch --yes --dearmor -o "${remi_key}" < "${remi_raw}"; then
+            if ! extract_pinned_key "${remi_raw}" "${REMI_GPG_FPR}" "${remi_key}"; then
                 rm -f "${remi_raw}" "${remi_key}"
-                echo "Failed to parse Remi GPG key ${REMI_GPG_URL}" >&2
-                exit 1
-            fi
-            if ! verify_gpg_key "${remi_key}" "${REMI_GPG_FPR}"; then
-                rm -f "${remi_raw}" "${remi_key}"
-                echo "Remi GPG key is not exactly the pinned key ${REMI_GPG_FPR}; refusing." >&2
+                echo "Remi GPG key does not yield pinned key ${REMI_GPG_FPR}; refusing." >&2
                 exit 1
             fi
             rpm --import "${remi_key}"
