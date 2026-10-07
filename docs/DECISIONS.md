@@ -2339,8 +2339,12 @@ Live validation on the Rocky host surfaced a foot-gun: a per-site **rootless** d
 CPU/memory delegation rejects `docker run --cpus`/`--memory` ("NanoCPUs can not be set … cgroup is not mounted")
 and the container never starts. `DockerManager::applyLimits` had replaced the program command and restarted, so
 applying a cap on such a host would leave a running Docker site **down**. Fix: a resource cap must never take a
-working site down — if the capped container does not come up, `applyLimits` clears the caps, restarts the
-container **without** them, and throws a clear error that this host's rootless Docker can't enforce caps (it needs
-cgroup v2 delegation). `vhost.docker.enable` was already safe (it rolls the whole enable back and leaves the vhost
-unchanged on failure). The Docker memory/CPU caps thus remain best-effort and honest: enforced where the rootless
-daemon supports them, cleared-and-reported where it doesn't, never site-breaking.
+working site down, **and** the operator's requested cap must not be silently dropped (a fail-open control). If the
+capped container does not come up, `applyLimits` keeps the caps **recorded**, sets a per-site
+`docker_limits_unenforced` flag so the run command omits the `--cpus`/`--memory` flags (the container starts), and
+returns `enforced:false` with a reason; `vhost.limits.show` then reports the caps as "recorded but this host's
+rootless Docker can't enforce them" — persistent visibility, not a one-time message. Each `applyLimits` clears the
+flag first and re-attempts enforcement (the operator may have enabled delegation). `vhost.docker.enable` was
+already safe (it rolls the whole enable back and leaves the vhost unchanged on failure). Docker caps are thus
+best-effort and honest: enforced where the rootless daemon supports them (cgroup v2 delegation), recorded-and-
+reported where it doesn't, never site-breaking and never silently removed.

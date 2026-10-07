@@ -81,17 +81,20 @@ final class VhostLimits
             'memory_mb' => $s['memory_mb'],
             'cpu_percent' => $s['cpu_percent'],
             'default_max_children' => SitePool::MAX_CHILDREN,
-            'enforcement' => self::enforcementNote($kind),
+            'enforcement' => self::enforcementNote($kind, $s),
         ];
     }
 
-    private static function enforcementNote(string $kind): string
+    /** @param array<string,mixed> $s */
+    private static function enforcementNote(string $kind, array $s): string
     {
         return match ($kind) {
             AppRuntime::FPM => 'PHP-FPM: per-request memory_limit and max_children are enforced. The memory/CPU caps apply only to Octane/PM2/Docker runtimes.',
             AppRuntime::OCTANE => 'Octane: per-process memory/CPU caps are not enforceable under Supervisor — values are stored but not applied.',
             AppRuntime::PM2 => 'PM2: the memory cap restarts a worker that exceeds it (--max-memory-restart). PM2 has no CPU cap.',
-            AppRuntime::DOCKER => 'Docker: memory and CPU caps are hard limits for image/dockerfile sites. Compose-mode sites must set mem_limit/cpus in the compose file.',
+            AppRuntime::DOCKER => ! empty($s['docker_limits_unenforced'])
+                ? 'Docker: the caps are recorded but THIS host\'s rootless Docker cannot enforce them (it needs cgroup v2 delegation); the container runs without them.'
+                : 'Docker: memory and CPU caps are hard limits for image/dockerfile sites. Compose-mode sites must set mem_limit/cpus in the compose file.',
             default => 'Unknown runtime.',
         };
     }
