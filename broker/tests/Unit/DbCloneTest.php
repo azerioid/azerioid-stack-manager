@@ -60,7 +60,12 @@ final class DbCloneTest extends TestCase
         [$kernel, $rt] = $this->mariadbKernel();
         $rt->execFn = function (array $cmd): ?ExecResult {
             if (($cmd[0] ?? '') === '/usr/bin/mysqldump') {
-                return new ExecResult($cmd, 0, "-- SQL dump\nCREATE TABLE t (id int);\n", '');
+                // A view carrying the SOURCE user's DEFINER, as mysqldump emits.
+                return new ExecResult($cmd, 0,
+                    "-- SQL dump\nCREATE TABLE t (id int);\n"
+                    . "/*!50013 DEFINER=`shop`@`localhost` SQL SECURITY DEFINER */\n"
+                    . "/*!50001 VIEW `v` AS SELECT 1 */;\n",
+                    '');
             }
             if (($cmd[0] ?? '') === '/usr/bin/mysql') {
                 return new ExecResult($cmd, 0, '', '');
@@ -76,12 +81,20 @@ final class DbCloneTest extends TestCase
         $this->assertSame('shopstg', $data['user'] ?? null);
         $this->assertSame(48, strlen((string) ($data['password'] ?? '')));
 
-        $dumped = $restored = false;
+        $dumped = false;
+        $restoreStdin = null;
         foreach ($rt->execLog as $e) {
             $dumped = $dumped || ($e['command'][0] ?? '') === '/usr/bin/mysqldump';
-            $restored = $restored || ($e['command'][0] ?? '') === '/usr/bin/mysql';
+            if (($e['command'][0] ?? '') === '/usr/bin/mysql') {
+                $restoreStdin = (string) $e['stdin'];
+            }
         }
-        $this->assertTrue($dumped && $restored, 'clone must dump the source and load the target');
+        $this->assertTrue($dumped, 'clone must dump the source');
+        $this->assertNotNull($restoreStdin, 'clone must load the target');
+        // The DEFINER must be rebound to the clone's own user, not the source's,
+        // so a SQL SECURITY DEFINER object cannot reach back into the source DB.
+        $this->assertStringContainsString('DEFINER=`shopstg`@`localhost`', $restoreStdin);
+        $this->assertStringNotContainsString('DEFINER=`shop`@`localhost`', $restoreStdin);
         // The generated password must never reach the SQL log (bound as a param).
         $this->assertStringNotContainsString((string) $data['password'], implode("\n", $rt->dbExecLog));
     }

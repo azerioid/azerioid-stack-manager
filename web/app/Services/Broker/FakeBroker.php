@@ -2395,8 +2395,8 @@ final class FakeBroker
         if ($source === null) {
             throw new BrokerCallException('Source vhost '.$src.' was not found.', 2);
         }
-        if (($source['runtime'] ?? 'fpm') !== 'fpm') {
-            throw new BrokerCallException('Cloning a '.$source['runtime'].' site is not supported yet.', 3);
+        if (($source['runtime'] ?? 'fpm') === 'docker') {
+            throw new BrokerCallException('Cloning a Docker site is not supported yet.', 3);
         }
 
         $dstRoot = '/data/www/'.$dst.'/public';
