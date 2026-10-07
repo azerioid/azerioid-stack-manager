@@ -1460,20 +1460,37 @@ final class DockerManager
 
         $supervisor = new SupervisorManager($this->config, $this->runtime);
         $program = self::programName($domain);
-        $this->upsertProgram($supervisor, $program, [
-            'command' => $this->runCommand($spec),
+        $base = [
             'directory' => $spec['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
             'autorestart' => DockerSettings::autorestart($spec['restart']),
             'environment' => $this->programEnvironment($domain),
-        ]);
+        ];
+        $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
         $supervisor->control($program, 'restart');
-        if (!$this->waitForPort((int) $spec['port'])) {
-            throw new BrokerException('Applied the limits but 127.0.0.1:' . $spec['port'] . ' is not listening.', 1);
+        if ($this->waitForPort((int) $spec['port'])) {
+            return ['domain' => $domain, 'applied' => true, 'docker_program' => $program];
         }
 
-        return ['domain' => $domain, 'applied' => true, 'docker_program' => $program];
+        // The container did not come up with the caps. The most common cause is a
+        // rootless daemon without cgroup v2 CPU/memory delegation — `docker run`
+        // rejects --cpus/--memory ("NanoCPUs can not be set … cgroup is not mounted")
+        // and the container never starts. A resource cap must never take a working
+        // site down: clear the caps, bring the container back without them, and tell
+        // the operator this host's rootless Docker can't enforce them.
+        (new SitePool($this->config, $this->runtime))->saveSettings($domain, ['memory_mb' => null, 'cpu_percent' => null]);
+        $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
+        $supervisor->control($program, 'restart');
+        $recovered = $this->waitForPort((int) $spec['port']);
+
+        throw new BrokerException(
+            'This host\'s rootless Docker could not apply the CPU/memory cap (it needs cgroup v2 delegation). '
+            . ($recovered
+                ? 'The caps were cleared and the container was restarted without them.'
+                : 'The caps were cleared but the container is still not listening — check the container logs.'),
+            3
+        );
     }
 
     /**
