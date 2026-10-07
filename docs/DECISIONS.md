@@ -2080,3 +2080,23 @@ transition, where the site user is not yet in the target group and cannot set th
 migration and its verification. A symlink-safe root chmod would need `openat2(RESOLVE_NO_SYMLINKS)` /
 `fchmodat`, which the `find`/`chmod` shell toolchain does not expose. Accepted as a residual with the limited
 impact above; revisit if the broker gains an `openat2`-based file helper.
+
+## A78 — Push-to-deploy webhook
+
+New feature (post-audit roadmap). A site with git deploy configured (A41/A53) gains a push-to-deploy webhook
+so a `git push` to the deploy branch redeploys automatically.
+
+- **Secret model.** `GitDeploy::configure` generates and persists (in the root-only `deploy.json`) a
+  `webhook_secret` (HMAC key) and a public `webhook_token` (the unguessable id in the URL), preserved across
+  re-configures; `deploy.webhook.rotate` replaces both. `deploy.config` returns them for the admin-only panel
+  to display (the operator pastes the secret into GitHub/GitLab).
+- **Unauthenticated, HMAC-gated endpoint.** `POST /hooks/deploy/{token}` is **outside** the `['auth','2fa']`
+  group — a webhook has no panel session. It bypasses the IP allowlist (the forge is not the operator),
+  idle-timeout and setup gates, and CSRF (external POST), and is throttled. The web controller is a thin
+  relay: it caps the body (1 MiB), reads the signature header (GitHub `X-Hub-Signature-256`, GitLab
+  `X-Gitlab-Token`), and hands `{token, provider, signature, body}` to the broker. **The secret never reaches
+  the web layer** — `GitDeploy::webhook` does the constant-time (`hash_equals`) verification with the secret
+  from `deploy.json`, checks the pushed branch equals the configured branch, and launches the deploy out of
+  band via `systemd-run` (fast 202). It returns a generic rejection (never revealing whether the token or
+  signature failed). The deploy itself still runs as the site identity (A41). Tests cover HMAC accept/forge,
+  branch filter, body cap, and token shape.

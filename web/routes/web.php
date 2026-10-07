@@ -24,8 +24,12 @@ use App\Livewire\UpdatesPage;
 use App\Livewire\VhostsPage;
 use App\Http\Controllers\PanelAuthCheckController;
 use App\Http\Controllers\TerminalAuthController;
+use App\Http\Controllers\DeployWebhookController;
 use App\Http\Controllers\TerminalSessionController;
 use App\Http\Controllers\VhostFilesController;
+use App\Http\Middleware\EnsureSetupComplete;
+use App\Http\Middleware\IdleTimeout;
+use App\Http\Middleware\IpAllowlist;
 use App\Livewire\VhostContainerLogsPage;
 use App\Livewire\VhostContainerShellPage;
 use App\Livewire\SearchPage;
@@ -55,6 +59,16 @@ Route::get('/internal/terminal/auth/{sessionId}', TerminalAuthController::class)
 
 Route::get('/internal/auth-check', PanelAuthCheckController::class)
     ->name('panel.auth-check');
+
+// A78: push-to-deploy. Unauthenticated (GitHub/GitLab have no panel session) —
+// gated by the HMAC the broker verifies, not by auth. Bypasses the IP allowlist
+// (the webhook comes from the forge, not the operator), idle-timeout and
+// setup-complete gates, and CSRF (external POST). Throttled; the broker does the
+// constant-time signature check.
+Route::post('/hooks/deploy/{token}', DeployWebhookController::class)
+    ->middleware('throttle:60,1')
+    ->withoutMiddleware([IpAllowlist::class, IdleTimeout::class, EnsureSetupComplete::class])
+    ->name('deploy.webhook');
 
 Route::middleware(['auth', '2fa'])->group(function () {
     Route::get('/two-factor/setup', TwoFactorSetup::class)->name('two-factor.setup');

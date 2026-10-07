@@ -41,6 +41,10 @@ class VhostDeployPage extends Component
 
     public bool $configured = false;
 
+    public ?string $webhookToken = null;
+
+    public ?string $webhookSecret = null;
+
     public ?string $flash = null;
 
     public ?string $error = null;
@@ -65,6 +69,8 @@ class VhostDeployPage extends Component
         $this->branch = (string) ($d['branch'] ?? $this->branch);
         $this->preset = (string) ($d['preset'] ?? $this->preset);
         $this->command = (string) ($d['command'] ?? '');
+        $this->webhookToken = ($d['webhook_token'] ?? null) !== null ? (string) $d['webhook_token'] : null;
+        $this->webhookSecret = ($d['webhook_secret'] ?? null) !== null ? (string) $d['webhook_secret'] : null;
         $schedule = (string) ($d['schedule'] ?? 'off');
         if (str_starts_with($schedule, 'daily@')) {
             $this->scheduleMode = 'daily';
@@ -115,6 +121,25 @@ class VhostDeployPage extends Component
             $this->flash = $message.' Follow it on the Operations page.';
         } catch (\Throwable $e) {
             $this->error = $e->getMessage();
+        }
+    }
+
+    public function webhookUrl(): ?string
+    {
+        return $this->webhookToken !== null ? url('/hooks/deploy/'.$this->webhookToken) : null;
+    }
+
+    public function rotateWebhook(BrokerClient $broker): void
+    {
+        $this->flash = $this->error = null;
+        $res = $broker->call('deploy.webhook.rotate', [$this->domain], [], 60);
+        if ($res->ok) {
+            $d = (array) $res->data;
+            $this->webhookToken = ($d['webhook_token'] ?? null) !== null ? (string) $d['webhook_token'] : null;
+            $this->webhookSecret = ($d['webhook_secret'] ?? null) !== null ? (string) $d['webhook_secret'] : null;
+            $this->flash = 'New webhook secret created. Update the webhook at the repository with the new URL/secret.';
+        } else {
+            $this->error = (string) $res->error;
         }
     }
 

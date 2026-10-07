@@ -75,6 +75,10 @@ final class GitDeploy
             'preset' => $cfg['preset'] ?? null,
             'command' => $cfg['command'] ?? null,
             'schedule' => $cfg['schedule'] ?? 'off',
+            // A78: token is the public id in the webhook URL; secret is the HMAC
+            // key the operator pastes into GitHub/GitLab (admin-only panel read).
+            'webhook_token' => $cfg['webhook_token'] ?? null,
+            'webhook_secret' => $cfg['webhook_secret'] ?? null,
             'public_key' => $this->runtime->fileExists($this->dir($domain) . '/id_ed25519.pub')
                 ? trim($this->runtime->readFile($this->dir($domain) . '/id_ed25519.pub')) : null,
             'state' => $this->state($domain),
@@ -104,12 +108,24 @@ final class GitDeploy
         $schedule = self::validateSchedule($input['schedule'] ?? 'off');
 
         $this->ensureDir($domain);
+        // A78: a push-to-deploy webhook secret (HMAC key) and a public token
+        // (unguessable id in the webhook URL). Preserved across re-configures so
+        // saving settings does not silently invalidate a configured webhook.
+        $existing = $this->readJson($this->dir($domain) . '/deploy.json');
+        $webhookSecret = (string) ($existing['webhook_secret'] ?? '');
+        $webhookToken = (string) ($existing['webhook_token'] ?? '');
+        if ($webhookSecret === '' || $webhookToken === '') {
+            $webhookSecret = bin2hex(random_bytes(32));
+            $webhookToken = bin2hex(random_bytes(16));
+        }
         $this->runtime->writeFile($this->dir($domain) . '/deploy.json', json_encode([
             'repository' => $repository,
             'branch' => $branch,
             'preset' => $preset,
             'command' => $command,
             'schedule' => $schedule,
+            'webhook_secret' => $webhookSecret,
+            'webhook_token' => $webhookToken,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", 0600);
         if (!$this->runtime->fileExists($this->dir($domain) . '/id_ed25519')) {
             $this->generateKey($domain);
@@ -140,6 +156,99 @@ final class GitDeploy
         $this->runtime->exec(['/bin/rm', '-rf', '--one-file-system', $this->dir($domain)], null, 120);
 
         return ['domain' => $domain, 'removed' => true];
+    }
+
+    /** A78: replace the webhook secret + token (e.g. if the secret leaked). */
+    public function rotateWebhook(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $this->vhost($domain);
+        $cfg = $this->readJson($this->dir($domain) . '/deploy.json');
+        if ($cfg === []) {
+            throw new BrokerException('Deploy is not configured for this site.', 2);
+        }
+        $cfg['webhook_secret'] = bin2hex(random_bytes(32));
+        $cfg['webhook_token'] = bin2hex(random_bytes(16));
+        $this->runtime->writeFile(
+            $this->dir($domain) . '/deploy.json',
+            json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
+            0600
+        );
+
+        return $this->config($domain);
+    }
+
+    /**
+     * A78: verify a push webhook and, if valid, launch the site's deploy in the
+     * background. Called by the unauthenticated /hooks/deploy/{token} web route,
+     * which is a thin relay — the HMAC secret never leaves root (it lives in
+     * deploy.json), so verification happens here, not in the web layer.
+     *
+     * @return array{accepted:bool, domain?:string, reason?:string}
+     */
+    public function webhook(string $token, string $provider, string $signature, string $body): array
+    {
+        if (preg_match('/^[a-f0-9]{32}$/', $token) !== 1) {
+            throw new BrokerException('Invalid webhook token.', 2);
+        }
+        $cfg = null;
+        $domain = '';
+        foreach ($this->runtime->isDir(self::BASE) ? $this->runtime->listDir(self::BASE) : [] as $slug) {
+            $candidate = $this->readJson(self::BASE . '/' . $slug . '/deploy.json');
+            $candToken = (string) ($candidate['webhook_token'] ?? '');
+            if ($candToken !== '' && hash_equals($candToken, $token)) {
+                $cfg = $candidate;
+                $domain = (string) ($this->readJson(self::BASE . '/' . $slug . '/state.json')['domain'] ?? '');
+                break;
+            }
+        }
+        // Generic failure (never reveal whether the token matched a site).
+        if ($cfg === null || $domain === '' || !self::verifySignature(
+            $provider,
+            (string) ($cfg['webhook_secret'] ?? ''),
+            $signature,
+            $body
+        )) {
+            throw new BrokerException('Webhook rejected.', 2);
+        }
+
+        $pushed = self::branchFromPayload($body);
+        $configured = (string) ($cfg['branch'] ?? 'main');
+        if ($pushed !== '' && $pushed !== $configured) {
+            return ['accepted' => false, 'domain' => $domain, 'reason' => 'branch ' . $pushed . ' != ' . $configured];
+        }
+
+        // Launch the deploy out of band so the webhook returns immediately; the
+        // deploy itself runs as the site identity inside GitDeploy::deploy.
+        $this->runtime->exec([
+            '/usr/bin/systemd-run', '--quiet', '--collect',
+            '--unit=azerioid-deploy-' . substr(hash('sha256', $domain), 0, 16),
+            rtrim($this->config->panelRoot, '/') . '/broker', 'deploy.run', $domain,
+        ], null, 30);
+
+        return ['accepted' => true, 'domain' => $domain];
+    }
+
+    private static function verifySignature(string $provider, string $secret, string $signature, string $body): bool
+    {
+        if ($secret === '' || $signature === '') {
+            return false;
+        }
+        if ($provider === 'gitlab') {
+            // GitLab sends the shared secret verbatim in X-Gitlab-Token.
+            return hash_equals($secret, $signature);
+        }
+
+        // GitHub (default): X-Hub-Signature-256: sha256=<hex HMAC of the raw body>.
+        return hash_equals('sha256=' . hash_hmac('sha256', $body, $secret), $signature);
+    }
+
+    private static function branchFromPayload(string $body): string
+    {
+        $data = json_decode($body, true);
+        $ref = is_array($data) ? (string) ($data['ref'] ?? '') : '';
+
+        return str_starts_with($ref, 'refs/heads/') ? substr($ref, strlen('refs/heads/')) : '';
     }
 
     /** @return list<array<string,mixed>> every site with deploy configured (the panel's scheduler reads this) */

@@ -93,6 +93,53 @@ final class GitDeployTest extends TestCase
         $this->assertCount(1, array_filter($this->rt->execLog, static fn (array $e): bool => ($e['command'][0] ?? '') === '/usr/bin/ssh-keygen'));
     }
 
+    public function test_push_webhook_verifies_hmac_and_launches_deploy(): void
+    {
+        $deploy = new GitDeploy($this->cfg, $this->rt);
+        $cfg = $deploy->configure(self::DOMAIN, ['repository' => 'git@github.com:acme/shop.git', 'branch' => 'main', 'preset' => 'none']);
+        $token = (string) $cfg['webhook_token'];
+        $secret = (string) $cfg['webhook_secret'];
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{32}$/', $token);
+        $body = '{"ref":"refs/heads/main"}';
+        $sig = 'sha256='.hash_hmac('sha256', $body, $secret);
+
+        $out = $deploy->webhook($token, 'github', $sig, $body);
+
+        $this->assertTrue($out['accepted']);
+        $this->assertSame(self::DOMAIN, $out['domain']);
+        $launched = false;
+        foreach ($this->rt->execLog as $e) {
+            if (($e['command'][0] ?? '') === '/usr/bin/systemd-run' && in_array('deploy.run', $e['command'], true)) {
+                $launched = true;
+            }
+        }
+        $this->assertTrue($launched, 'a verified webhook must launch the deploy out of band');
+    }
+
+    public function test_push_webhook_rejects_a_forged_signature(): void
+    {
+        $deploy = new GitDeploy($this->cfg, $this->rt);
+        $cfg = $deploy->configure(self::DOMAIN, ['repository' => 'git@github.com:acme/shop.git', 'branch' => 'main', 'preset' => 'none']);
+        $this->expectException(BrokerException::class);
+        $deploy->webhook((string) $cfg['webhook_token'], 'github', 'sha256=deadbeef', '{"ref":"refs/heads/main"}');
+    }
+
+    public function test_push_webhook_ignores_a_push_to_another_branch(): void
+    {
+        $deploy = new GitDeploy($this->cfg, $this->rt);
+        $cfg = $deploy->configure(self::DOMAIN, ['repository' => 'git@github.com:acme/shop.git', 'branch' => 'main', 'preset' => 'none']);
+        $body = '{"ref":"refs/heads/feature-x"}';
+        $sig = 'sha256='.hash_hmac('sha256', $body, (string) $cfg['webhook_secret']);
+
+        $out = $deploy->webhook((string) $cfg['webhook_token'], 'github', $sig, $body);
+
+        $this->assertFalse($out['accepted']);
+        foreach ($this->rt->execLog as $e) {
+            $this->assertFalse(($e['command'][0] ?? '') === '/usr/bin/systemd-run' && in_array('deploy.run', $e['command'], true),
+                'a push to a non-deploy branch must not launch a deploy');
+        }
+    }
+
     public function test_a_custom_command_needs_the_typed_confirm(): void
     {
         $this->expectException(BrokerException::class);

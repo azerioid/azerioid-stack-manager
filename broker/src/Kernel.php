@@ -239,6 +239,8 @@ final class Kernel
         'deploy.config' => Deploy::class,
         'deploy.config.set' => Deploy::class,
         'deploy.key.rotate' => Deploy::class,
+        'deploy.webhook' => Deploy::class,
+        'deploy.webhook.rotate' => Deploy::class,
         'deploy.remove' => Deploy::class,
         'deploy.list' => Deploy::class,
         'deploy.run' => Deploy::class,

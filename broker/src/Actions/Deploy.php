@@ -28,12 +28,23 @@ final class Deploy
         if ($action === 'deploy.list') {
             return ['sites' => $deploy->listAll()];
         }
+        // A78: the webhook is addressed by its public token, not a domain — it
+        // is relayed from the unauthenticated /hooks/deploy/{token} route.
+        if ($action === 'deploy.webhook') {
+            return $deploy->webhook(
+                (string) ($input['token'] ?? ''),
+                (string) ($input['provider'] ?? 'github'),
+                (string) ($input['signature'] ?? ''),
+                (string) ($input['body'] ?? '')
+            );
+        }
         $domain = Validator::domain((string) ($args[0] ?? ($input['domain'] ?? '')));
 
         return match ($action) {
             'deploy.config' => $deploy->config($domain),
             'deploy.config.set' => $deploy->configure($domain, $input),
             'deploy.key.rotate' => $deploy->rotateKey($domain),
+            'deploy.webhook.rotate' => $deploy->rotateWebhook($domain),
             'deploy.remove' => $deploy->remove($domain),
             'deploy.run' => $deploy->deploy($domain, $input),
             'deploy.rollback' => $deploy->rollback($domain),
