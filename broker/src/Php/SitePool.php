@@ -100,6 +100,11 @@ final class SitePool
             // of one core (100 = one core). null = uncapped.
             'memory_mb' => isset($d['memory_mb']) && is_int($d['memory_mb']) ? $d['memory_mb'] : null,
             'cpu_percent' => isset($d['cpu_percent']) && is_int($d['cpu_percent']) ? $d['cpu_percent'] : null,
+            // A80 erratum: set when this host's rootless Docker could not enforce the
+            // caps (no cgroup v2 delegation). The caps stay recorded but the run
+            // command omits the flags so the container still starts — reported, not
+            // silently dropped.
+            'docker_limits_unenforced' => ($d['docker_limits_unenforced'] ?? false) === true,
         ];
     }
 

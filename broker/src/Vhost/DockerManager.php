@@ -1410,12 +1410,17 @@ final class DockerManager
         // A80 inc2: hard CPU/memory caps the container runtime enforces (cgroup).
         // image/dockerfile modes only — compose mode would need the limits in the
         // compose file, which the operator owns, so those are stored but not enforced.
-        $limits = (new SitePool($this->config, $this->runtime))->resourceLimits($spec['domain']);
-        if ($limits['memory_mb'] !== null) {
-            array_push($parts, '--memory=' . $limits['memory_mb'] . 'm');
-        }
-        if ($limits['cpu_percent'] !== null) {
-            array_push($parts, '--cpus=' . self::cpuDecimal($limits['cpu_percent']));
+        $settings = (new SitePool($this->config, $this->runtime))->settings($spec['domain']);
+        // Omit the flags when this host's rootless Docker can't enforce them (A80
+        // erratum) — the caps stay recorded and are reported as not-enforced, but the
+        // container must still start.
+        if (! $settings['docker_limits_unenforced']) {
+            if ($settings['memory_mb'] !== null) {
+                array_push($parts, '--memory=' . $settings['memory_mb'] . 'm');
+            }
+            if ($settings['cpu_percent'] !== null) {
+                array_push($parts, '--cpus=' . self::cpuDecimal($settings['cpu_percent']));
+            }
         }
         if (DockerSettings::loadEnv($this->runtime, $spec['domain']) !== []) {
             // Values stay in the file: never on the command line, where ps would show them.
@@ -1458,6 +1463,10 @@ final class DockerManager
             return ['domain' => $domain, 'applied' => false, 'reason' => 'compose mode: set mem_limit/cpus in the compose file'];
         }
 
+        $pools = new SitePool($this->config, $this->runtime);
+        // Re-attempt enforcement each time: the operator may have fixed delegation.
+        $pools->saveSettings($domain, ['docker_limits_unenforced' => false]);
+
         $supervisor = new SupervisorManager($this->config, $this->runtime);
         $program = self::programName($domain);
         $base = [
@@ -1470,27 +1479,34 @@ final class DockerManager
         $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
         $supervisor->control($program, 'restart');
         if ($this->waitForPort((int) $spec['port'])) {
-            return ['domain' => $domain, 'applied' => true, 'docker_program' => $program];
+            return ['domain' => $domain, 'applied' => true, 'enforced' => true, 'docker_program' => $program];
         }
 
-        // The container did not come up with the caps. The most common cause is a
-        // rootless daemon without cgroup v2 CPU/memory delegation — `docker run`
-        // rejects --cpus/--memory ("NanoCPUs can not be set … cgroup is not mounted")
-        // and the container never starts. A resource cap must never take a working
-        // site down: clear the caps, bring the container back without them, and tell
-        // the operator this host's rootless Docker can't enforce them.
-        (new SitePool($this->config, $this->runtime))->saveSettings($domain, ['memory_mb' => null, 'cpu_percent' => null]);
+        // The container did not come up with the caps. The usual cause is a rootless
+        // daemon without cgroup v2 CPU/memory delegation — `docker run` rejects
+        // --cpus/--memory ("NanoCPUs can not be set … cgroup is not mounted") and the
+        // container never starts. A resource cap must never take a working site down,
+        // and the operator's requested cap must not be silently dropped: keep the cap
+        // recorded, mark it not-enforced on this host (so the run command omits the
+        // flags and `vhost.limits.show` reports it), and bring the container back.
+        $pools->saveSettings($domain, ['docker_limits_unenforced' => true]);
         $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
         $supervisor->control($program, 'restart');
-        $recovered = $this->waitForPort((int) $spec['port']);
+        if (! $this->waitForPort((int) $spec['port'])) {
+            throw new BrokerException(
+                'Could not restart the container on 127.0.0.1:' . $spec['port'] . ' — check the container logs.',
+                1
+            );
+        }
 
-        throw new BrokerException(
-            'This host\'s rootless Docker could not apply the CPU/memory cap (it needs cgroup v2 delegation). '
-            . ($recovered
-                ? 'The caps were cleared and the container was restarted without them.'
-                : 'The caps were cleared but the container is still not listening — check the container logs.'),
-            3
-        );
+        return [
+            'domain' => $domain,
+            'applied' => true,
+            'enforced' => false,
+            'reason' => 'This host\'s rootless Docker cannot enforce CPU/memory caps (it needs cgroup v2 delegation). '
+                . 'The caps are recorded but not applied; the container is running without them.',
+            'docker_program' => $program,
+        ];
     }
 
     /**
