@@ -475,6 +475,7 @@ final class FakeBroker
                 'db.access.show' => $this->dbAccessShow($args, $stdin),
                 'db.access.set' => $this->dbAccessSet($args, $stdin),
                 'logs.tail' => $this->logs($args),
+                'logs.vhost' => $this->logsVhost($args, $stdin),
                 'php.versions' => $this->phpVersions(),
                 'php.timeouts.ensure' => [
                     'timeouts' => [
@@ -3111,6 +3112,26 @@ final class FakeBroker
             return ['name' => $name, 'user' => $args[1] ?? $name, 'dropped' => true];
         }
         throw new BrokerCallException('Database does not exist.', 3);
+    }
+
+    /** @return array<string,mixed> */
+    private function logsVhost(array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $needle = (string) ($stdin['needle'] ?? '');
+        $path = '/var/log/caddy/access_'.$domain.'.log';
+        $lines = $needle !== ''
+            ? ['12:[2026-08-28 07:00:02] GET /'.$needle.' 200']
+            : ['[2026-08-28 07:00:01] GET / 200 '.$domain, '[2026-08-28 07:00:02] GET /health 200 '.$domain];
+
+        return array_filter([
+            'domain' => $domain,
+            'type' => 'access',
+            'path' => $path,
+            'missing' => false,
+            'needle' => $needle !== '' ? $needle : null,
+            'lines' => $lines,
+        ], static fn ($v) => $v !== null);
     }
 
     private function logs(array $args): array

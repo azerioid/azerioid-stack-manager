@@ -4,7 +4,7 @@
     @endif
     <form wire:submit="load" class="flex flex-wrap items-end gap-3">
         <label class="text-xs uppercase tracking-wide text-zinc-500">Log
-            <select class="field mt-1" wire:model="key">
+            <select class="field mt-1" wire:model="key" @disabled($vhostDomain !== '')>
                 <option value="caddy">Web server access</option>
                 <option value="mariadb">MariaDB error</option>
                 <option value="php-fpm">PHP-FPM error</option>
@@ -13,6 +13,16 @@
                 <option value="auth">auth.log</option>
             </select>
         </label>
+        @if ($domains !== [])
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Site access log
+                <select class="field mt-1" wire:model="vhostDomain">
+                    <option value="">— system logs —</option>
+                    @foreach ($domains as $d)
+                        <option value="{{ $d }}">{{ $d }}</option>
+                    @endforeach
+                </select>
+            </label>
+        @endif
         <label class="text-xs uppercase tracking-wide text-zinc-500">Lines
             <input type="number" min="1" max="500" class="field mt-1 w-24" wire:model="lines">
         </label>
