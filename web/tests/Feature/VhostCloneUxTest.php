@@ -47,6 +47,20 @@ final class VhostCloneUxTest extends TestCase
             ->assertSet('cloneResult', []);
     }
 
+    public function test_clone_refuses_an_unknown_or_client_forged_source(): void
+    {
+        $this->actingAs($this->admin());
+        $this->app->make(FakeBroker::class);
+
+        // A client sets cloningDomain directly to a site that isn't a cloneable vhost.
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->set('cloningDomain', 'not-a-real-vhost.example.com')
+            ->set('cloneTarget', 'staging.example.com')
+            ->call('saveClone')
+            ->assertSet('cloneResult', [])
+            ->assertSet('cloningDomain', null);
+    }
+
     private function admin(): User
     {
         $totp = new TotpService();
