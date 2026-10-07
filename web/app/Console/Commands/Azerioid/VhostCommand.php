@@ -11,7 +11,7 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|del|files|octane|pm2|docker|reconcile|isolation|php-pool}
+        {action : list|add|edit|clone|del|files|octane|pm2|docker|reconcile|isolation|php-pool}
         {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale|node (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation); status|apply|set (with php-pool)}
         {--domain= : Vhost domain}
         {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
@@ -21,6 +21,7 @@ class VhostCommand extends Command
         {--type=php : php|static|proxy}
         {--php= : PHP version for php vhosts}
         {--root= : Document root}
+        {--source= : Source vhost domain to clone from (clone)}
         {--upstream= : Upstream host:port for proxy vhosts}
         {--tls= : off|auto|internal|dns01 (aliases: on=auto, dns=dns01, self=internal)}
         {--tls-mode= : Alias of --tls=}
@@ -61,6 +62,7 @@ class VhostCommand extends Command
             'list' => $this->listVhosts(),
             'add' => $this->addVhost(),
             'edit' => $this->editVhost(),
+            'clone' => $this->cloneVhost(),
             'del', 'delete', 'rm' => $this->delVhost(),
             'files' => $this->files(),
             'octane' => $this->octane(),
@@ -470,6 +472,40 @@ class VhostCommand extends Command
                 $this->line("Created vhost {$domain}.");
             }
             if ($this->wantsJson() || is_array($res->data)) {
+                $this->line(json_encode($res->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            }
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    /**
+     * A79 (increment 1): clone a site to a new domain for staging — vhost replicated
+     * and the file tree copied into a fully isolated vhost. Databases and the
+     * Octane/PM2/Docker runtimes are not cloned yet.
+     */
+    private function cloneVhost(): int
+    {
+        $source = trim((string) $this->option('source'));
+        $domain = trim((string) $this->option('domain'));
+        if ($source === '' || $domain === '') {
+            $this->error('Usage: azerioid vhost clone --source=<src-domain> --domain=<new-domain>');
+
+            return self::INVALID;
+        }
+
+        try {
+            $res = $this->brokerCall('vhost.clone', [$source, $domain], [], 1800);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+            $this->line("Cloned {$source} → {$domain}.");
+            if (is_array($res->data) && isset($res->data['note'])) {
+                $this->line((string) $res->data['note']);
+            }
+            if ($this->wantsJson() && is_array($res->data)) {
                 $this->line(json_encode($res->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
             }
 

@@ -2112,3 +2112,26 @@ Two commit-review findings on the first A78 cut:
   returns `webhook_configured` + `webhook_token` only; `configure()`/`rotateWebhook()` return the secret the one
   time it is created, and the panel displays it once. `signature` is added to the broker/web audit redaction
   denylist (the webhook body/token/secret were already redacted).
+
+## A79 — Staging clone (`vhost.clone`)
+
+New feature (post-audit roadmap). `vhost.clone <src> <dst>` copies an existing site to a new domain for
+staging. Building in increments; **increment 1** covers the vhost and the file tree.
+
+- **Isolated clone, not a shared mount.** The clone is provisioned as its own vhost via `WebServers::addVhost`
+  with a fresh `az-vh-<dst>` identity (A49); it does not share files, pool or identity with the source. The
+  source site tree is copied with `rsync -a --one-file-system --exclude .git/` (symlinks kept as symlinks, not
+  followed), then `VhostUser::ensure` hands the copy to the clone's identity, whose A72 sweep quarantines any
+  symlink that escapes the clone's own tree.
+- **Same-operator path only.** This is the operator cloning their own site, not the cross-domain restore B6
+  forbids. The dst domain is validated and refused if it is read-only/`default`/`azerioid-panel` or already a
+  vhost; the source must exist.
+- **FPM only for now.** A non-FPM (Octane/PM2/Docker/proxy-with-runtime) source is refused — increment 3 will
+  replicate the runtime. Databases are not cloned yet — increment 2.
+- **Tree-isolation guards (from commit-review on the first cut).** A vhost root set by hand can sit under the
+  target top `/data/www/<dst>` (no vhost is *named* `<dst>`, so the name check misses it) or nested inside the
+  source tree. Cloning would then delete-and-own a bystander site's files, or copy a nested site's files into
+  the clone. Before provisioning, `vhost.clone` now refuses when `$dstTop` already exists (file or symlink),
+  when any vhost's root is `$dstTop` or under it, or when any *other* vhost's root is under `$srcTop`. `--delete`
+  was dropped from the rsync (the target is freshly created, nothing to prune). Tests cover replication + file
+  copy, same/existing-domain refusal, FPM-only refusal, and the target/source tree-sharing refusals.

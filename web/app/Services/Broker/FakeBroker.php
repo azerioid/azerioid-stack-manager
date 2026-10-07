@@ -422,6 +422,7 @@ final class FakeBroker
                 'vhost.add' => $this->vhostAdd($args, $stdin),
                 'vhost.edit' => $this->vhostEdit($args, $stdin),
                 'vhost.del' => $this->vhostDel($args, $stdin),
+                'vhost.clone' => $this->vhostClone($args),
                 'vhost.octane.status' => $this->octane('status', $args, $stdin),
                 'vhost.octane.enable' => $this->octane('enable', $args, $stdin),
                 'vhost.octane.disable' => $this->octane('disable', $args, $stdin),
@@ -2367,6 +2368,47 @@ final class FakeBroker
         ];
 
         return $row;
+    }
+
+    /**
+     * A79: clone a source vhost to a new domain (increment 1 — vhost + files).
+     *
+     * @return array<string,mixed>
+     */
+    private function vhostClone(array $args): array
+    {
+        $src = (string) ($args[0] ?? '');
+        $dst = (string) ($args[1] ?? '');
+        if ($src === $dst) {
+            throw new BrokerCallException('The clone must use a different domain than the source.', 2);
+        }
+        $source = null;
+        foreach ($this->vhosts as $v) {
+            if ($v['domain'] === $src) {
+                $source = $v;
+            }
+            if ($v['domain'] === $dst || in_array($dst, $v['domains'] ?? [], true)) {
+                throw new BrokerCallException('A vhost for '.$dst.' already exists.', 3);
+            }
+        }
+        if ($source === null) {
+            throw new BrokerCallException('Source vhost '.$src.' was not found.', 2);
+        }
+        if (($source['runtime'] ?? 'fpm') !== 'fpm') {
+            throw new BrokerCallException('Cloning a '.$source['runtime'].' site is not supported yet.', 3);
+        }
+
+        $dstRoot = '/data/www/'.$dst.'/public';
+        $this->vhostAdd([$dst, $dstRoot, (string) ($source['type'] ?? 'php'), (string) ($source['php_version'] ?? '8.4')], []);
+
+        return [
+            'source' => $src,
+            'domain' => $dst,
+            'root' => $dstRoot,
+            'type' => (string) ($source['type'] ?? 'php'),
+            'files_copied' => true,
+            'note' => 'Databases and Octane/PM2/Docker runtimes are not cloned yet.',
+        ];
     }
 
     /**
