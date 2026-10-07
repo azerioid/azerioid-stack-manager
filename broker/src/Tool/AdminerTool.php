@@ -18,7 +18,11 @@ use AzerioidPanel\Broker\Web\PanelCaddy;
 final class AdminerTool
 {
     public const TOOL_DIR = '/var/lib/azerioid-panel/tools/adminer';
-    public const TMP_DIR = self::TOOL_DIR . '/tmp';
+    // A75: the private temp dir is a SIBLING of the tool dir, under the
+    // root-owned `tools` parent — NOT inside the adminer-owned TOOL_DIR. The
+    // adminer user cannot create entries in the root-owned parent, so root's
+    // mkdir/chown/chmod here cannot be hijacked by a planted symlink.
+    public const TMP_DIR = '/var/lib/azerioid-panel/tools/adminer-tmp';
     public const ARTIFACT_PATH = self::TOOL_DIR . '/adminer.php';
     public const FPM_POOL = 'azerioid-adminer-tool';
     public const FPM_SOCKET = '/run/php/azerioid-adminer-tool.sock';

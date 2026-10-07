@@ -109,6 +109,9 @@ final class AdminerToolTest extends TestCase
         $this->assertStringNotContainsString(':/tmp:', $pool);
         $this->assertStringContainsString('session.save_path] = ' . AdminerTool::TMP_DIR, $pool);
         $this->assertStringContainsString('upload_tmp_dir] = ' . AdminerTool::TMP_DIR, $pool);
+        // The temp dir must NOT live inside the adminer-owned tool dir, or root's
+        // mkdir/chown/chmod of it could follow a symlink the adminer user plants.
+        $this->assertFalse(str_starts_with(AdminerTool::TMP_DIR, AdminerTool::TOOL_DIR . '/'));
         $this->assertArrayHasKey(AdminerTool::ARTIFACT_PATH, $rt->files);
         $this->assertSame('<?php // fake adminer', $rt->files[AdminerTool::ARTIFACT_PATH]);
     }
