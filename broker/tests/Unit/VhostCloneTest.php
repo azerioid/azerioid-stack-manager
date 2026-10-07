@@ -42,21 +42,43 @@ final class VhostCloneTest extends TestCase
     {
         [$c] = $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
         $this->assertSame(0, $c);
+        // The ownership handover reads the settled group off the docroot, then
+        // chowns the copied top. Model rsync creating the target directory so the
+        // handover's isDir() check sees it (and the pre-copy existence guard does not).
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
+        $this->rt->execFn = function (array $cmd): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
+                $this->rt->dirs['/data/www/dst.test'] = true;
+            }
+
+            return null;
+        };
 
         [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
         $this->assertSame(0, $code, json_encode($json));
         $this->assertArrayHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
 
         $rsynced = false;
+        $ownedByClone = false;
         foreach ($this->rt->execLog as $e) {
             $cmd = $e['command'];
+            // The copy must not preserve the source's uid/gid (--no-o --no-g).
             if (($cmd[0] ?? '') === '/usr/bin/rsync'
                 && in_array('/data/www/src.test/', $cmd, true)
-                && in_array('/data/www/dst.test/', $cmd, true)) {
+                && in_array('/data/www/dst.test/', $cmd, true)
+                && in_array('--no-o', $cmd, true)
+                && in_array('--no-g', $cmd, true)) {
                 $rsynced = true;
             }
+            // The WHOLE copied tree (not just the docroot) must be handed to the clone.
+            if (($cmd[0] ?? '') === '/usr/bin/chown'
+                && in_array('-R', $cmd, true)
+                && in_array('/data/www/dst.test', $cmd, true)) {
+                $ownedByClone = true;
+            }
         }
-        $this->assertTrue($rsynced, 'the source site tree must be copied to the clone');
+        $this->assertTrue($rsynced, 'the source site tree must be copied without preserving source ownership');
+        $this->assertTrue($ownedByClone, 'the whole copied tree must be chowned to the clone identity');
     }
 
     public function test_clone_refuses_same_domain_and_an_existing_target(): void

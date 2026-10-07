@@ -98,20 +98,39 @@ final class VhostClone
         ]);
 
         // Copy the whole source site tree into the clone. rsync -a keeps symlinks
-        // as symlinks (does not follow them); ownership is handed to the clone's
-        // identity afterwards by VhostUser::ensure, whose A72 sweep then
-        // quarantines any symlink that escapes the clone's own tree.
-        // No --delete: $dstTop was just created empty by addVhost, so there is
-        // nothing to prune, and --delete into the wrong tree is a foot-gun.
+        // as symlinks (does not follow them); --one-file-system stays on the site's
+        // own filesystem. --no-o --no-g drops the source's uid/gid so every copied
+        // file lands owned by root, not by az-vh-<src>: the clone must not inherit
+        // the SOURCE tenant's ownership (that would let the source site write into
+        // the clone), and a root-owned copy means no tenant can reach $dstTop to
+        // race the ownership handover below. No --delete: $dstTop is freshly
+        // created, nothing to prune, and --delete into the wrong tree is a foot-gun.
         $copy = $runtime->exec([
-            '/usr/bin/rsync', '-a', '--one-file-system',
+            '/usr/bin/rsync', '-a', '--no-o', '--no-g', '--one-file-system',
             '--exclude', '.git/',
             rtrim($srcTop, '/') . '/', rtrim($dstTop, '/') . '/',
         ], null, 1800);
         if (!$copy->ok()) {
             throw new BrokerException('Copying the site files failed: ' . trim($copy->stderr), 1);
         }
+
+        // Create the clone's identity and hand it the docroot + top directory; the
+        // A72 sweep (bounded to the site top) quarantines any symlink that escapes
+        // the clone's tree.
         VhostUser::ensure($runtime, $config, $dst, $dstRoot);
+
+        // ensure() only owns the docroot and the top directory. The copy also holds
+        // the app code above the docroot (vendor, .env, storage) still owned by root
+        // from the copy — hand the WHOLE copied tree to the clone's identity so the
+        // clone, and only the clone, owns its files (A49 isolation). The group is
+        // whatever ensure settled the docroot on (az-vh-<dst> once migrated, the
+        // legacy group before), read back so this stays correct either way. Safe to
+        // chown -R as root here: the tree is root-owned throughout, so no tenant can
+        // race it (unlike applyOwnership's general case — A77).
+        $grp = trim($runtime->exec(['/usr/bin/stat', '-c', '%G', $dstRoot], null, 10)->stdout);
+        if ($grp !== '') {
+            VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp);
+        }
 
         return [
             'source' => $src,
