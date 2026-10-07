@@ -2260,3 +2260,12 @@ pool, and dispatches `applyLimits` to the matching manager. All caps derive from
 untrusted reaches the command line. CLI: `azerioid vhost limits --memory= --cpu=`; UI: fields + the enforcement
 note in the vhost edit modal. Tests: the Docker run flags, the PM2 flag, the action's validation and enforcement
 note. Live-validated on the Rocky host (per-site FPM pool in increment 1; PM2 command after deploy).
+
+### A80 inc2 erratum — PM2 re-detection of npm-mode apps
+
+Live validation on Rocky surfaced a latent bug (shared by `setNode` and the new `applyLimits`): a npm-mode PM2
+vhost records its entry as the marker `npm start`, which round-trips out of the Caddy conf comment as `npmstart`.
+Fed back to `detectNodeApp` as a path hint it fails ("Entry file not found: npmstart"), so re-applying a limit
+(or switching Node) on a npm-mode app errored. Fixed at the root with `entryHintFromVhost`: the npm marker and an
+empty entry become `null` (auto-detect), only a genuine script path is passed through. Used by every re-detection
+call site.

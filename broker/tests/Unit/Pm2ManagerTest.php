@@ -42,6 +42,23 @@ final class Pm2ManagerTest extends TestCase
         $this->assertStringNotContainsString('--max-memory-restart', $uncapped);
     }
 
+    /**
+     * A80 inc2 erratum: a re-enabled npm-mode vhost stores its entry as the "npmstart"
+     * marker, which is not a file. Feeding it back as a path hint broke re-detection
+     * (applyLimits/setNode); the npm marker and an empty entry must become null
+     * (auto-detect), while a genuine script path passes through.
+     */
+    public function test_entry_hint_from_vhost_treats_npm_marker_as_auto_detect(): void
+    {
+        $hint = new \ReflectionMethod(Pm2Manager::class, 'entryHintFromVhost');
+
+        $this->assertNull($hint->invoke(null, ['pm2_entry' => 'npmstart']));
+        $this->assertNull($hint->invoke(null, ['pm2_entry' => 'npm start']));
+        $this->assertNull($hint->invoke(null, ['pm2_entry' => '']));
+        $this->assertNull($hint->invoke(null, []));
+        $this->assertSame('server.js', $hint->invoke(null, ['pm2_entry' => 'server.js']));
+    }
+
     public function test_validate_port_rejects_outside_range(): void
     {
         $this->expectException(BrokerException::class);

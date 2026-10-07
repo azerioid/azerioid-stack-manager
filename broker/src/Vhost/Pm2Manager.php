@@ -535,6 +535,23 @@ final class Pm2Manager
     /**
      * @return array{app_dir:string, entry:string, entry_label:string, mode:string}
      */
+    /**
+     * The entry hint for re-detecting an already-enabled vhost. A npm-mode app records
+     * its entry as the marker "npm start", which round-trips out of the vhost comment
+     * as "npmstart" — not a real file. Feeding that back to detectNodeApp as a path
+     * hint fails ("Entry file not found: npmstart"), so treat the npm marker (and an
+     * empty entry) as "auto-detect" (null) and only pass a genuine script path through.
+     */
+    private static function entryHintFromVhost(array $vhost): ?string
+    {
+        $hint = trim((string) ($vhost['pm2_entry'] ?? ''));
+        if ($hint === '' || preg_replace('/[\s:]+/', '', strtolower($hint)) === 'npmstart') {
+            return null;
+        }
+
+        return $hint;
+    }
+
     private function assertNodeApp(string $domain, ?string $root, mixed $entryHint): array
     {
         $detected = self::detectNodeApp($this->runtime, $root, $entryHint);
@@ -660,7 +677,7 @@ final class Pm2Manager
             return ['domain' => $domain, 'node' => $to, 'changed' => false];
         }
         $nodes->ensurePm2($to);
-        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, self::entryHintFromVhost($vhost));
         $port = (int) ($vhost['pm2_port'] ?? 0);
         $instances = (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES);
         $pm2Runtime = $nodes->bin($to, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found after install.', 1);
@@ -711,7 +728,7 @@ final class Pm2Manager
         $node = $this->nodeOf($domain);
         $nodes = new NodeRuntimes($this->config, $this->runtime);
         $pm2Runtime = $nodes->bin($node, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found.', 1);
-        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, self::entryHintFromVhost($vhost));
         $port = (int) ($vhost['pm2_port'] ?? 0);
         $instances = max(1, (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES));
         $supervisor = new SupervisorManager($this->config, $this->runtime);
@@ -803,7 +820,7 @@ final class Pm2Manager
         $node = $this->nodeOf($domain);
         $nodes = new NodeRuntimes($this->config, $this->runtime);
         $pm2Runtime = $nodes->bin($node, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found.', 1);
-        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, self::entryHintFromVhost($vhost));
         $port = (int) ($vhost['pm2_port'] ?? 0);
         $supervisor = new SupervisorManager($this->config, $this->runtime);
         $program = self::programName($domain);
