@@ -251,6 +251,31 @@ final class DockerWorkloadTest extends TestCase
         $this->assertStringContainsString('--cpus=1.5', $conf);
     }
 
+    public function test_a80_a_cap_that_fails_the_restart_falls_back_to_running_uncapped(): void
+    {
+        $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+
+        // Rootless dockerd without cgroup delegation: `docker run --cpus` exits at once and
+        // supervisorctl reports a spawn error — the restart itself fails, not just the port.
+        $inner = $this->rt->execFn;
+        $this->rt->execFn = function (array $c, ?string $stdin) use ($inner): ?ExecResult {
+            if (($c[0] ?? '') === '/usr/bin/supervisorctl' && ($c[1] ?? '') === 'restart'
+                && str_contains($this->supervisorConf(), '--cpus=')) {
+                return new ExecResult($c, 7, '', 'ERROR (spawn error)');
+            }
+
+            return $inner($c, $stdin);
+        };
+
+        [$code, $json] = $this->run_('vhost.limits.set', ['memory_mb' => 256, 'cpu_percent' => 150]);
+
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertFalse($json['data']['runtime_applied']['enforced'] ?? null, json_encode($json));
+        $this->assertStringNotContainsString('--cpus=', $this->supervisorConf());
+        $this->assertTrue((new \AzerioidPanel\Broker\Php\SitePool($this->cfg, $this->rt))
+            ->settings(self::DOMAIN)['docker_limits_unenforced'] ?? false);
+    }
+
     public function test_restart_on_failure_maps_to_supervisors_unexpected(): void
     {
         $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80, 'restart' => 'on-failure']);

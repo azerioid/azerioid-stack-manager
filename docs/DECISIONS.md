@@ -2348,3 +2348,11 @@ flag first and re-attempts enforcement (the operator may have enabled delegation
 already safe (it rolls the whole enable back and leaves the vhost unchanged on failure). Docker caps are thus
 best-effort and honest: enforced where the rootless daemon supports them (cgroup v2 delegation), recorded-and-
 reported where it doesn't, never site-breaking and never silently removed.
+
+### A80 erratum 2 — a spawn error on the capped restart also triggers the fail-safe
+
+Second live run on the Rocky host: `docker run --cpus` exits so fast that `supervisorctl restart` itself fails
+("ERROR (spawn error)") and `SupervisorManager::control` throws — before `waitForPort` is ever reached, so the
+fail-safe above was skipped and the site stayed down. `applyLimits` now treats a throwing restart exactly like a
+port that never opens: record `docker_limits_unenforced`, rewrite the command without the caps, restart. Regression
+test: `DockerWorkloadTest::test_a80_a_cap_that_fails_the_restart_falls_back_to_running_uncapped`.
