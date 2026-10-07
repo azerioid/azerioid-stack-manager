@@ -111,6 +111,32 @@ final class VhostCloneTest extends TestCase
         $this->assertStringContainsString('source directory', strtolower((string) ($nj['error'] ?? '')));
     }
 
+    public function test_clone_fails_closed_and_rolls_back_when_the_identity_handover_cannot_resolve(): void
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->rt->execFn = function (array $cmd): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
+                $this->rt->dirs['/data/www/dst.test'] = true;
+            }
+
+            return null;
+        };
+        // No stat script → the settled group reads empty → the handover must fail
+        // closed: remove the partial copy and the just-created vhost, then error.
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+        $this->assertNotSame(0, $code);
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
+
+        $removed = false;
+        foreach ($this->rt->execLog as $e) {
+            $cmd = $e['command'];
+            if (($cmd[0] ?? '') === '/bin/rm' && in_array('/data/www/dst.test', $cmd, true)) {
+                $removed = true;
+            }
+        }
+        $this->assertTrue($removed, 'the partial copy must be removed on a failed handover');
+    }
+
     public function test_clone_refuses_a_runtime_source_for_now(): void
     {
         // A docker-runtime source is not cloneable in increment 1.

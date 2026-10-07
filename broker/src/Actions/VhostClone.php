@@ -97,17 +97,23 @@ final class VhostClone
             'engine' => (string) ($source['engine'] ?? 'caddy'),
         ]);
 
-        // Copy the whole source site tree into the clone. rsync -a keeps symlinks
-        // as symlinks (does not follow them); --one-file-system stays on the site's
-        // own filesystem. --no-o --no-g drops the source's uid/gid so every copied
-        // file lands owned by root, not by az-vh-<src>: the clone must not inherit
-        // the SOURCE tenant's ownership (that would let the source site write into
-        // the clone), and a root-owned copy means no tenant can reach $dstTop to
-        // race the ownership handover below. No --delete: $dstTop is freshly
-        // created, nothing to prune, and --delete into the wrong tree is a foot-gun.
+        // Copy the whole source site tree into the clone. Deliberately NOT rsync -a:
+        //  -rlt      — recurse, keep symlinks as links (not followed), keep mtimes;
+        //  no -p     — do not preserve source modes. A tenant can set the setuid/setgid
+        //              bit on a file they own; with --no-o the copy becomes root-owned,
+        //              and a root-owned setuid file is a local-root primitive. Dropping
+        //              -p (and --chmod=ug-s as a belt-and-braces) means no such bit
+        //              survives; applyOwnership below then sets the final 2770/0660.
+        //  --no-D    — do not recreate device or special files as root from a
+        //              tenant-controlled tree.
+        //  --no-o --no-g — root-owned copy (not az-vh-<src>): the clone must not inherit
+        //              the SOURCE tenant's ownership, and a root-owned tree means no
+        //              tenant can reach $dstTop to race the handover below.
+        //  --one-file-system stays on the site's own filesystem. No --delete: $dstTop
+        //  is freshly created, nothing to prune, and --delete into a tree is a foot-gun.
         $copy = $runtime->exec([
-            '/usr/bin/rsync', '-a', '--no-o', '--no-g', '--one-file-system',
-            '--exclude', '.git/',
+            '/usr/bin/rsync', '-rlt', '--no-D', '--no-o', '--no-g', '--one-file-system',
+            '--chmod=ug-s', '--exclude', '.git/',
             rtrim($srcTop, '/') . '/', rtrim($dstTop, '/') . '/',
         ], null, 1800);
         if (!$copy->ok()) {
@@ -128,9 +134,14 @@ final class VhostClone
         // chown -R as root here: the tree is root-owned throughout, so no tenant can
         // race it (unlike applyOwnership's general case — A77).
         $grp = trim($runtime->exec(['/usr/bin/stat', '-c', '%G', $dstRoot], null, 10)->stdout);
-        if ($grp !== '') {
-            VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp);
+        if ($grp === '') {
+            // Fail closed: a clone the identity does not own is both useless and a
+            // root-owned tree we must not leave behind. Roll back the copy and vhost.
+            $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
+            $servers->removeVhost($runtime, $config, $dst);
+            throw new BrokerException('Could not hand the clone over to its identity; the clone was removed.', 1);
         }
+        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp);
 
         return [
             'source' => $src,

@@ -2130,6 +2130,13 @@ staging. Building in increments; **increment 1** covers the vhost and the file t
   tree `$dstTop` is handed to the clone's identity with `VhostUser::applyOwnership` (group read back from the
   docroot, so it is correct pre- and post-migration). Because the tree is root-owned throughout the window, no
   tenant can reach `$dstTop` to race the `chown -R` (the general-case A77 TOCTOU does not apply here).
+- **No root-owned setuid/device files (commit-review).** With `--no-o` the copy is root-owned, so `rsync -a`
+  (which preserves modes) would turn a setuid/setgid bit a tenant set on their own file into a **root-owned
+  setuid binary** — a local-root primitive — and would recreate tenant device/special nodes as root. The copy
+  is therefore `rsync -rlt --no-D --no-o --no-g --one-file-system --chmod=ug-s` — no `-p` (source modes not
+  preserved), `--chmod=ug-s` (strip setuid/setgid belt-and-braces), `--no-D` (no device/special recreation);
+  `applyOwnership` sets the final 2770/0660. The handover **fails closed**: if the settled group can't be read,
+  the partial copy is `rm -rf`'d and the vhost removed, rather than leaving a root-owned tree behind.
 - **Same-operator path only.** This is the operator cloning their own site, not the cross-domain restore B6
   forbids. The dst domain is validated and refused if it is read-only/`default`/`azerioid-panel` or already a
   vhost; the source must exist.
