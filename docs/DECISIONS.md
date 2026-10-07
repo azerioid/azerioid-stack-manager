@@ -2269,3 +2269,14 @@ Fed back to `detectNodeApp` as a path hint it fails ("Entry file not found: npms
 (or switching Node) on a npm-mode app errored. Fixed at the root with `entryHintFromVhost`: the npm marker and an
 empty entry become `null` (auto-detect), only a genuine script path is passed through. Used by every re-detection
 call site.
+
+## A81 — Audit / activity feed filters
+
+New feature (post-audit roadmap). Every privileged action is already captured in the `audit_logs` table — web
+actions and the result of every broker call (`BrokerClient`), with the acting user, IP, ok/code and redacted
+args. `AuditLogPage` listed them; A81 makes the feed answerable: filter by **action** (substring), **result**
+(any / succeeded / failed), **user**, and a **date range**. Filters are URL-bound (`#[Url]`) so a filtered view
+is shareable, and any change resets to the first page. No new storage or broker action — the table and its
+`created_at` / `action` indexes already exist, and the whole panel is admin-only (one root-equivalent operator,
+A39), so the auth group already gates the page. Test: the filters narrow the feed by action, result and user, and
+Clear restores it.
