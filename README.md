@@ -63,11 +63,18 @@ Proven on supported distros in operator testing — not marketing vapor:
 - **HTTPS** — Let's Encrypt HTTP-01 (automatic), self-signed/`tls internal` (extensively used), DNS-01 via Cloudflare/DigitalOcean (supported; lightly tested vs internal TLS)
 - **High-performance runtimes (opt-in per vhost)** — Laravel **Octane (FrankenPHP)** for Laravel apps and **PM2 cluster mode** for Node apps, both on the same Supervisor + Caddy foundation, with reload paths aimed at zero-downtime worker replacement. New PHP vhosts stay on PHP-FPM unless you opt in; the panel’s own runtime never uses Octane
 - **Rootless Docker (opt-in per vhost)** — pull an image or build from Dockerfile/compose in the site tree; container shell and log streaming from the panel. Daemon runs only as `azerioid-supervised` (no `docker` group, rootful Docker masked) — least-privilege layout adversarially tested so a bind-mount cannot escalate to host root
+- **Git push-to-deploy (per vhost)** — a HMAC-verified webhook (GitHub `X-Hub-Signature-256` / GitLab token) redeploys a site when its configured branch is pushed; the secret is shown once, the deploy runs as the site identity, and a push to any other branch is ignored (fail-closed)
+- **One-click staging clone** — "Clone to…" copies a site into a fresh **isolated** vhost (its own `az-vh-…` identity, files, and replicated Octane/PM2 runtime), and can clone its databases into fresh DBs with new credentials shown once. MariaDB clones rebind stored-object `DEFINER`s and load as the clone's own unprivileged DB user so a clone can never reach back into the source database
+- **Per-vhost resource limits** — cap a site's resource use and the panel enforces each runtime with the mechanism it actually has (and says so honestly): PHP-FPM a per-request `memory_limit` + `pm.max_children`; Docker hard cgroup CPU/memory via `--cpus`/`--memory`; PM2 a restart-based memory cap; Octane/compose stored-but-not-enforced
 - **Mail server (opt-in)** — per-domain mailboxes and aliases on Postfix/Dovecot/OpenDKIM, copy-paste MX/SPF/DKIM/DMARC records with live verification, full send+receive when DNS is correct. **Direct MX delivery and smarthost/relay are equally first-class**: most cloud providers block outbound port 25, so the health strip probes reachability and steers you to a relay when needed — a duality many competing panels never surface. Replacing an existing MTA always requires a typed `REPLACE-MTA`; deleting a mail-enabled vhost requires `DROP-MAIL`
 - **Databases with remote access modes** — localhost / specific IPs / global (with explicit confirmation); MariaDB and PostgreSQL enforce per-database host rules; MongoDB remote access is instance-wide firewall
 - **Adminer** — installable SQL admin UI for MariaDB / PostgreSQL / SQLite, reachable only through the panel’s authenticated session (never independently exposed)
 - **Per-vhost Terminal and File Manager** — broker drops to the vhost user (`az-vh-…`); path traversal and symlink escape rejected
 - **Supervisor processes** — create/start/stop/logs from UI or CLI
+- **App-down alerts** — a crashed Octane/PM2/Docker worker (while the host and web server are fine) is detected via Supervisor and raised as an incident with Telegram notification and auto-resolve, alongside service/disk/RAM/TLS/backup/cron rules
+- **Filterable audit feed** — every privileged action from both tiers (web actions and broker call results) with who / what / when / succeeded-or-failed filters; arguments are redacted
+- **Per-vhost access log viewer** — tail or fixed-string search any site's Caddy access log from the Logs page (path derived and allowlist-checked in the broker)
+- **2FA with recovery codes** — optional/required TOTP, plus one-time recovery codes issued at enrollment (shown once, encrypted at rest) so a lost authenticator no longer means a lockout; regenerate from Settings
 - **CLI parity** — `azerioid` wraps the same broker path as the dashboard (`origin=cli` in audit)
 - **Tag self-update** — `azerioid panel update check|apply` installs semver git tags (latest or `--v=<tag>`), refuses dirty trees, and rolls back automatically if apply fails mid-update
 - **White-label panel domain** — bind the panel to a hostname on `:443`; IP:3169 and SSH tunnel stay as fallback
@@ -148,7 +155,11 @@ azerioid vhost octane enable --domain=api.example.com
 azerioid vhost octane reload --domain=api.example.com
 azerioid vhost pm2 enable --domain=node.example.com --instances=2 --entry=server.js
 azerioid vhost docker enable --domain=app.example.com --mode=image --image=nginx:alpine --internal-port=80
+azerioid vhost clone --source=app.example.com --domain=staging.example.com --db=appdb:appdb_staging
+azerioid vhost limits --domain=app.example.com --php-memory=256 --max-children=10
+azerioid vhost limits --domain=api.example.com --memory=512 --cpu=150   # Octane/PM2/Docker runtime caps
 azerioid db add --engine=mariadb --name=appdb --user=appdb
+azerioid db clone --engine=mariadb --source=appdb --name=appdb_staging
 azerioid component install redis
 azerioid component install mail   # refuses foreign Exim/Sendmail unless --option=confirm=REPLACE-MTA
 azerioid component install adminer

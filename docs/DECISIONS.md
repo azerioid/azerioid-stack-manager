@@ -2323,3 +2323,12 @@ skipped. It rides the existing incident + Telegram-notify + auto-resolve machine
 `EvaluateAlerts` run, so a recovered worker resolves the incident like any other rule. Toggle on the Alerts page
 (`app_down`, on by default). Both broker calls are existing read-only actions — no new privileged surface. Test:
 a fatal PM2 worker opens and then (on recovery) resolves an incident.
+
+### A79 web UI — "Clone to…" on the vhost page
+
+The staging clone (A79) was CLI-only. The Virtual Hosts row-actions menu now offers **Clone to…** (hidden for
+Docker sites, which the broker refuses). It opens an inline form for the new domain and an optional `source:target`
+database list, calls `vhost.clone`, and on success shows the result — including each cloned database's one-time
+password — once, with any per-database or runtime-replication errors surfaced inline. Thin wrapper over the
+existing `vhost.clone` action; FakeBroker arm already present. Livewire tests cover the success path (new site +
+one-time DB credentials shown) and a rejected target domain.
