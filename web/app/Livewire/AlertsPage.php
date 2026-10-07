@@ -21,6 +21,9 @@ class AlertsPage extends Component
     public bool $backup_stale = true;
 
     public bool $cron_failed = true;
+
+    /** A84: alert when an Octane/PM2/Docker app is down. */
+    public bool $app_down = true;
     public bool $ssh = true;
     public int $disk_percent = 85;
     public int $ram_percent = 90;
@@ -45,6 +48,7 @@ class AlertsPage extends Component
             $this->tls = (bool) ($rules['tls'] ?? true);
             $this->backup_stale = (bool) ($rules['backup_stale'] ?? true);
             $this->cron_failed = (bool) ($rules['cron_failed'] ?? true);
+            $this->app_down = (bool) ($rules['app_down'] ?? true);
             $this->ssh = (bool) ($rules['ssh'] ?? true);
             $this->disk_percent = (int) ($rules['disk_percent'] ?? 85);
             $this->ram_percent = (int) ($rules['ram_percent'] ?? 90);
@@ -73,6 +77,7 @@ class AlertsPage extends Component
             'tls' => $this->tls,
             'backup_stale' => $this->backup_stale,
             'cron_failed' => $this->cron_failed,
+            'app_down' => $this->app_down,
             'ssh' => $this->ssh,
             'disk_percent' => $this->disk_percent,
             'ram_percent' => $this->ram_percent,

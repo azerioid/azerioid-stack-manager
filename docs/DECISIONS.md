@@ -2310,3 +2310,16 @@ fallback — a lost authenticator meant a lockout needing DB surgery. A83 issues
   the brute-force surface is the same (and 40-bit codes under lockout are infeasible to guess).
 - Tests: generation/round-trip/one-time consumption with normalization, and login via a recovery code (spent
   after use).
+
+## A84 — App health-check + "down" alert
+
+New feature (quick win), the last of the post-audit roadmap. Octane/PM2/Docker sites run a supervised worker; if
+that worker dies the site is down even though the host and web server are fine. A84 adds an `app.down` alert rule
+to `AlertEvaluator`: it cross-references each runtime vhost's program (`octane_program`/`pm2_program`/
+`docker_program` from `vhost.list`) against Supervisor's reported state (`supervisor.program.list`) and opens an
+incident for any worker in a persistent down state — `stopped`, `fatal`, `exited` or `backoff`. Transient
+(`starting`) and `unknown` are left alone to avoid false alarms, and FPM/static/proxy sites (no worker) are
+skipped. It rides the existing incident + Telegram-notify + auto-resolve machinery and the scheduled
+`EvaluateAlerts` run, so a recovered worker resolves the incident like any other rule. Toggle on the Alerts page
+(`app_down`, on by default). Both broker calls are existing read-only actions — no new privileged surface. Test:
+a fatal PM2 worker opens and then (on recovery) resolves an incident.

@@ -30,6 +30,7 @@
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="tls"> TLS expiry</label>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="backup_stale"> Backup stale/failed</label>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="cron_failed"> Scheduled job failed</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="app_down"> App down (Octane/PM2/Docker)</label>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="ssh"> SSH anomalies</label>
         <label class="text-xs uppercase tracking-wide text-zinc-500">Disk %
             <input class="field mt-1" type="number" wire:model="disk_percent">

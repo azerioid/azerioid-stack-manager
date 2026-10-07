@@ -95,6 +95,7 @@ final class AlertEvaluator
         // On by default: a scheduled job that fails silently is the whole reason its
         // exit code is recorded (A47).
         $cronOn = (bool) ($rules['cron_failed'] ?? true);
+        $appDownOn = (bool) ($rules['app_down'] ?? true);
 
         $out = [];
         $status = $this->broker->call('status.all', [], [], null, false);
@@ -201,6 +202,12 @@ final class AlertEvaluator
             }
         }
 
+        if ($appDownOn) {
+            foreach ($this->appDownFailures() as $issue) {
+                $out[] = $issue;
+            }
+        }
+
         if ($backupOn) {
             $last = BackupJob::query()->where('status', 'ok')->latest()->first();
             $stale = $last === null || $last->created_at->lt(Carbon::now()->subHours($backupHours));
@@ -282,6 +289,62 @@ final class AlertEvaluator
      *
      * @return list<array<string,string>>
      */
+    /**
+     * A84: a vhost whose Octane/PM2/Docker worker is down. The site's runtime program
+     * is cross-referenced against Supervisor's reported state; a persistent down state
+     * (stopped/fatal/exited/backoff) alerts. Transient states (starting) and unknown
+     * are left alone to avoid false alarms. FPM/static/proxy sites have no worker.
+     *
+     * @return list<array{rule_key:string, subject:string, message:string, severity:string}>
+     */
+    private function appDownFailures(): array
+    {
+        $vh = $this->broker->call('vhost.list', [], [], null, false);
+        if (! $vh->ok) {
+            return [];
+        }
+        $progs = $this->broker->call('supervisor.program.list', [], [], null, false);
+        $state = [];
+        if ($progs->ok) {
+            foreach ($progs->data['programs'] ?? [] as $p) {
+                if (is_array($p)) {
+                    $state[(string) ($p['name'] ?? '')] = (string) ($p['status']['state'] ?? '');
+                }
+            }
+        }
+
+        $down = ['stopped', 'fatal', 'exited', 'backoff'];
+        $out = [];
+        foreach ($vh->data['vhosts'] ?? [] as $v) {
+            if (! is_array($v) || ! empty($v['readonly'])) {
+                continue;
+            }
+            $runtime = (string) ($v['runtime'] ?? 'fpm');
+            $program = match ($runtime) {
+                'octane' => (string) ($v['octane_program'] ?? ''),
+                'pm2' => (string) ($v['pm2_program'] ?? ''),
+                'docker' => (string) ($v['docker_program'] ?? ''),
+                default => '',
+            };
+            if ($program === '') {
+                continue;
+            }
+            $s = $state[$program] ?? 'unknown';
+            if (! in_array($s, $down, true)) {
+                continue;
+            }
+            $domain = (string) ($v['domain'] ?? '');
+            $out[] = [
+                'rule_key' => 'app.down',
+                'subject' => $domain,
+                'message' => $domain.' ('.$runtime.') worker is '.$s.' — the app is not running.',
+                'severity' => 'high',
+            ];
+        }
+
+        return $out;
+    }
+
     private function cronFailures(): array
     {
         $res = $this->broker->call('cron.jobs', [], [], null, false);
