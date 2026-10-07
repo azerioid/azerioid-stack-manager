@@ -56,6 +56,30 @@ class RecoveryCodesTest extends TestCase
         $this->assertFalse($auth->verifyChallengeCode($codes[0], '127.0.0.1'));
     }
 
+    public function test_re_enrollment_issues_fresh_codes_and_invalidates_the_old_set(): void
+    {
+        $totp = app(TotpService::class);
+        $auth = app(PanelAuthenticator::class);
+
+        // First enrollment: an unconfirmed secret, confirmed with a valid code.
+        $user = User::factory()->create();
+        $secret1 = $totp->generateSecret();
+        $totp->storeUnconfirmed($user, $secret1);
+        $this->assertTrue($auth->confirmEnrollment($user->refresh(), (new \PragmaRX\Google2FA\Google2FA())->getCurrentOtp($secret1)));
+        $firstCodes = $totp->recoveryCodes($user->refresh());
+        $this->assertCount(8, $firstCodes);
+
+        // Re-enroll with a new secret; confirming must replace the old recovery set.
+        $secret2 = $totp->beginReset($user);
+        $this->assertTrue($auth->confirmEnrollment($user->refresh(), (new \PragmaRX\Google2FA\Google2FA())->getCurrentOtp($secret2)));
+        $secondCodes = $totp->recoveryCodes($user->refresh());
+        $this->assertCount(8, $secondCodes);
+        $this->assertEmpty(array_intersect($firstCodes, $secondCodes), 'old codes must not carry over');
+
+        // An old code no longer works.
+        $this->assertFalse($totp->consumeRecoveryCode($user->refresh(), $firstCodes[0]));
+    }
+
     private function enrolledUser(): User
     {
         $totp = app(TotpService::class);

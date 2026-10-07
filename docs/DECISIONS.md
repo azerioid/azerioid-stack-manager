@@ -2299,9 +2299,11 @@ fallback — a lost authenticator meant a lockout needing DB surgery. A83 issues
 
 - **Generation & storage.** On the first successful 2FA confirm, `TotpService` generates 8 high-entropy codes
   (10 hex chars, ~40 bits each) and stores them in the existing `two_factor_recovery_codes` column, encrypted at
-  rest with `Crypt` like the TOTP secret. Shown **once** at the end of setup; re-enrollment keeps the set. The
-  Settings page shows how many remain and can regenerate them (current password + a valid TOTP code required;
-  regenerating invalidates the old set), shown once.
+  rest with `Crypt` like the TOTP secret. Shown **once** at the end of setup. Confirming enrollment **always**
+  issues a fresh set and discards any prior one (commit-review): keeping the old codes across a re-enrollment
+  would let a code from a now-replaced — possibly compromised — setup still sign in. The Settings page shows how
+  many remain and can regenerate them (current password + a valid TOTP code required; regenerating invalidates
+  the old set), shown once.
 - **Use.** The challenge form has a "Use a recovery code" mode. `verifyChallengeCode` accepts a code in place of
   a TOTP (normalized for case/dashes, constant-time per candidate) and **consumes** it — a used code is removed
   and cannot be reused. It runs through the same pending-login / lockout / fail2ban path as a TOTP attempt, so

@@ -162,11 +162,11 @@ final class PanelAuthenticator
             return false;
         }
         $this->totp->confirm($user);
-        // A83: issue recovery codes the first time 2FA is confirmed, so the operator
-        // leaves setup with a way back in. Re-enrollment keeps the existing set.
-        if ($this->totp->recoveryCodes($user) === []) {
-            $this->totp->storeRecoveryCodes($user, $this->totp->generateRecoveryCodes());
-        }
+        // A83: confirming enrollment rebinds 2FA to this secret, so always issue a
+        // fresh recovery set and discard any prior one. Keeping the old codes across a
+        // re-enrollment would let a code from a now-replaced (possibly compromised)
+        // setup still sign in — a stale credential surviving the reset.
+        $this->totp->storeRecoveryCodes($user, $this->totp->generateRecoveryCodes());
 
         return true;
     }
