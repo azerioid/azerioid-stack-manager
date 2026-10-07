@@ -1477,8 +1477,17 @@ final class DockerManager
             'environment' => $this->programEnvironment($domain),
         ];
         $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
-        $supervisor->control($program, 'restart');
-        if ($this->waitForPort((int) $spec['port'])) {
+        // A rejected cap can fail two ways: the restart itself errors ("spawn error"
+        // when `docker run --cpus` exits immediately) or the container starts but
+        // never listens. Treat both as "did not come up" so the fail-safe below runs.
+        $cameUp = false;
+        try {
+            $supervisor->control($program, 'restart');
+            $cameUp = $this->waitForPort((int) $spec['port']);
+        } catch (\Throwable) {
+            $cameUp = false;
+        }
+        if ($cameUp) {
             return ['domain' => $domain, 'applied' => true, 'enforced' => true, 'docker_program' => $program];
         }
 
