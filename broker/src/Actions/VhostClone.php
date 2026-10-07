@@ -9,6 +9,8 @@ use AzerioidPanel\Broker\Database\DatabaseManager;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\AppRuntime;
+use AzerioidPanel\Broker\Vhost\OctaneManager;
+use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -49,12 +51,13 @@ final class VhostClone
             throw new BrokerException("Source vhost {$src} was not found.", 2);
         }
 
-        $srcRuntime = (string) ($source['runtime'] ?? AppRuntime::FPM);
-        if ($srcRuntime !== AppRuntime::FPM) {
-            // Increment 3 will replicate Octane/PM2/Docker onto the clone.
+        $srcRuntime = AppRuntime::normalize((string) ($source['runtime'] ?? AppRuntime::FPM));
+        if ($srcRuntime === AppRuntime::DOCKER) {
+            // Docker carries many settings (image/compose/registry/env/volumes) and a
+            // per-site rootless dockerd (A56); replicating it safely is a job of its
+            // own. Clone the files, then set the container up on the clone by hand.
             throw new BrokerException(
-                "Cloning a {$srcRuntime} site is not supported yet — clone a PHP, static or proxy site, "
-                . 'or disable the runtime on the source first.',
+                'Cloning a Docker site is not supported yet — clone it, then configure Docker on the clone.',
                 3
             );
         }
@@ -163,6 +166,42 @@ final class VhostClone
             }
         }
 
+        // A79 increment 3: replicate the source's app runtime onto the clone. The
+        // file copy already brought the runtime's artifacts (vendor + FrankenPHP for
+        // Octane, node_modules for PM2); enabling here provisions the clone's own
+        // supervisor program on a freshly allocated loopback port under the clone's
+        // identity. Best-effort: a failure leaves the clone as a plain FPM site and
+        // is reported, rather than undoing the file clone. Docker was refused above.
+        $runtimeEnabled = null;
+        $runtimeError = null;
+        if ($srcRuntime === AppRuntime::OCTANE) {
+            try {
+                (new OctaneManager($config, $runtime))->enable($dst, [
+                    'max_requests' => $source['octane_max_requests'] ?? null,
+                ]);
+                $runtimeEnabled = AppRuntime::OCTANE;
+            } catch (\Throwable $e) {
+                $runtimeError = $e->getMessage();
+            }
+        } elseif ($srcRuntime === AppRuntime::PM2) {
+            try {
+                (new Pm2Manager($config, $runtime))->enable($dst, array_filter([
+                    'instances' => $source['pm2_instances'] ?? null,
+                    'entry' => $source['pm2_entry'] ?? null,
+                ], static fn ($v) => $v !== null));
+                $runtimeEnabled = AppRuntime::PM2;
+            } catch (\Throwable $e) {
+                $runtimeError = $e->getMessage();
+            }
+        }
+
+        $dbNote = $cloned === [] && $dbErrors === []
+            ? ''
+            : 'Update the clone\'s config with the new database name, user and password. ';
+        $rtNote = $runtimeError !== null
+            ? 'The ' . $srcRuntime . ' runtime could not be enabled on the clone; it is serving as a plain PHP site.'
+            : '';
+
         return [
             'source' => $src,
             'domain' => $dst,
@@ -171,9 +210,9 @@ final class VhostClone
             'files_copied' => true,
             'databases' => $cloned,
             'database_errors' => $dbErrors,
-            'note' => $cloned === [] && $dbErrors === []
-                ? 'Databases and Octane/PM2/Docker runtimes are not cloned yet.'
-                : 'Update the clone\'s config with the new database name, user and password. Octane/PM2/Docker runtimes are not cloned yet.',
+            'runtime' => $runtimeEnabled,
+            'runtime_error' => $runtimeError,
+            'note' => trim($dbNote . $rtNote) !== '' ? trim($dbNote . $rtNote) : 'Clone complete.',
         ];
     }
 

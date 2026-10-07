@@ -2173,3 +2173,20 @@ to clone and the target name for each (chosen 2026-10-07: explicit list, not a n
   fails is reported in `database_errors` and rolls its own target back, but never undoes the file clone. The
   generated passwords are returned once for the operator to put in the clone's config. Tests cover the dump+load,
   the MongoDB/same-name/missing-source refusals, and the failed-restore rollback.
+
+### A79 increment 3 — runtime replication (Octane / PM2)
+
+The file copy (increment 1) already brings a runtime's artifacts — `vendor` + the FrankenPHP binary for Octane,
+`node_modules` for PM2 — so completing the clone means giving it its own supervised worker.
+
+- **Octane and PM2 are replicated.** After the files and databases, `vhost.clone` calls `OctaneManager::enable`
+  / `Pm2Manager::enable` on the clone with the source's settings (`octane_max_requests`; `pm2_instances`,
+  `pm2_entry`). Each manager allocates a **fresh loopback port** and provisions the clone's own supervisor
+  program under the clone's identity (A56) — the clone never shares a port, program or worker with the source.
+- **Best-effort, never destructive.** A runtime that fails to enable (e.g. the app isn't a valid Laravel/Node app
+  on the clone) is reported in `runtime_error` and the clone stays a plain PHP site; it never rolls back the file
+  or database clone. The PM2 Node version is not carried (it is not on the vhost record) — the clone resolves the
+  default; adjust with `azerioid vhost pm2 node` if needed.
+- **Docker is still refused.** A Docker site carries image/compose/registry/env/volume settings and a per-site
+  rootless dockerd (A56); replicating it safely is a job of its own. Clone the files, then set Docker up on the
+  clone by hand. Tests cover the Octane replication attempt and the Docker refusal.

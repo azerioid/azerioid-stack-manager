@@ -90,6 +90,24 @@ final class DbClone
             }
             $plain = $dumped->stdout;
 
+            if ($engine === 'mariadb') {
+                // mysqldump emits every view/routine/trigger with a DEFINER bound to
+                // the SOURCE's user. Loaded as-is, a SQL SECURITY DEFINER object in
+                // the clone would run with the source user's grants and reach back
+                // into the SOURCE database — a cross-database isolation bypass (worse
+                // still if the source was dumped by an admin). Rebind every DEFINER to
+                // the clone's own scoped user, so a stored object can touch only the
+                // clone's database. (PostgreSQL is covered by A71's per-target owning
+                // role; MongoDB has no stored DEFINER objects and is refused anyway.)
+                // ponytail: global rewrite; a data value literally matching
+                // DEFINER=`x`@`y` would also be rewritten — pathological, accepted.
+                $plain = (string) preg_replace(
+                    '/DEFINER=`(?:[^`]|``)*`@`(?:[^`]|``)*`/',
+                    'DEFINER=`' . $user . '`@`localhost`',
+                    $plain
+                );
+            }
+
             $backup->prepareTarget($target);
             $spec = $backup instanceof PostgreSqlBackupEngine
                 ? $backup->restoreCommandFor($target, substr($plain, 0, 16))

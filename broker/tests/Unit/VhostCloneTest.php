@@ -137,9 +137,9 @@ final class VhostCloneTest extends TestCase
         $this->assertTrue($removed, 'the partial copy must be removed on a failed handover');
     }
 
-    public function test_clone_refuses_a_runtime_source_for_now(): void
+    public function test_clone_refuses_a_docker_source(): void
     {
-        // A docker-runtime source is not cloneable in increment 1.
+        // Docker carries too much state to replicate safely — still refused.
         $this->rt->files['/etc/caddy/conf.d/box.test.conf'] =
             "# azerioid-managed engine=caddy type=proxy root=/data/www/box.test runtime=docker docker_port=37000\n"
             . "box.test {\n    reverse_proxy 127.0.0.1:37000\n}\n";
@@ -147,5 +147,32 @@ final class VhostCloneTest extends TestCase
         [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'box.test', 'boxclone.test']);
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('not supported yet', strtolower((string) ($json['error'] ?? '')));
+    }
+
+    public function test_clone_attempts_to_replicate_an_octane_runtime(): void
+    {
+        // An Octane source is no longer refused: the clone's files are copied and
+        // the runtime is enabled best-effort. Enabling needs Supervisor/Composer,
+        // which the fake host lacks, so it is reported as a runtime_error rather
+        // than failing the whole clone.
+        $this->rt->files['/etc/caddy/conf.d/app.test.conf'] =
+            "# azerioid-managed engine=caddy type=php root=/data/www/app.test/public runtime=octane octane_port=34000 octane_max_requests=500 php_version=8.4\n"
+            . "app.test {\n    reverse_proxy 127.0.0.1:34000\n}\n";
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/appclone.test/public'], 0, 'az-vh-appclone-test');
+        $this->rt->execFn = function (array $cmd): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
+                $this->rt->dirs['/data/www/appclone.test'] = true;
+            }
+
+            return null;
+        };
+
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'app.test', 'appclone.test']);
+        $this->assertSame(0, $code, json_encode($json));
+        $data = $json['data'] ?? [];
+        $this->assertTrue(
+            ($data['runtime'] ?? null) === 'octane' || ($data['runtime_error'] ?? null) !== null,
+            'an octane source must be replicated or report why it could not be'
+        );
     }
 }
