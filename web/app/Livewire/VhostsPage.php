@@ -425,6 +425,21 @@ class VhostsPage extends Component
         if ($this->cloningDomain === null) {
             return;
         }
+        // cloningDomain is a client-settable property; re-verify server-side that it
+        // is a known, non-readonly vhost (parity with the edit/delete paths) rather
+        // than trusting whatever the client set. The broker re-validates too.
+        $known = false;
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $this->cloningDomain && empty($v['readonly'])) {
+                $known = true;
+            }
+        }
+        if (! $known) {
+            $this->cancelClone();
+            $this->error = 'That source site cannot be cloned.';
+
+            return;
+        }
         $target = strtolower(trim($this->cloneTarget));
         try {
             $target = Validator::domain($target);
