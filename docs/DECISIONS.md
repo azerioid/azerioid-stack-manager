@@ -2017,3 +2017,24 @@ if a bundle part lacks a valid 64-hex checksum. The manifest is itself AEAD-auth
 values are trustworthy. Direct single-archive `backup.restore.files/db` (no manifest) are unaffected — they
 rely on AEAD, there being no sibling parts to substitute. Regression tests: a swapped `config` and a swapped
 `files` part are both refused.
+
+## A75 — Adminer pool: private temp (no /tmp); tool-dir relocation assessed and deferred
+
+A58 deferred lead. Two parts:
+
+**Done (v2.8.31) — drop /tmp from the Adminer pool.** The `azerioid-adminer-tool` FPM pool's `open_basedir`
+included world-writable `/tmp` (shared with every other local user). It now points at a private temp dir
+inside the tool dir (`TOOL_DIR/tmp`, owned by the Adminer user 0700), and the pool sets `sys_temp_dir`,
+`upload_tmp_dir` and `session.save_path` to it — so the gid-caddy Adminer tool no longer reads/writes shared
+`/tmp`. Mirrors A59 (panel pool). Takes effect when the Adminer component is next (re)installed/updated.
+
+**Deferred — relocating the tool dir out of `/var/lib/azerioid-panel`.** The goal was to let the panel state
+dir drop the `caddy` group. Assessed on the live fleet and **found non-exploitable**: the state dir is
+group-caddy *traversable* (so the Adminer pool can reach its nested tool dir and caddy can read the
+`caddy-*-routes.conf`), but every sensitive file in it is group-protected and unreadable by caddy/Adminer —
+`panel.sqlite` is `azerioid-panel:azerioid-panel 0660`, the `*.json` state files are `root:root 0640`,
+`broker.json` lives in `/etc/azerioid-panel`. The caddy group can read only non-secret files (source
+`VERSION`/`README`, the already-world-readable route confs, default-site HTML). Fully dropping the caddy group
+would require relocating **both** the tool dir *and* the route-conf files (caddy traverses the dir to read
+them) — a two-part live migration for no current exposure. Deferred as disproportionate; revisit if the state
+dir ever needs to hold a group-caddy-readable secret.

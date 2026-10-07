@@ -18,6 +18,7 @@ use AzerioidPanel\Broker\Web\PanelCaddy;
 final class AdminerTool
 {
     public const TOOL_DIR = '/var/lib/azerioid-panel/tools/adminer';
+    public const TMP_DIR = self::TOOL_DIR . '/tmp';
     public const ARTIFACT_PATH = self::TOOL_DIR . '/adminer.php';
     public const FPM_POOL = 'azerioid-adminer-tool';
     public const FPM_SOCKET = '/run/php/azerioid-adminer-tool.sock';
@@ -118,6 +119,12 @@ final class AdminerTool
         $this->runtime->mkdir(self::TOOL_DIR, 0750);
         $this->runtime->exec(['/usr/bin/chmod', '0750', self::TOOL_DIR], null, 15);
         $this->runtime->exec(['/usr/bin/chown', AdminerUser::USERNAME . ':' . AdminerUser::USERNAME, self::TOOL_DIR], null, 15);
+        // A75: a private temp dir inside the tool dir so the pool's session,
+        // upload and sys_temp paths no longer need world-writable /tmp in
+        // open_basedir (shared with every other local user).
+        $this->runtime->mkdir(self::TMP_DIR, 0700);
+        $this->runtime->exec(['/usr/bin/chmod', '0700', self::TMP_DIR], null, 15);
+        $this->runtime->exec(['/usr/bin/chown', AdminerUser::USERNAME . ':' . AdminerUser::USERNAME, self::TMP_DIR], null, 15);
     }
 
     /** @param array<string, mixed> $artifact */
@@ -162,7 +169,8 @@ final class AdminerTool
 
     private function writeFpmPool(OperationLogger $log): void
     {
-        $openBase = self::TOOL_DIR . ':/tmp:/dev/urandom';
+        $openBase = self::TOOL_DIR . ':/dev/urandom';
+        $tmpDir = self::TMP_DIR;
         $user = AdminerUser::USERNAME;
         $pool = $this->poolName();
         $sock = self::FPM_SOCKET;
@@ -183,6 +191,9 @@ pm.max_children = 4
 pm.process_idle_timeout = 30s
 chdir = {$toolDir}
 php_admin_value[open_basedir] = {$openBase}
+php_admin_value[sys_temp_dir] = {$tmpDir}
+php_admin_value[upload_tmp_dir] = {$tmpDir}
+php_admin_value[session.save_path] = {$tmpDir}
 php_admin_value[disable_functions] = passthru,exec,shell_exec,system,chroot,chgrp,chown,ini_alter,ini_restore,proc_open,popen,pcntl_exec,pcntl_fork,dl,show_source
 php_admin_flag[allow_url_fopen] = off
 php_admin_flag[allow_url_include] = off
