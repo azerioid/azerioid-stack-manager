@@ -54,7 +54,9 @@ return Application::configure(basePath: dirname(__DIR__))
         });
         $middleware->redirectUsersTo(fn () => route('dashboard'));
         $middleware->validateCsrfTokens(except: [
-            // none — every mutation is CSRF-protected
+            // A78: the push-to-deploy webhook is an external POST from GitHub/GitLab;
+            // it is authenticated by an HMAC signature the broker verifies, not CSRF.
+            'hooks/deploy/*',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

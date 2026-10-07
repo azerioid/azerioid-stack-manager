@@ -522,6 +522,17 @@ final class FakeBroker
                 'deploy.config' => $this->deployConfig((string) ($args[0] ?? '')),
                 'deploy.config.set' => $this->deployConfigSet((string) ($args[0] ?? ''), $stdin),
                 'deploy.key.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
+                'deploy.webhook.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
+                'deploy.webhook' => (function () use ($stdin): array {
+                    // A78: the real broker HMAC-verifies; the fake accepts a GitHub
+                    // signature matching the fake secret and rejects otherwise.
+                    $expected = 'sha256='.hash_hmac('sha256', (string) ($stdin['body'] ?? ''), str_repeat('b', 64));
+                    if (! hash_equals($expected, (string) ($stdin['signature'] ?? ''))) {
+                        throw new BrokerCallException('Webhook rejected.', 2);
+                    }
+
+                    return ['accepted' => true, 'domain' => 'shop.test'];
+                })(),
                 'deploy.remove' => (function () use ($args): array {
                     unset($this->deploys[(string) ($args[0] ?? '')]);
 
@@ -1200,6 +1211,8 @@ final class FakeBroker
 
         return ['domain' => $domain, 'configured' => $c !== null, 'repository' => $c['repository'] ?? null, 'branch' => $c['branch'] ?? null,
             'preset' => $c['preset'] ?? null, 'command' => $c['command'] ?? null, 'schedule' => $c['schedule'] ?? 'off',
+            'webhook_token' => $c['webhook_token'] ?? ($c !== null ? str_repeat('a', 32) : null),
+            'webhook_secret' => $c['webhook_secret'] ?? ($c !== null ? str_repeat('b', 64) : null),
             'public_key' => $c !== null ? 'ssh-ed25519 AAAAfake azerioid-deploy@'.$domain : null, 'state' => $c['state'] ?? []];
     }
 

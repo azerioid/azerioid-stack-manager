@@ -62,6 +62,18 @@
         </section>
     @endif
 
+    @if ($configured && $this->webhookUrl())
+        <section class="panel space-y-2 p-5">
+            <h2 class="text-sm font-medium">Push-to-deploy webhook</h2>
+            <p class="text-xs text-zinc-500">Add a webhook at the repository (GitHub: Payload URL + Secret, content type <span class="font-mono">application/json</span>; GitLab: URL + Secret token). A push to <span class="font-mono">{{ $branch }}</span> then deploys automatically.</p>
+            <label class="block text-xs text-zinc-500">Payload URL</label>
+            <pre class="overflow-x-auto rounded bg-black/30 p-3 font-mono text-xs">{{ $this->webhookUrl() }}</pre>
+            <label class="block text-xs text-zinc-500">Secret</label>
+            <pre class="overflow-x-auto rounded bg-black/30 p-3 font-mono text-xs">{{ $webhookSecret }}</pre>
+            <button class="btn-ghost" type="button" wire:click="rotateWebhook" wire:confirm="Create a new webhook secret? The old secret stops working until you update it at the repository.">New secret</button>
+        </section>
+    @endif
+
     @if ($configured)
         <section class="panel space-y-3 p-5">
             <div class="flex flex-wrap gap-2">
