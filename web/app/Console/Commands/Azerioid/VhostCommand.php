@@ -22,6 +22,7 @@ class VhostCommand extends Command
         {--php= : PHP version for php vhosts}
         {--root= : Document root}
         {--source= : Source vhost domain to clone from (clone)}
+        {--db= : Databases to clone with the site, source:target[,source:target] (clone)}
         {--upstream= : Upstream host:port for proxy vhosts}
         {--tls= : off|auto|internal|dns01 (aliases: on=auto, dns=dns01, self=internal)}
         {--tls-mode= : Alias of --tls=}
@@ -497,11 +498,30 @@ class VhostCommand extends Command
         }
 
         try {
-            $res = $this->brokerCall('vhost.clone', [$source, $domain], [], 1800);
+            $stdin = [];
+            $db = trim((string) $this->option('db'));
+            if ($db !== '') {
+                $stdin['db'] = $db;
+            }
+
+            $res = $this->brokerCall('vhost.clone', [$source, $domain], $stdin, 1800);
             if (! $res->ok) {
                 $this->throwBrokerFailure($res);
             }
             $this->line("Cloned {$source} → {$domain}.");
+
+            foreach ((array) ($res->data['databases'] ?? []) as $cloned) {
+                if (! is_array($cloned)) {
+                    continue;
+                }
+                $this->line("Cloned database {$cloned['source']} → {$cloned['target']} (user={$cloned['user']}).");
+                $this->line('One-time password (will not be shown again): ' . (string) ($cloned['password'] ?? ''));
+            }
+            foreach ((array) ($res->data['database_errors'] ?? []) as $err) {
+                if (is_array($err)) {
+                    $this->warn("Database {$err['source']} → {$err['target']} not cloned: {$err['error']}");
+                }
+            }
             if (is_array($res->data) && isset($res->data['note'])) {
                 $this->line((string) $res->data['note']);
             }

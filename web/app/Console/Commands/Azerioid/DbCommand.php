@@ -11,10 +11,11 @@ class DbCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:db
-        {action : list|add|del|edit|access}
+        {action : list|add|clone|del|edit|access}
         {subcommand? : show|set (with access)}
         {--engine= : mariadb|postgresql|mongodb}
-        {--name= : Database name}
+        {--name= : Database name (clone: the new/target name)}
+        {--source= : Source database to clone from (clone)}
         {--user= : Database user (defaults to name)}
         {--mode= : localhost|specific|global (access set)}
         {--ip= : Comma-separated IPs/CIDRs (access set --mode=specific)}
@@ -29,6 +30,7 @@ class DbCommand extends Command
         return match ($this->argument('action')) {
             'list' => $this->listDb(),
             'add' => $this->addDb(),
+            'clone' => $this->cloneDb(),
             'del', 'delete', 'rm' => $this->delDb(),
             'edit' => $this->editDb(),
             'access' => $this->accessDb(),
@@ -106,6 +108,32 @@ class DbCommand extends Command
             $this->line("Created database {$name} (engine={$engine}, user={$user}).");
             $this->line('One-time password (will not be shown again):');
             $this->line($password);
+
+            return self::SUCCESS;
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+    }
+
+    private function cloneDb(): int
+    {
+        try {
+            $engine = $this->requireEngine();
+            $source = Validator::dbName((string) $this->option('source'));
+            $target = Validator::dbName((string) $this->option('name'));
+            $user = Validator::userName((string) ($this->option('user') ?: $target));
+
+            $res = $this->brokerCall('db.clone', [$source, $target], [
+                'engine' => $engine,
+                'user' => $user,
+            ]);
+            if (! $res->ok) {
+                $this->throwBrokerFailure($res);
+            }
+
+            $this->line("Cloned database {$source} → {$target} (engine={$engine}, user={$user}).");
+            $this->line('One-time password for the clone (will not be shown again):');
+            $this->line((string) ($res->data['password'] ?? ''));
 
             return self::SUCCESS;
         } catch (\Throwable $e) {

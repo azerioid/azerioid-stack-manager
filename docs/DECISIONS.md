@@ -2149,3 +2149,27 @@ staging. Building in increments; **increment 1** covers the vhost and the file t
   when any vhost's root is `$dstTop` or under it, or when any *other* vhost's root is under `$srcTop`. `--delete`
   was dropped from the rsync (the target is freshly created, nothing to prune). Tests cover replication + file
   copy, same/existing-domain refusal, FPM-only refusal, and the target/source tree-sharing refusals.
+
+### A79 increment 2 — database clone (`db.clone`, `vhost.clone --db`)
+
+Staging a site usually means staging its data too. Databases in this panel are global, independently-named
+entities with their own users — **nothing ties a database to a vhost** (`db-access.json` records only per-DB
+network access). So "clone the site's databases" cannot be auto-discovered; the operator names which databases
+to clone and the target name for each (chosen 2026-10-07: explicit list, not a new site↔DB association model).
+
+- **`db.clone <source> <target>`.** Provisions `<target>` as a fresh database owned by its own user with a
+  **generated** password (returned once, never persisted by the broker), then dumps `<source>` and loads it into
+  the target. The clone shares no user or grant with the source.
+- **Reuses the audited backup path.** The dump and load go through the `BackupEngine` `dumpCommand`/
+  `restoreCommand` (plain streams, piped **in memory** — never written to disk in the clear, unlike
+  `DatabaseDriver::dump` which gzips to a file). PostgreSQL therefore keeps its A71 per-target unprivileged
+  owning role and `REVOKE PUBLIC`. Credentials stay off argv (bound params / short-lived credential files, A23).
+- **MariaDB/PostgreSQL only.** A single-database SQL dump carries no `USE`/`CREATE DATABASE`, so it loads cleanly
+  under a new name. MongoDB's restore restores a dump under its original namespace (no `--nsFrom/--nsTo` rename),
+  so a Mongo clone needs new restore code — refused for now (as a non-FPM source is refused in increment 1).
+- **Fails atomic.** If the dump or load fails, the half-provisioned target (database + user) is dropped, so a
+  failed clone leaves nothing behind.
+- **`vhost.clone --db=source:target[,…]`.** Clones the named databases alongside the site, best-effort: a DB that
+  fails is reported in `database_errors` and rolls its own target back, but never undoes the file clone. The
+  generated passwords are returned once for the operator to put in the clone's config. Tests cover the dump+load,
+  the MongoDB/same-name/missing-source refusals, and the failed-restore rollback.
