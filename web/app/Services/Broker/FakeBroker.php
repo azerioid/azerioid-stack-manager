@@ -522,7 +522,7 @@ final class FakeBroker
                 'deploy.config' => $this->deployConfig((string) ($args[0] ?? '')),
                 'deploy.config.set' => $this->deployConfigSet((string) ($args[0] ?? ''), $stdin),
                 'deploy.key.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
-                'deploy.webhook.rotate' => $this->deployConfig((string) ($args[0] ?? '')),
+                'deploy.webhook.rotate' => $this->deployConfig((string) ($args[0] ?? '')) + ['webhook_secret' => str_repeat('b', 64)],
                 'deploy.webhook' => (function () use ($stdin): array {
                     // A78: the real broker HMAC-verifies; the fake accepts a GitHub
                     // signature matching the fake secret and rejects otherwise.
@@ -1212,7 +1212,7 @@ final class FakeBroker
         return ['domain' => $domain, 'configured' => $c !== null, 'repository' => $c['repository'] ?? null, 'branch' => $c['branch'] ?? null,
             'preset' => $c['preset'] ?? null, 'command' => $c['command'] ?? null, 'schedule' => $c['schedule'] ?? 'off',
             'webhook_token' => $c['webhook_token'] ?? ($c !== null ? str_repeat('a', 32) : null),
-            'webhook_secret' => $c['webhook_secret'] ?? ($c !== null ? str_repeat('b', 64) : null),
+            'webhook_configured' => $c !== null,
             'public_key' => $c !== null ? 'ssh-ed25519 AAAAfake azerioid-deploy@'.$domain : null, 'state' => $c['state'] ?? []];
     }
 
@@ -1232,7 +1232,8 @@ final class FakeBroker
         $this->deploys[$domain] = ['repository' => $repository, 'branch' => $branch, 'preset' => $stdin['preset'] ?? 'none',
             'command' => $stdin['command'] ?? null, 'schedule' => $schedule, 'state' => $this->deploys[$domain]['state'] ?? []];
 
-        return $this->deployConfig($domain);
+        // Show-once secret, like the real broker's configure()/rotateWebhook().
+        return $this->deployConfig($domain) + ['webhook_secret' => str_repeat('b', 64)];
     }
 
     /** @return array<string,mixed> */

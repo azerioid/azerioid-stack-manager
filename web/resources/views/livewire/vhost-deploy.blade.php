@@ -68,8 +68,12 @@
             <p class="text-xs text-zinc-500">Add a webhook at the repository (GitHub: Payload URL + Secret, content type <span class="font-mono">application/json</span>; GitLab: URL + Secret token). A push to <span class="font-mono">{{ $branch }}</span> then deploys automatically.</p>
             <label class="block text-xs text-zinc-500">Payload URL</label>
             <pre class="overflow-x-auto rounded bg-black/30 p-3 font-mono text-xs">{{ $this->webhookUrl() }}</pre>
-            <label class="block text-xs text-zinc-500">Secret</label>
-            <pre class="overflow-x-auto rounded bg-black/30 p-3 font-mono text-xs">{{ $webhookSecret }}</pre>
+            @if ($webhookSecret)
+                <label class="block text-xs text-zinc-500">Secret <span class="text-warn">— shown once; copy it now, then rotate for a new one.</span></label>
+                <pre class="overflow-x-auto rounded bg-black/30 p-3 font-mono text-xs">{{ $webhookSecret }}</pre>
+            @else
+                <p class="text-xs text-zinc-500">A secret is set. It is shown only once when created — use <span class="font-mono">New secret</span> to generate a fresh one if you no longer have it.</p>
+            @endif
             <button class="btn-ghost" type="button" wire:click="rotateWebhook" wire:confirm="Create a new webhook secret? The old secret stops working until you update it at the repository.">New secret</button>
         </section>
     @endif
