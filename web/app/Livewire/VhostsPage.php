@@ -387,6 +387,69 @@ class VhostsPage extends Component
         return null;
     }
 
+    /** A79: staging clone — source domain being cloned, the new domain, and the DB map. */
+    public ?string $cloningDomain = null;
+
+    public string $cloneTarget = '';
+
+    public string $cloneDb = '';
+
+    /** The result of a finished clone (incl. one-time DB passwords), shown once. */
+    public array $cloneResult = [];
+
+    public function startClone(string $domain): void
+    {
+        $this->error = null;
+        $this->showForm = false;
+        $this->editingDomain = null;
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $domain && empty($v['readonly'])) {
+                $this->cloningDomain = $domain;
+                $this->cloneTarget = '';
+                $this->cloneDb = '';
+                $this->cloneResult = [];
+
+                return;
+            }
+        }
+    }
+
+    public function cancelClone(): void
+    {
+        $this->reset('cloningDomain', 'cloneTarget', 'cloneDb', 'cloneResult');
+    }
+
+    public function saveClone(BrokerClient $broker): void
+    {
+        $this->error = null;
+        if ($this->cloningDomain === null) {
+            return;
+        }
+        $target = strtolower(trim($this->cloneTarget));
+        try {
+            $target = Validator::domain($target);
+        } catch (\Throwable) {
+            $this->addError('cloneTarget', 'Enter a valid new domain for the clone.');
+
+            return;
+        }
+
+        $stdin = [];
+        if (trim($this->cloneDb) !== '') {
+            $stdin['db'] = trim($this->cloneDb);
+        }
+
+        $res = $broker->call('vhost.clone', [$this->cloningDomain, $target], $stdin, 1800);
+        if (! $res->ok) {
+            $this->addError('cloneTarget', $this->operatorMessage((string) $res->error));
+
+            return;
+        }
+        $this->cloneResult = is_array($res->data) ? $res->data : [];
+        $this->flash = "Cloned {$this->cloningDomain} → {$target}.";
+        $this->reload($broker);
+    }
+
     public function startEdit(string $domain): void
     {
         $this->error = null;
@@ -1546,11 +1609,17 @@ class VhostsPage extends Component
                 $groups[] = ['label' => 'Runtime', 'items' => $runtimeItems];
             }
 
+            $configItems = [
+                ['label' => 'Edit', 'wireClick' => "startEdit('{$domain}')"],
+            ];
+            // A79: staging clone. Docker sites aren't cloneable (the broker refuses),
+            // so don't offer it there.
+            if ($runtime !== 'docker') {
+                $configItems[] = ['label' => 'Clone to…', 'wireClick' => "startClone('{$domain}')"];
+            }
             $groups[] = [
                 'label' => 'Configuration',
-                'items' => [
-                    ['label' => 'Edit', 'wireClick' => "startEdit('{$domain}')"],
-                ],
+                'items' => $configItems,
             ];
             $groups[] = [
                 'label' => 'Destructive',
