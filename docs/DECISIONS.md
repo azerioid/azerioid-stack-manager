@@ -2190,3 +2190,25 @@ The file copy (increment 1) already brings a runtime's artifacts — `vendor` + 
 - **Docker is still refused.** A Docker site carries image/compose/registry/env/volume settings and a per-site
   rootless dockerd (A56); replicating it safely is a job of its own. Clone the files, then set Docker up on the
   clone by hand. Tests cover the Octane replication attempt and the Docker refusal.
+- **The best-effort catch is safe (commit-review).** A reviewer flagged the catch as a potential fail-open that
+  could leave the clone routing to a dead or foreign port. It does not: `OctaneManager`/`Pm2Manager` `enable()`
+  are transactional — they switch the clone's Caddy routing to the loopback port only *after* `waitForPort`
+  confirms the worker, and on any later failure remove the program and leave the vhost on PHP-FPM. A failed
+  enable therefore leaves a clean PHP site, never a half-routed one.
+
+### A79 increment 2 erratum — MariaDB clone restores as the clone's own user
+
+Two commit-review findings on the increment-2 MariaDB path, both from the dump being controlled by whoever owns
+the source database (possibly a lower-trust app, not the admin running the clone):
+
+- **DEFINER-bound objects.** `mysqldump` emits every view/routine/trigger with a `DEFINER` bound to the source
+  user; a `SQL SECURITY DEFINER` object loaded as-is would run with the source user's grants and reach back into
+  the source database. The clone rewrites every `DEFINER` to the clone's own scoped user.
+- **Restore as the clone user, not root.** The DEFINER rewrite is a regex over an untrusted dump, which risks a
+  parser differential / SQL injection — and the restore ran as **root**, so injected SQL would execute as root.
+  The MariaDB load now runs **as the clone's own unprivileged user** (`mysql --defaults-extra-file` with the
+  generated password, socket auth). Injected or crafted content can then reach only the clone's database, and
+  any `DEFINER` the rewrite missed is some other user the clone account cannot create — so a parser differential
+  **fails the load closed** (and the clone is rolled back) instead of installing a cross-tenant object. The two
+  defenses compose. PostgreSQL is unaffected: `pg_restore` replays a TOC (not arbitrary SQL) under A71's
+  per-target unprivileged owning role.

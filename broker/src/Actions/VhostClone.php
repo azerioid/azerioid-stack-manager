@@ -172,6 +172,12 @@ final class VhostClone
         // supervisor program on a freshly allocated loopback port under the clone's
         // identity. Best-effort: a failure leaves the clone as a plain FPM site and
         // is reported, rather than undoing the file clone. Docker was refused above.
+        //
+        // Catching here is safe because enable() is transactional: it switches the
+        // clone's Caddy routing to the loopback port only AFTER waitForPort confirms
+        // the worker is listening, and on any later failure it removes the program and
+        // leaves the vhost on PHP-FPM. So a failed enable never leaves the clone
+        // routing to a dead or another tenant's port — it stays a plain PHP site.
         $runtimeEnabled = null;
         $runtimeError = null;
         if ($srcRuntime === AppRuntime::OCTANE) {
