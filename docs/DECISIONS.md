@@ -2120,9 +2120,16 @@ staging. Building in increments; **increment 1** covers the vhost and the file t
 
 - **Isolated clone, not a shared mount.** The clone is provisioned as its own vhost via `WebServers::addVhost`
   with a fresh `az-vh-<dst>` identity (A49); it does not share files, pool or identity with the source. The
-  source site tree is copied with `rsync -a --one-file-system --exclude .git/` (symlinks kept as symlinks, not
-  followed), then `VhostUser::ensure` hands the copy to the clone's identity, whose A72 sweep quarantines any
-  symlink that escapes the clone's own tree.
+  source site tree is copied with `rsync -a --no-o --no-g --one-file-system --exclude .git/` (symlinks kept as
+  symlinks, not followed), then `VhostUser::ensure` creates the identity and claims the docroot + top, whose A72
+  sweep quarantines any symlink that escapes the clone's own tree.
+- **Ownership handover (commit-review).** `rsync -a` run as root preserves the *source* uid/gid, and
+  `ensure()` only owns the docroot and the top directory — so the app code above the docroot (`vendor`, `.env`,
+  `storage`) would stay owned by `az-vh-<src>`, letting the source site write into the clone and breaking A49.
+  The copy therefore uses `--no-o --no-g` so every file lands root-owned, and after `ensure()` the whole copied
+  tree `$dstTop` is handed to the clone's identity with `VhostUser::applyOwnership` (group read back from the
+  docroot, so it is correct pre- and post-migration). Because the tree is root-owned throughout the window, no
+  tenant can reach `$dstTop` to race the `chown -R` (the general-case A77 TOCTOU does not apply here).
 - **Same-operator path only.** This is the operator cloning their own site, not the cross-domain restore B6
   forbids. The dst domain is validated and refused if it is read-only/`default`/`azerioid-panel` or already a
   vhost; the source must exist.
