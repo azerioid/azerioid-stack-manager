@@ -258,6 +258,35 @@ final class AuditHardeningTest extends TestCase
         $this->assertStringContainsString('chmod 0600', $script);
     }
 
+    public function test_caddy_access_log_is_created_as_the_web_user(): void
+    {
+        // A76: /var/log/caddy is owned by the web user; the log file must be
+        // created/moded AS that user, never via a root op on the path, or a
+        // planted symlink would make root chown/chmod an arbitrary target.
+        $rt = new FakeRuntime();
+        $rt->uid = 0;
+        $rt->files['/usr/sbin/runuser'] = '';
+        $rt->dirs['/var/log/caddy'] = true;
+        $config = new \AzerioidPanel\Broker\Config();
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Web\CaddyDriver::class, 'ensureAccessLog');
+        $m->setAccessible(true);
+        $m->invoke(new \AzerioidPanel\Broker\Web\CaddyDriver(), $rt, $config, 'shop.test');
+
+        $logPath = '/var/log/caddy/access_shop.test.log';
+        $asWebUser = false;
+        foreach ($rt->execLog as $e) {
+            $cmd = $e['command'];
+            if (($cmd[0] ?? '') === '/usr/sbin/runuser' && in_array($logPath, $cmd, true)) {
+                $asWebUser = true;
+                $this->assertSame(['-u', $config->webUser], [$cmd[1], $cmd[2]]);
+            }
+            if (in_array(($cmd[0] ?? ''), ['/usr/bin/chown', '/bin/chmod'], true)) {
+                $this->assertNotContains($logPath, $cmd, 'no root chown/chmod of the log path');
+            }
+        }
+        $this->assertTrue($asWebUser, 'the access log must be created as the web user');
+    }
+
     public function test_web_root_rejects_control_characters(): void
     {
         $rt = new FakeRuntime();

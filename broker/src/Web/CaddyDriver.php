@@ -377,11 +377,28 @@ final class CaddyDriver implements WebServerDriver
             $runtime->mkdir($dir, 0755);
         }
         $runtime->chown($dir, $user, $user);
-        if (!$runtime->fileExists($path)) {
-            $runtime->writeFile($path, '', 0640);
+        // A76: /var/log/caddy is owned by the web user, so a symlink planted at
+        // $path would make a root create/chown/chmod follow it to an arbitrary
+        // target (LPE from code-exec as the web user). Create and mode the log
+        // AS the web user — a planted symlink then cannot exceed its own
+        // privileges — and only create when absent (never truncate a live log).
+        $runuser = $this->runuserBin($runtime);
+        $runtime->exec([
+            $runuser, '-u', $user, '--', '/bin/sh', '-c',
+            '[ -L "$1" ] && rm -f -- "$1"; [ -e "$1" ] || : > "$1"; chmod 0640 -- "$1"',
+            'azerioid-caddy-log', $path,
+        ], null, 15);
+    }
+
+    private function runuserBin(Runtime $runtime): string
+    {
+        foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+            if ($runtime->fileExists($bin)) {
+                return $bin;
+            }
         }
-        $runtime->chown($path, $user, $user);
-        $runtime->chmod($path, 0640);
+
+        return '/usr/sbin/runuser';
     }
 
     private function render(
