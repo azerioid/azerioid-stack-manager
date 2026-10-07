@@ -24,6 +24,24 @@ final class Pm2ManagerTest extends TestCase
         $this->assertSame(36999, Pm2Manager::validatePort('36999'));
     }
 
+    /**
+     * A80 inc2: the memory cap becomes pm2-runtime's --max-memory-restart; without a
+     * cap the flag is absent. pm2Command is private — building the command is the
+     * whole unit here, so a reflective call is the smallest check that proves it.
+     */
+    public function test_memory_cap_adds_max_memory_restart_flag(): void
+    {
+        $manager = new Pm2Manager(new \AzerioidPanel\Broker\Config(), $this->rt);
+        $method = new \ReflectionMethod($manager, 'pm2Command');
+        $detected = ['mode' => 'entry', 'entry' => 'server.js', 'app_dir' => '/data/www/app'];
+
+        $capped = $method->invoke($manager, '/usr/bin/pm2-runtime', '/pm2home', 36000, 'app', 1, $detected, 'system', 256);
+        $this->assertStringContainsString('--max-memory-restart 256M', $capped);
+
+        $uncapped = $method->invoke($manager, '/usr/bin/pm2-runtime', '/pm2home', 36000, 'app', 1, $detected, 'system', null);
+        $this->assertStringNotContainsString('--max-memory-restart', $uncapped);
+    }
+
     public function test_validate_port_rejects_outside_range(): void
     {
         $this->expectException(BrokerException::class);

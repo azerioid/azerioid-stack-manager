@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Component\DockerRootlessSetup;
 use AzerioidPanel\Broker\Component\ManagedManifest;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
+use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
@@ -1406,6 +1407,16 @@ final class DockerManager
             '--name', self::containerName($spec['domain']),
             '-p', '127.0.0.1:' . $spec['port'] . ':' . $spec['internal_port'],
         ];
+        // A80 inc2: hard CPU/memory caps the container runtime enforces (cgroup).
+        // image/dockerfile modes only — compose mode would need the limits in the
+        // compose file, which the operator owns, so those are stored but not enforced.
+        $limits = (new SitePool($this->config, $this->runtime))->resourceLimits($spec['domain']);
+        if ($limits['memory_mb'] !== null) {
+            array_push($parts, '--memory=' . $limits['memory_mb'] . 'm');
+        }
+        if ($limits['cpu_percent'] !== null) {
+            array_push($parts, '--cpus=' . self::cpuDecimal($limits['cpu_percent']));
+        }
         if (DockerSettings::loadEnv($this->runtime, $spec['domain']) !== []) {
             // Values stay in the file: never on the command line, where ps would show them.
             array_push($parts, '--env-file', DockerSettings::envPath($spec['domain']));
@@ -1417,6 +1428,52 @@ final class DockerManager
         $parts[] = (string) $spec['image'];
 
         return Validator::supervisorCommand(implode(' ', $parts));
+    }
+
+    /** A80 inc2: CPU percent of one core → docker --cpus decimal (150 → "1.5", 200 → "2"). */
+    private static function cpuDecimal(int $percent): string
+    {
+        $v = rtrim(rtrim(sprintf('%.2f', $percent / 100), '0'), '.');
+
+        return $v === '' ? '0' : $v;
+    }
+
+    /**
+     * A80 inc2: re-apply the site's CPU/memory caps by rewriting the container's run
+     * command (which now carries --memory/--cpus) and restarting it — no image
+     * rebuild. Compose mode is stored but not enforced here (the limits belong in the
+     * operator's compose file). No-op report when the site is not a Docker vhost.
+     *
+     * @return array<string,mixed>
+     */
+    public function applyLimits(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        if (AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) !== AppRuntime::DOCKER) {
+            return ['domain' => $domain, 'applied' => false, 'reason' => 'not a Docker vhost'];
+        }
+        $spec = $this->specFromVhost($domain, $vhost);
+        if ($spec['mode'] === self::MODE_COMPOSE) {
+            return ['domain' => $domain, 'applied' => false, 'reason' => 'compose mode: set mem_limit/cpus in the compose file'];
+        }
+
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->runCommand($spec),
+            'directory' => $spec['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => DockerSettings::autorestart($spec['restart']),
+            'environment' => $this->programEnvironment($domain),
+        ]);
+        $supervisor->control($program, 'restart');
+        if (!$this->waitForPort((int) $spec['port'])) {
+            throw new BrokerException('Applied the limits but 127.0.0.1:' . $spec['port'] . ' is not listening.', 1);
+        }
+
+        return ['domain' => $domain, 'applied' => true, 'docker_program' => $program];
     }
 
     /**

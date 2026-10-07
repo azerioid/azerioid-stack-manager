@@ -2234,3 +2234,29 @@ A PHP-FPM site's caps are pool settings, so they reuse the A55 per-site pool mac
   1 is a per-request memory cap plus a concurrency cap — not a hard total-memory or CPU cap. A true cgroup total
   cap for Octane/PM2 (`systemd-run --scope -p MemoryMax/CPUQuota`) and container limits for Docker follow in later
   increments. Tests cover the rendered pool, show, clear-to-default, and range rejection.
+
+### A80 increment 2 — runtime resource limits (Octane / PM2 / Docker)
+
+A memory cap (MB) and CPU cap (percent of one core) per vhost, stored in the same per-site settings file
+(`memory_mb`, `cpu_percent`). What can actually be enforced differs by runtime — the roadmap assumed uniform
+cgroup caps, but supervised Octane/PM2 programs run **as the site user** (Supervisor `user=`) and `root` is in
+`FORBIDDEN_RUN_USERS` (A56), so a `systemd-run --scope` cgroup wrap can't run as root to set caps and a non-root
+scope needs cgroup delegation that isn't reliably present. So A80 enforces each runtime with the mechanism it
+actually has, and is **honest about the gaps** in the `enforcement` note `vhost.limits.show` returns:
+
+- **Docker** (image/dockerfile modes): `docker run --memory=<N>m --cpus=<P>` — hard cgroup limits the container
+  runtime enforces, both CPU and memory. Compose mode is stored but not enforced (limits belong in the operator's
+  compose file). `DockerManager::applyLimits` rewrites the run command and restarts — no image rebuild.
+- **PM2**: `pm2-runtime --max-memory-restart <N>M` — restarts a worker whose RSS exceeds the cap. The only
+  per-site memory cap PM2 has without cgroup delegation; PM2 has no CPU cap. `Pm2Manager::applyLimits` rewrites
+  the program command and restarts.
+- **Octane**: no per-process memory/CPU cap is possible under the supervised-as-site-user model, so the values
+  are stored but reported as not enforced rather than faked.
+- **PHP-FPM** (increment 1): the per-request `memory_limit` + `pm.max_children` remain the FPM path; the runtime
+  `memory_mb`/`cpu_percent` do not apply to FPM.
+
+`vhost.limits.set` validates (memory 16–65536 MB, CPU 1–3200% i.e. up to 32 cores), persists, re-renders the FPM
+pool, and dispatches `applyLimits` to the matching manager. All caps derive from validated integers, so nothing
+untrusted reaches the command line. CLI: `azerioid vhost limits --memory= --cpu=`; UI: fields + the enforcement
+note in the vhost edit modal. Tests: the Docker run flags, the PM2 flag, the action's validation and enforcement
+note. Live-validated on the Rocky host (per-site FPM pool in increment 1; PM2 command after deploy).

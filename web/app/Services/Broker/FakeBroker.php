@@ -1187,23 +1187,22 @@ final class FakeBroker
         return ['domain' => $domain, 'open_basedir' => $this->phpPoolOpenBasedir[$domain], 'isolated' => true, 'reason' => null];
     }
 
-    /** @var array<string, array{php_memory_limit_mb:?int, max_children:?int}> A80 per-vhost limits */
+    /** @var array<string, array{php_memory_limit_mb:?int, max_children:?int, memory_mb:?int, cpu_percent:?int}> A80 per-vhost limits */
     public array $vhostLimits = [];
 
     /** @return array<string,mixed> */
     private function vhostLimitsShow(array $args, array $stdin): array
     {
         $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
-        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null];
 
-        return ['domain' => $domain, 'php_memory_limit_mb' => $cur['php_memory_limit_mb'], 'max_children' => $cur['max_children'], 'default_max_children' => 5];
+        return $this->vhostLimitsView($domain);
     }
 
     /** @return array<string,mixed> */
     private function vhostLimitsSet(array $args, array $stdin): array
     {
         $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
-        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null];
+        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null, 'memory_mb' => null, 'cpu_percent' => null];
 
         $cur['php_memory_limit_mb'] = array_key_exists('php_memory_limit_mb', $stdin)
             ? $this->limitInt($stdin['php_memory_limit_mb'], 16, 8192, 'PHP memory limit (MB)')
@@ -1211,10 +1210,39 @@ final class FakeBroker
         $cur['max_children'] = array_key_exists('max_children', $stdin)
             ? $this->limitInt($stdin['max_children'], 1, 200, 'max children')
             : $cur['max_children'];
+        $cur['memory_mb'] = array_key_exists('memory_mb', $stdin)
+            ? $this->limitInt($stdin['memory_mb'], 16, 65536, 'memory (MB)')
+            : $cur['memory_mb'];
+        $cur['cpu_percent'] = array_key_exists('cpu_percent', $stdin)
+            ? $this->limitInt($stdin['cpu_percent'], 1, 3200, 'CPU (percent of one core)')
+            : $cur['cpu_percent'];
 
         $this->vhostLimits[$domain] = $cur;
 
-        return ['domain' => $domain, 'open_basedir' => true, 'isolated' => true, 'reason' => null] + $cur;
+        return $this->vhostLimitsView($domain);
+    }
+
+    /** @return array<string,mixed> */
+    private function vhostLimitsView(string $domain): array
+    {
+        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null, 'memory_mb' => null, 'cpu_percent' => null];
+        $runtime = 'fpm';
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $domain) {
+                $runtime = (string) ($v['runtime'] ?? 'fpm');
+            }
+        }
+
+        return [
+            'domain' => $domain,
+            'runtime' => $runtime,
+            'php_memory_limit_mb' => $cur['php_memory_limit_mb'],
+            'max_children' => $cur['max_children'],
+            'memory_mb' => $cur['memory_mb'],
+            'cpu_percent' => $cur['cpu_percent'],
+            'default_max_children' => 5,
+            'enforcement' => 'Fake enforcement note.',
+        ];
     }
 
     private function limitInt(mixed $value, int $min, int $max, string $label): ?int

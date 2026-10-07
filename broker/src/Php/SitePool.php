@@ -96,7 +96,25 @@ final class SitePool
             // A80: per-site PHP resource caps. null = panel default.
             'php_memory_limit_mb' => isset($d['php_memory_limit_mb']) && is_int($d['php_memory_limit_mb']) ? $d['php_memory_limit_mb'] : null,
             'max_children' => isset($d['max_children']) && is_int($d['max_children']) ? $d['max_children'] : null,
+            // A80 inc2: runtime (Octane/PM2/Docker) caps. memory in MB; cpu in percent
+            // of one core (100 = one core). null = uncapped.
+            'memory_mb' => isset($d['memory_mb']) && is_int($d['memory_mb']) ? $d['memory_mb'] : null,
+            'cpu_percent' => isset($d['cpu_percent']) && is_int($d['cpu_percent']) ? $d['cpu_percent'] : null,
         ];
+    }
+
+    /**
+     * A80 inc2: the site's runtime resource caps (memory MB, cpu percent of one
+     * core), read from the same per-site settings file. null = uncapped. Octane/PM2/
+     * Docker managers call this when building their program command.
+     *
+     * @return array{memory_mb:?int, cpu_percent:?int}
+     */
+    public function resourceLimits(string $domain): array
+    {
+        $s = $this->settings($domain);
+
+        return ['memory_mb' => $s['memory_mb'], 'cpu_percent' => $s['cpu_percent']];
     }
 
     /** @param array<string,mixed> $changes */

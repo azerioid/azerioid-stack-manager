@@ -6,6 +6,7 @@ namespace AzerioidPanel\Broker\Vhost;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\ExecResult;
+use AzerioidPanel\Broker\Php\SitePool;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Supervisor\ProgramIdentity;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
@@ -106,7 +107,7 @@ final class Pm2Manager
         $program = self::programName($domain);
         $appName = self::appName($domain);
         $this->upsertProgram($supervisor, $program, [
-            'command' => $this->pm2Command($pm2Runtime, $pm2Home, $port, $appName, $instances, $detected, $nodeChoice),
+            'command' => $this->pm2Command($pm2Runtime, $pm2Home, $port, $appName, $instances, $detected, $nodeChoice, $this->memoryCapOf($domain)),
             'directory' => $detected['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
@@ -590,6 +591,7 @@ final class Pm2Manager
         int $instances,
         array $detected,
         string $node = NodeRuntimes::SYSTEM,
+        ?int $maxMemoryMb = null,
     ): string {
         $parts = [
             '/usr/bin/env',
@@ -602,12 +604,20 @@ final class Pm2Manager
             $pm2Runtime,
             'start',
         ];
+        // A80 inc2: pm2-runtime restarts a worker when its RSS exceeds this. This is
+        // the only per-site memory cap PM2 supports without cgroup delegation (the
+        // worker runs as the site user under Supervisor); PM2 has no CPU cap flag.
+        $memFlag = [];
+        if ($maxMemoryMb !== null) {
+            $memFlag = ['--max-memory-restart', $maxMemoryMb . 'M'];
+        }
         if ($detected['mode'] === 'npm') {
             $parts[] = 'npm';
             $parts[] = '--name';
             $parts[] = $appName;
             $parts[] = '-i';
             $parts[] = (string) $instances;
+            $parts = array_merge($parts, $memFlag);
             $parts[] = '--';
             $parts[] = 'start';
         } else {
@@ -616,9 +626,16 @@ final class Pm2Manager
             $parts[] = $appName;
             $parts[] = '-i';
             $parts[] = (string) $instances;
+            $parts = array_merge($parts, $memFlag);
         }
 
         return Validator::supervisorCommand(implode(' ', $parts));
+    }
+
+    /** A80 inc2: the site's configured memory cap (MB), or null. */
+    private function memoryCapOf(string $domain): ?int
+    {
+        return (new SitePool($this->config, $this->runtime))->resourceLimits($domain)['memory_mb'];
     }
 
     /**
@@ -651,7 +668,7 @@ final class Pm2Manager
         $program = self::programName($domain);
         $restore = $this->readRestoreMeta($domain);
         $this->upsertProgram($supervisor, $program, [
-            'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain), max(1, $instances), $detected, $to),
+            'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain), max(1, $instances), $detected, $to, $this->memoryCapOf($domain)),
             'directory' => $detected['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
@@ -675,6 +692,43 @@ final class Pm2Manager
             'changed' => true,
             'note' => 'node_modules were not rebuilt. If the app uses native modules, run `npm rebuild` in its directory.',
         ];
+    }
+
+    /**
+     * A80 inc2: re-apply the site's memory cap to a running PM2 vhost by rewriting the
+     * program command (which carries --max-memory-restart) and restarting it. Called
+     * by vhost.limits.set; a no-op report when the site is not a PM2 vhost.
+     *
+     * @return array<string,mixed>
+     */
+    public function applyLimits(string $domain): array
+    {
+        $domain = Validator::domain($domain);
+        $vhost = $this->findVhost($domain);
+        if (AppRuntime::normalize($vhost['runtime'] ?? AppRuntime::FPM) !== self::RUNTIME_PM2) {
+            return ['domain' => $domain, 'applied' => false, 'reason' => 'not a PM2 vhost'];
+        }
+        $node = $this->nodeOf($domain);
+        $nodes = new NodeRuntimes($this->config, $this->runtime);
+        $pm2Runtime = $nodes->bin($node, 'pm2-runtime') ?? throw new BrokerException('pm2-runtime binary not found.', 1);
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $vhost['pm2_entry'] ?? null);
+        $port = (int) ($vhost['pm2_port'] ?? 0);
+        $instances = max(1, (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES));
+        $supervisor = new SupervisorManager($this->config, $this->runtime);
+        $program = self::programName($domain);
+        $this->upsertProgram($supervisor, $program, [
+            'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain), $instances, $detected, $node, $this->memoryCapOf($domain)),
+            'directory' => $detected['app_dir'],
+            'vhost_domain' => $domain,
+            'autostart' => true,
+            'autorestart' => true,
+        ]);
+        $supervisor->control($program, 'restart');
+        if ($port > 0 && !$this->waitForPort($port)) {
+            throw new BrokerException("{$domain} did not listen on 127.0.0.1:{$port} after applying the memory cap.", 1);
+        }
+
+        return ['domain' => $domain, 'applied' => true, 'memory_mb' => $this->memoryCapOf($domain)];
     }
 
     /** The Node choice a PM2 vhost runs on: 'system' unless recorded otherwise. */
@@ -755,7 +809,7 @@ final class Pm2Manager
         $program = self::programName($domain);
         $this->upsertProgram($supervisor, $program, [
             'command' => $this->pm2Command($pm2Runtime, $this->ensurePm2Home($domain), $port, self::appName($domain),
-                max(1, (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES)), $detected, $node),
+                max(1, (int) ($vhost['pm2_instances'] ?? self::DEFAULT_INSTANCES)), $detected, $node, $this->memoryCapOf($domain)),
             'directory' => $detected['app_dir'],
             'vhost_domain' => $domain,
             'autostart' => true,
