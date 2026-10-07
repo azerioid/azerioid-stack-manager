@@ -2046,3 +2046,17 @@ user (gid-caddy) could plant a symlink there and root's `mkdir`/`chown`/`chmod` 
 would follow it (local privilege escalation). Moved to a sibling `…/tools/adminer-tmp`: its parent `tools` is
 `root:caddy 0750`, which the adminer user cannot write, so the entry cannot be swapped and root's operations
 are symlink-safe.
+
+## A76 — Caddy access-log created as the web user, not root (symlink-safe)
+
+A58 deferred lead. `CaddyDriver::ensureAccessLog` chowns `/var/log/caddy` to the web user, then as **root**
+created, chowned and chmodded `access_<domain>.log` inside that web-user-owned directory. Because the web
+user owns the directory, it could plant a symlink at the log path, and root's `chown`/`chmod` would follow it
+to an arbitrary target — a local privilege escalation from code-exec as the web user (caddy) to root. Lower
+priority because it requires code-exec as caddy first, but a real escalation path.
+
+**Fix (v2.8.33).** The log file is created and moded **as the web user** via `runuser` (`[ -L ] && rm`;
+create only when absent so a live log is never truncated; `chmod 0640`). A planted symlink can then never
+exceed the web user's own privileges, so root never follows one. The directory `chown` stays as root but is
+safe — `/var/log` is root-owned, so the `/var/log/caddy` entry cannot be swapped. Regression test asserts the
+log is touched via `runuser -u <web user>` and never via a root `chown`/`chmod` of the log path.
