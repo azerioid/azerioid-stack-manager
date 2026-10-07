@@ -82,6 +82,7 @@ use AzerioidPanel\Broker\Actions\UpdatesApply;
 use AzerioidPanel\Broker\Actions\UpdatesList;
 use AzerioidPanel\Broker\Actions\VersionAll;
 use AzerioidPanel\Broker\Actions\VhostAdd;
+use AzerioidPanel\Broker\Actions\VhostClone;
 use AzerioidPanel\Broker\Actions\VhostDel;
 use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
@@ -137,6 +138,7 @@ final class Kernel
         'vhost.list' => VhostList::class,
         'vhost.add' => VhostAdd::class,
         'vhost.edit' => VhostEdit::class,
+        'vhost.clone' => VhostClone::class,
         'vhost.del' => VhostDel::class,
         'vhost.octane.status' => VhostOctane::class,
         'vhost.octane.enable' => VhostOctane::class,
