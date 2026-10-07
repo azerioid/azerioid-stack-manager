@@ -102,7 +102,13 @@ final class AdminerToolTest extends TestCase
         $this->assertStringContainsString('redir /tools/adminer /tools/adminer/ 308', $routes);
         $this->assertStringContainsString('handle_path /tools/adminer/*', $routes);
         $this->assertStringContainsString('azerioid-adminer-tool.sock', $routes);
-        $this->assertStringContainsString('open_basedir', $rt->files['/etc/php/8.4/fpm/pool.d/azerioid-adminer-tool.conf'] ?? '');
+        $pool = $rt->files['/etc/php/8.4/fpm/pool.d/azerioid-adminer-tool.conf'] ?? '';
+        // A75: open_basedir no longer includes world-writable /tmp; the pool's
+        // temp/session paths point at a private dir inside the tool dir.
+        $this->assertStringContainsString('open_basedir', $pool);
+        $this->assertStringNotContainsString(':/tmp:', $pool);
+        $this->assertStringContainsString('session.save_path] = ' . AdminerTool::TMP_DIR, $pool);
+        $this->assertStringContainsString('upload_tmp_dir] = ' . AdminerTool::TMP_DIR, $pool);
         $this->assertArrayHasKey(AdminerTool::ARTIFACT_PATH, $rt->files);
         $this->assertSame('<?php // fake adminer', $rt->files[AdminerTool::ARTIFACT_PATH]);
     }
