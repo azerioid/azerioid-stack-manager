@@ -2060,3 +2060,23 @@ create only when absent so a live log is never truncated; `chmod 0640`). A plant
 exceed the web user's own privileges, so root never follows one. The directory `chown` stays as root but is
 safe — `/var/log` is root-owned, so the `/var/log/caddy` entry cannot be swapped. Regression test asserts the
 log is touched via `runuser -u <web user>` and never via a root `chown`/`chmod` of the log path.
+
+## A77 — applyOwnership find/chmod race: analyzed, accepted (no clean fix)
+
+A58 deferred lead. `VhostUser::applyOwnership` runs `chown -R` to the site user then, as root,
+`find <root> -type {d,f} -exec chmod {2770,0660}`. After the chown the site owns the tree, so between find's
+`lstat` (which excludes symlinks via `-type`) and chmod's open the site can swap a file for a symlink, making
+root chmod an arbitrary target.
+
+**Impact is limited:** chmod changes mode only — never owner or group — so it cannot grant the site access to
+a file whose group the site is not already in. The meaningful case is a file already in a group the site
+belongs to (e.g. `azerioid-vhosts`) being made group-writable; a root-owned/`root`-group file made `0660`
+stays unreadable to the site. It also requires the site to win a tight race during an admin-triggered
+operation.
+
+**No clean fix available.** Running the chmod passes as the site user (as A72/A75/A76 do for their analogous
+ops) was implemented and **reverted**: `applyOwnership` is also called from the isolation migrator mid-group-
+transition, where the site user is not yet in the target group and cannot set the setgid bit, which broke the
+migration and its verification. A symlink-safe root chmod would need `openat2(RESOLVE_NO_SYMLINKS)` /
+`fchmodat`, which the `find`/`chmod` shell toolchain does not expose. Accepted as a residual with the limited
+impact above; revisit if the broker gains an `openat2`-based file helper.
