@@ -217,4 +217,43 @@ final class SitePoolTest extends TestCase
     {
         return array_map(static fn (array $e): array => $e['command'], $this->rt->execLog);
     }
+
+    public function test_a80_per_site_resource_limits_land_in_the_pool(): void
+    {
+        $this->assertSame(0, $this->broker(['vhost.add', 'shop.example.com', '/data/www/shop.example.com/public', 'php', '8.4'])[0]);
+
+        // Default pool: 5 children, no explicit memory_limit.
+        $pool = $this->rt->files[$this->poolPath('8.4')];
+        $this->assertStringContainsString('pm.max_children = 5', $pool);
+        $this->assertStringNotContainsString('memory_limit]', $pool);
+
+        [$code, $json] = $this->broker(
+            ['vhost.limits.set', 'shop.example.com'],
+            ['php_memory_limit_mb' => '256', 'max_children' => '12']
+        );
+        $this->assertSame(0, $code, json_encode($json));
+
+        $pool = $this->rt->files[$this->poolPath('8.4')];
+        $this->assertStringContainsString('pm.max_children = 12', $pool);
+        $this->assertStringContainsString('php_admin_value[memory_limit] = 256M', $pool);
+
+        // show reflects the stored caps.
+        [, $shown] = $this->broker(['vhost.limits.show', 'shop.example.com']);
+        $this->assertSame(256, $shown['data']['php_memory_limit_mb'] ?? null);
+        $this->assertSame(12, $shown['data']['max_children'] ?? null);
+
+        // Clearing returns the pool to the panel default.
+        $this->assertSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['php_memory_limit_mb' => '', 'max_children' => 'default'])[0]);
+        $pool = $this->rt->files[$this->poolPath('8.4')];
+        $this->assertStringContainsString('pm.max_children = 5', $pool);
+        $this->assertStringNotContainsString('memory_limit]', $pool);
+    }
+
+    public function test_a80_rejects_out_of_range_limits(): void
+    {
+        $this->assertSame(0, $this->broker(['vhost.add', 'shop.example.com', '/data/www/shop.example.com/public', 'php', '8.4'])[0]);
+        $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['php_memory_limit_mb' => '999999'])[0]);
+        $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['max_children' => '0'])[0]);
+        $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['php_memory_limit_mb' => 'lots'])[0]);
+    }
 }

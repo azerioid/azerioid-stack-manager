@@ -93,6 +93,9 @@ final class SitePool
             'open_basedir' => ($d['open_basedir'] ?? true) !== false,
             'isolated' => ($d['isolated'] ?? true) !== false,
             'reason' => isset($d['reason']) && is_string($d['reason']) ? $d['reason'] : null,
+            // A80: per-site PHP resource caps. null = panel default.
+            'php_memory_limit_mb' => isset($d['php_memory_limit_mb']) && is_int($d['php_memory_limit_mb']) ? $d['php_memory_limit_mb'] : null,
+            'max_children' => isset($d['max_children']) && is_int($d['max_children']) ? $d['max_children'] : null,
         ];
     }
 
@@ -251,11 +254,16 @@ final class SitePool
         $sessions = $this->sessionDir($domain);
         $terminate = SitePhpTimeouts::REQUEST_TERMINATE_SECONDS;
         $maxExec = SitePhpTimeouts::MAX_EXECUTION_SECONDS;
-        $max = self::MAX_CHILDREN;
+        $settings = $this->settings($domain);
+        $max = $settings['max_children'] ?? self::MAX_CHILDREN;
         $webUser = $this->config->webUser !== '' ? $this->config->webUser : 'caddy';
-        $basedir = $this->settings($domain)['open_basedir']
+        $basedir = $settings['open_basedir']
             ? "php_admin_value[open_basedir] = {$top}/:/tmp/:{$sessions}/:/usr/share/php/:/usr/share/pear/\n"
             : "; open_basedir switched off for this site\n";
+        // A80: per-request memory cap. php_admin_value can't be raised by the app at runtime.
+        $memory = $settings['php_memory_limit_mb'] !== null
+            ? "php_admin_value[memory_limit] = {$settings['php_memory_limit_mb']}M\n"
+            : '';
 
         return <<<INI
 ; AZERIOID Stack Manager — PHP pool for {$domain} (ADR A55). Managed; edits are overwritten.
@@ -276,7 +284,7 @@ php_admin_value[max_execution_time] = {$maxExec}
 php_admin_value[session.save_path] = {$sessions}
 php_admin_value[session.gc_probability] = 1
 php_admin_value[session.gc_divisor] = 100
-{$basedir}
+{$memory}{$basedir}
 INI;
     }
 

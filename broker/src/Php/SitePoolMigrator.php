@@ -132,6 +132,26 @@ final class SitePoolMigrator
         return ['domain' => $domain] + $this->pools->settings($domain);
     }
 
+    /**
+     * A80: per-site PHP resource caps — the per-request memory_limit and the pool's
+     * pm.max_children. Each is validated already by the caller; null clears it back
+     * to the panel default. Re-renders the pool so the change takes effect, exactly
+     * as setOpenBasedir does (only when the site is on its own isolated pool).
+     */
+    public function setLimits(string $domain, ?int $phpMemoryLimitMb, ?int $maxChildren): array
+    {
+        $site = $this->site($domain);
+        $this->pools->saveSettings($domain, [
+            'php_memory_limit_mb' => $phpMemoryLimitMb,
+            'max_children' => $maxChildren,
+        ]);
+        if ($site !== null && $site['state'] === 'isolated') {
+            $this->pools->ensure($domain, $site['php_version'], $site['root']);
+        }
+
+        return ['domain' => $domain] + $this->pools->settings($domain);
+    }
+
     /** @return array<string,mixed> */
     private function run(string $trigger, bool $retryShared, ?string $only): array
     {

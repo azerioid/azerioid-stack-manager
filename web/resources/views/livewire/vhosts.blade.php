@@ -176,6 +176,14 @@
                         </span>
                     </label>
                 @endif
+                <label class="text-xs uppercase tracking-wide text-zinc-500">PHP memory_limit (MB)
+                    <input type="number" min="16" max="8192" class="field mt-1" wire:model="editPhpMemory" placeholder="default">
+                    <span class="block text-xs normal-case text-zinc-500">Per-request cap. Blank = panel default.</span>
+                </label>
+                <label class="text-xs uppercase tracking-wide text-zinc-500">Max PHP workers (pm.max_children)
+                    <input type="number" min="1" max="200" class="field mt-1" wire:model="editMaxChildren" placeholder="default">
+                    <span class="block text-xs normal-case text-zinc-500">Concurrent FPM processes for this site. Blank = default.</span>
+                </label>
             @endif
             <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
                 <select class="field mt-1" wire:model="editEngine" @disabled($editType === 'proxy')>
