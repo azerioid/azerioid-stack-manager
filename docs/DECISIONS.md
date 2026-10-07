@@ -2038,3 +2038,11 @@ group-caddy *traversable* (so the Adminer pool can reach its nested tool dir and
 would require relocating **both** the tool dir *and* the route-conf files (caddy traverses the dir to read
 them) — a two-part live migration for no current exposure. Deferred as disproportionate; revisit if the state
 dir ever needs to hold a group-caddy-readable secret.
+
+### A75 erratum — Adminer temp dir is a sibling under the root-owned parent
+
+The first cut put the private temp dir at `TOOL_DIR/tmp` — inside the adminer-owned tool dir, so the adminer
+user (gid-caddy) could plant a symlink there and root's `mkdir`/`chown`/`chmod` of it on a component re-run
+would follow it (local privilege escalation). Moved to a sibling `…/tools/adminer-tmp`: its parent `tools` is
+`root:caddy 0750`, which the adminer user cannot write, so the entry cannot be swapped and root's operations
+are symlink-safe.
