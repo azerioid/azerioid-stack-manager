@@ -422,7 +422,7 @@ final class FakeBroker
                 'vhost.add' => $this->vhostAdd($args, $stdin),
                 'vhost.edit' => $this->vhostEdit($args, $stdin),
                 'vhost.del' => $this->vhostDel($args, $stdin),
-                'vhost.clone' => $this->vhostClone($args),
+                'vhost.clone' => $this->vhostClone($args, $stdin),
                 'vhost.octane.status' => $this->octane('status', $args, $stdin),
                 'vhost.octane.enable' => $this->octane('enable', $args, $stdin),
                 'vhost.octane.disable' => $this->octane('disable', $args, $stdin),
@@ -467,6 +467,7 @@ final class FakeBroker
                 'db.engine' => $this->dbEngine(),
                 'db.dump' => $this->dbDump($args),
                 'db.add' => $this->dbAdd($args, $stdin),
+                'db.clone' => $this->dbClone($args, $stdin),
                 'db.del' => $this->dbDel($args, $stdin),
                 'db.resetpw' => ['user' => $args[0] ?? '', 'reset' => true],
                 'db.access.show' => $this->dbAccessShow($args, $stdin),
@@ -2375,7 +2376,7 @@ final class FakeBroker
      *
      * @return array<string,mixed>
      */
-    private function vhostClone(array $args): array
+    private function vhostClone(array $args, array $stdin = []): array
     {
         $src = (string) ($args[0] ?? '');
         $dst = (string) ($args[1] ?? '');
@@ -2401,13 +2402,35 @@ final class FakeBroker
         $dstRoot = '/data/www/'.$dst.'/public';
         $this->vhostAdd([$dst, $dstRoot, (string) ($source['type'] ?? 'php'), (string) ($source['php_version'] ?? '8.4')], []);
 
+        $cloned = [];
+        $dbErrors = [];
+        $raw = $stdin['databases'] ?? $stdin['db'] ?? [];
+        if (is_string($raw)) {
+            $raw = array_filter(array_map('trim', explode(',', $raw)), static fn ($s) => $s !== '');
+        }
+        foreach ((array) $raw as $entry) {
+            if (! is_string($entry) || ! str_contains($entry, ':')) {
+                throw new BrokerCallException('Each database must be given as source:target (e.g. shop:shop_staging).', 2);
+            }
+            [$s, $t] = explode(':', $entry, 2);
+            try {
+                $cloned[] = $this->dbClone([trim($s), trim($t)], ['user' => trim($t)] + $stdin);
+            } catch (BrokerCallException $e) {
+                $dbErrors[] = ['source' => trim($s), 'target' => trim($t), 'error' => $e->getMessage()];
+            }
+        }
+
         return [
             'source' => $src,
             'domain' => $dst,
             'root' => $dstRoot,
             'type' => (string) ($source['type'] ?? 'php'),
             'files_copied' => true,
-            'note' => 'Databases and Octane/PM2/Docker runtimes are not cloned yet.',
+            'databases' => $cloned,
+            'database_errors' => $dbErrors,
+            'note' => $cloned === [] && $dbErrors === []
+                ? 'Databases and Octane/PM2/Docker runtimes are not cloned yet.'
+                : 'Update the clone\'s config with the new database name, user and password. Octane/PM2/Docker runtimes are not cloned yet.',
         ];
     }
 
@@ -2943,6 +2966,48 @@ final class FakeBroker
             'name' => $name,
             'user' => $user,
             'hosts' => $engine === 'mongodb' ? ['auth'] : ['localhost', '127.0.0.1'],
+        ];
+    }
+
+    /**
+     * A79 increment 2: clone a database into a fresh target + user. MariaDB/PostgreSQL
+     * only (Mongo restore has no rename); source must exist, target must not.
+     *
+     * @return array<string,mixed>
+     */
+    private function dbClone(array $args, array $stdin): array
+    {
+        $engine = (string) ($stdin['engine'] ?? $this->databaseEngine);
+        if ($engine === 'mongodb') {
+            throw new BrokerCallException('Cloning a MongoDB database is not supported yet.', 3);
+        }
+        $source = (string) ($args[0] ?? '');
+        $target = (string) ($args[1] ?? '');
+        $user = (string) ($stdin['user'] ?? $target);
+        if ($source === $target) {
+            throw new BrokerCallException('The clone must use a different database name than the source.', 2);
+        }
+        $names = array_column($this->databases, 'name');
+        if (! in_array($source, $names, true)) {
+            throw new BrokerCallException("Source database {$source} was not found.", 2);
+        }
+        if (in_array($target, $names, true)) {
+            throw new BrokerCallException("A database named {$target} already exists; choose a new name for the clone.", 3);
+        }
+        $this->databases[] = [
+            'name' => $target,
+            'size_bytes' => 0,
+            'table_count' => 0,
+            'users' => [['user' => $user, 'host' => 'localhost']],
+            'protected' => false,
+        ];
+
+        return [
+            'engine' => $engine,
+            'source' => $source,
+            'target' => $target,
+            'user' => $user,
+            'password' => str_repeat('c', 48),
         ];
     }
 

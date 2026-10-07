@@ -27,6 +27,7 @@ use AzerioidPanel\Broker\Actions\DbAccessSet;
 use AzerioidPanel\Broker\Actions\DbAccessShow;
 use AzerioidPanel\Broker\Actions\DbAdd;
 use AzerioidPanel\Broker\Actions\DbDel;
+use AzerioidPanel\Broker\Actions\DbClone;
 use AzerioidPanel\Broker\Actions\DbDump;
 use AzerioidPanel\Broker\Actions\DbEngine;
 use AzerioidPanel\Broker\Actions\DbList;
@@ -176,6 +177,7 @@ final class Kernel
         'db.resetpw' => DbResetpw::class,
         'db.engine' => DbEngine::class,
         'db.dump' => DbDump::class,
+        'db.clone' => DbClone::class,
         'db.access.show' => DbAccessShow::class,
         'db.access.set' => DbAccessSet::class,
         'logs.tail' => LogsTail::class,

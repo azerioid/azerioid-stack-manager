@@ -5,6 +5,7 @@ namespace AzerioidPanel\Broker\Actions;
 
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Database\DatabaseManager;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Vhost\AppRuntime;
@@ -143,15 +144,68 @@ final class VhostClone
         }
         VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp);
 
+        // A79 increment 2: optionally clone named databases alongside the files.
+        // The operator names each as source:target (databases are global and not
+        // tied to a domain, so there is nothing to auto-discover). Each is cloned
+        // best-effort into a fresh DB + user — a DB failure rolls its own target
+        // back (DbClone) and is reported, but never undoes the file clone above.
+        $cloned = [];
+        $dbErrors = [];
+        $pairs = $this->databasePairs($input);
+        if ($pairs !== []) {
+            $engine = (new DatabaseManager($config, $runtime))->resolveEngine((string) ($input['engine'] ?? ''));
+            foreach ($pairs as [$dbSource, $dbTarget]) {
+                try {
+                    $cloned[] = DbClone::run($runtime, $config, $engine, $dbSource, $dbTarget, $dbTarget);
+                } catch (\Throwable $e) {
+                    $dbErrors[] = ['source' => $dbSource, 'target' => $dbTarget, 'error' => $e->getMessage()];
+                }
+            }
+        }
+
         return [
             'source' => $src,
             'domain' => $dst,
             'root' => $dstRoot,
             'type' => (string) ($source['type'] ?? 'php'),
             'files_copied' => true,
-            'note' => 'Databases and Octane/PM2/Docker runtimes are not cloned yet.',
+            'databases' => $cloned,
+            'database_errors' => $dbErrors,
+            'note' => $cloned === [] && $dbErrors === []
+                ? 'Databases and Octane/PM2/Docker runtimes are not cloned yet.'
+                : 'Update the clone\'s config with the new database name, user and password. Octane/PM2/Docker runtimes are not cloned yet.',
         ];
     }
+
+    /**
+     * Parse the source:target database pairs from `databases` (array) or `db`
+     * (comma-separated string). A bare name with no `:target` is rejected — the
+     * target must be named explicitly (db names are a 32-char namespace, so there
+     * is no safe auto-derived name).
+     *
+     * @return list<array{0:string,1:string}>
+     */
+    private function databasePairs(array $input): array
+    {
+        $raw = $input['databases'] ?? $input['db'] ?? [];
+        if (is_string($raw)) {
+            $raw = array_filter(array_map('trim', explode(',', $raw)), static fn ($s) => $s !== '');
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+        $pairs = [];
+        foreach ($raw as $entry) {
+            if (!is_string($entry) || !str_contains($entry, ':')) {
+                throw new BrokerException('Each database must be given as source:target (e.g. shop:shop_staging).', 2);
+            }
+            [$s, $t] = explode(':', $entry, 2);
+            $pairs[] = [Validator::dbName(trim($s)), Validator::dbName(trim($t))];
+        }
+
+        return $pairs;
+    }
+
 
     private function siteTop(Config $config, string $root): string
     {
