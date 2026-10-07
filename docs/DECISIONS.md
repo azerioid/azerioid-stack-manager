@@ -2332,3 +2332,15 @@ database list, calls `vhost.clone`, and on success shows the result — includin
 password — once, with any per-database or runtime-replication errors surfaced inline. Thin wrapper over the
 existing `vhost.clone` action; FakeBroker arm already present. Livewire tests cover the success path (new site +
 one-time DB credentials shown) and a rejected target domain.
+
+### A80 erratum — Docker cap must not take the site down (rootless cgroup delegation)
+
+Live validation on the Rocky host surfaced a foot-gun: a per-site **rootless** dockerd without cgroup v2
+CPU/memory delegation rejects `docker run --cpus`/`--memory` ("NanoCPUs can not be set … cgroup is not mounted")
+and the container never starts. `DockerManager::applyLimits` had replaced the program command and restarted, so
+applying a cap on such a host would leave a running Docker site **down**. Fix: a resource cap must never take a
+working site down — if the capped container does not come up, `applyLimits` clears the caps, restarts the
+container **without** them, and throws a clear error that this host's rootless Docker can't enforce caps (it needs
+cgroup v2 delegation). `vhost.docker.enable` was already safe (it rolls the whole enable back and leaves the vhost
+unchanged on failure). The Docker memory/CPU caps thus remain best-effort and honest: enforced where the rootless
+daemon supports them, cleared-and-reported where it doesn't, never site-breaking.
