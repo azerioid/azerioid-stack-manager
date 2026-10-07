@@ -38,6 +38,7 @@ use AzerioidPanel\Broker\Actions\FirewallStatus;
 use AzerioidPanel\Broker\Actions\FirewallUnban;
 use AzerioidPanel\Broker\Actions\LogsSearch;
 use AzerioidPanel\Broker\Actions\LogsTail;
+use AzerioidPanel\Broker\Actions\LogsVhost;
 use AzerioidPanel\Broker\Actions\MailAlias;
 use AzerioidPanel\Broker\Actions\MailDnsAction;
 use AzerioidPanel\Broker\Actions\MailDomain;
@@ -185,6 +186,7 @@ final class Kernel
         'db.access.set' => DbAccessSet::class,
         'logs.tail' => LogsTail::class,
         'logs.search' => LogsSearch::class,
+        'logs.vhost' => LogsVhost::class,
         'php.versions' => PhpVersions::class,
         'php.timeouts.ensure' => PhpTimeoutsEnsure::class,
         'php.ini.get' => PhpIniGet::class,

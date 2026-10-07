@@ -2280,3 +2280,14 @@ is shareable, and any change resets to the first page. No new storage or broker 
 `created_at` / `action` indexes already exist, and the whole panel is admin-only (one root-equivalent operator,
 A39), so the auth group already gates the page. Test: the filters narrow the feed by action, result and user, and
 Clear restores it.
+
+## A82 — Per-vhost access log viewer
+
+New feature (quick win). `logs.tail`/`logs.search` only serve a fixed system-log key allowlist. A82 adds
+`logs.vhost`: tail or fixed-string search a single site's Caddy access log. The path is **derived** from a
+validated domain — `<web_log_dir>/access_<domain>.log` (the per-site access log from A76) — never operator-
+supplied, and is re-checked with `resolveUnderBase` to resolve under the web log dir, so a crafted domain can't
+read a file elsewhere (and `Validator::domain` already rejects slashes / `..`). Read-only. The Logs page gains a
+"Site access log" picker (the managed domains, from `vhost.list`) that switches the tail/search to that site;
+"— system logs —" returns to the fixed keys. App/error logs for runtime sites stay with the Docker logs page and
+the Octane/PM2 status. Tests: tail, search, missing-is-not-an-error, non-access type refused, bad domain rejected.
