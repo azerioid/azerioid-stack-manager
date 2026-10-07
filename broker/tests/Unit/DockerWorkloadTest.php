@@ -238,6 +238,19 @@ final class DockerWorkloadTest extends TestCase
         $this->assertSame(\AzerioidPanel\Broker\Component\DockerRootlessSetup::dockerRunWrapperScript(), $this->rt->files[DockerManager::DOCKER_RUN_WRAPPER]);
     }
 
+    public function test_a80_image_mode_applies_memory_and_cpu_caps(): void
+    {
+        // A80 inc2: caps stored for the site land on the `docker run` as hard limits.
+        (new \AzerioidPanel\Broker\Php\SitePool($this->cfg, $this->rt))
+            ->saveSettings(self::DOMAIN, ['memory_mb' => 256, 'cpu_percent' => 150]);
+
+        $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+
+        $conf = $this->supervisorConf();
+        $this->assertStringContainsString('--memory=256m', $conf);
+        $this->assertStringContainsString('--cpus=1.5', $conf);
+    }
+
     public function test_restart_on_failure_maps_to_supervisors_unexpected(): void
     {
         $this->run_('vhost.docker.enable', ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80, 'restart' => 'on-failure']);

@@ -255,5 +255,24 @@ final class SitePoolTest extends TestCase
         $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['php_memory_limit_mb' => '999999'])[0]);
         $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['max_children' => '0'])[0]);
         $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['php_memory_limit_mb' => 'lots'])[0]);
+        // A80 inc2 runtime caps are validated too.
+        $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['memory_mb' => '8'])[0]);
+        $this->assertNotSame(0, $this->broker(['vhost.limits.set', 'shop.example.com'], ['cpu_percent' => '99999'])[0]);
+    }
+
+    public function test_a80_inc2_stores_runtime_caps_and_reports_enforcement(): void
+    {
+        $this->assertSame(0, $this->broker(['vhost.add', 'shop.example.com', '/data/www/shop.example.com/public', 'php', '8.4'])[0]);
+
+        // A plain PHP site: runtime memory/CPU caps are stored but the honest note
+        // says they apply only to Octane/PM2/Docker, not FPM.
+        [$code, $json] = $this->broker(['vhost.limits.set', 'shop.example.com'], ['memory_mb' => '512', 'cpu_percent' => '150']);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertSame(512, $json['data']['memory_mb'] ?? null);
+        $this->assertSame(150, $json['data']['cpu_percent'] ?? null);
+        $this->assertSame('fpm', $json['data']['runtime'] ?? null);
+        $this->assertStringContainsString('PHP-FPM', (string) ($json['data']['enforcement'] ?? ''));
+        // FPM pool is untouched by the runtime caps (no cgroup line in the pool).
+        $this->assertStringNotContainsString('memory_mb', $this->rt->files[$this->poolPath('8.4')]);
     }
 }

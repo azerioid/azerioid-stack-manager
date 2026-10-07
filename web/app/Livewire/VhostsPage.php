@@ -82,7 +82,7 @@ class VhostsPage extends Component
 
     public ?bool $editOpenBasedirWas = null;
 
-    /** A80: per-vhost PHP limits ('' = panel default). */
+    /** A80: per-vhost limits ('' = panel default / uncapped). */
     public string $editPhpMemory = '';
 
     public string $editMaxChildren = '';
@@ -90,6 +90,19 @@ class VhostsPage extends Component
     public string $editPhpMemoryWas = '';
 
     public string $editMaxChildrenWas = '';
+
+    /** A80 inc2: runtime (Octane/PM2/Docker) caps + the honest enforcement note. */
+    public string $editMemoryMb = '';
+
+    public string $editCpuPercent = '';
+
+    public string $editMemoryMbWas = '';
+
+    public string $editCpuPercentWas = '';
+
+    public string $editLimitsNote = '';
+
+    public string $editRuntimeKind = 'fpm';
     public bool $editTls = false;
     public string $editTlsMode = 'off';
     public string $editDnsProvider = '';
@@ -395,9 +408,7 @@ class VhostsPage extends Component
             $this->editWildcard = false;
             $this->editOpenBasedir = $this->editType === 'php' ? $this->openBasedirOf($domain) : null;
             $this->editOpenBasedirWas = $this->editOpenBasedir;
-            [$this->editPhpMemory, $this->editMaxChildren] = $this->editType === 'php' ? $this->limitsOf($domain) : ['', ''];
-            $this->editPhpMemoryWas = $this->editPhpMemory;
-            $this->editMaxChildrenWas = $this->editMaxChildren;
+            $this->loadLimits($domain);
 
             return;
         }
@@ -406,7 +417,7 @@ class VhostsPage extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine', 'editOpenBasedir', 'editOpenBasedirWas', 'editPhpMemory', 'editMaxChildren', 'editPhpMemoryWas', 'editMaxChildrenWas');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine', 'editOpenBasedir', 'editOpenBasedirWas', 'editPhpMemory', 'editMaxChildren', 'editPhpMemoryWas', 'editMaxChildrenWas', 'editMemoryMb', 'editCpuPercent', 'editMemoryMbWas', 'editCpuPercentWas', 'editLimitsNote', 'editRuntimeKind');
     }
 
     /** The site's open_basedir switch from the A55 pool status; null when the broker has no answer. */
@@ -426,22 +437,22 @@ class VhostsPage extends Component
     }
 
     /**
-     * A80: the site's PHP memory_limit (MB) and pm.max_children caps as strings
-     * ('' = panel default), from the broker. Empty pair when the broker has no answer.
-     *
-     * @return array{0:string,1:string}
+     * A80: load the site's limits (PHP per-request memory + max_children; runtime
+     * memory + CPU caps) and the honest enforcement note into the edit form. Caps are
+     * strings so '' means "panel default / uncapped".
      */
-    private function limitsOf(string $domain): array
+    private function loadLimits(string $domain): void
     {
         $res = app(BrokerClient::class)->call('vhost.limits.show', [$domain], [], 30, false);
-        if (! $res->ok || ! is_array($res->data)) {
-            return ['', ''];
-        }
+        $d = ($res->ok && is_array($res->data)) ? $res->data : [];
+        $str = static fn (string $key): string => isset($d[$key]) && $d[$key] !== null ? (string) $d[$key] : '';
 
-        return [
-            $res->data['php_memory_limit_mb'] !== null ? (string) $res->data['php_memory_limit_mb'] : '',
-            $res->data['max_children'] !== null ? (string) $res->data['max_children'] : '',
-        ];
+        $this->editPhpMemory = $this->editPhpMemoryWas = $str('php_memory_limit_mb');
+        $this->editMaxChildren = $this->editMaxChildrenWas = $str('max_children');
+        $this->editMemoryMb = $this->editMemoryMbWas = $str('memory_mb');
+        $this->editCpuPercent = $this->editCpuPercentWas = $str('cpu_percent');
+        $this->editLimitsNote = (string) ($d['enforcement'] ?? '');
+        $this->editRuntimeKind = (string) ($d['runtime'] ?? 'fpm');
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -503,12 +514,23 @@ class VhostsPage extends Component
                     return;
                 }
             }
-            if ($this->editType === 'php'
-                && ($this->editPhpMemory !== $this->editPhpMemoryWas || $this->editMaxChildren !== $this->editMaxChildrenWas)) {
-                $set = $broker->call('vhost.limits.set', [$domain], [
-                    'php_memory_limit_mb' => $this->editPhpMemory,
-                    'max_children' => $this->editMaxChildren,
-                ]);
+            $limitChanges = [];
+            if ($this->editType === 'php') {
+                if ($this->editPhpMemory !== $this->editPhpMemoryWas) {
+                    $limitChanges['php_memory_limit_mb'] = $this->editPhpMemory;
+                }
+                if ($this->editMaxChildren !== $this->editMaxChildrenWas) {
+                    $limitChanges['max_children'] = $this->editMaxChildren;
+                }
+            }
+            if ($this->editMemoryMb !== $this->editMemoryMbWas) {
+                $limitChanges['memory_mb'] = $this->editMemoryMb;
+            }
+            if ($this->editCpuPercent !== $this->editCpuPercentWas) {
+                $limitChanges['cpu_percent'] = $this->editCpuPercent;
+            }
+            if ($limitChanges !== []) {
+                $set = $broker->call('vhost.limits.set', [$domain], $limitChanges, 900);
                 if (! $set->ok) {
                     $this->error = 'Updated '.$domain.', but the resource limits were not changed: '.$this->operatorMessage((string) $set->error);
 

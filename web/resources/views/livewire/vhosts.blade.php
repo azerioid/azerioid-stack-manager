@@ -185,6 +185,15 @@
                     <span class="block text-xs normal-case text-zinc-500">Concurrent FPM processes for this site. Blank = default.</span>
                 </label>
             @endif
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Runtime memory cap (MB)
+                <input type="number" min="16" max="65536" class="field mt-1" wire:model="editMemoryMb" placeholder="uncapped">
+            </label>
+            <label class="text-xs uppercase tracking-wide text-zinc-500">Runtime CPU cap (% of one core)
+                <input type="number" min="1" max="3200" class="field mt-1" wire:model="editCpuPercent" placeholder="uncapped">
+            </label>
+            @if ($editLimitsNote)
+                <p class="md:col-span-2 text-xs text-zinc-500">{{ $editLimitsNote }}</p>
+            @endif
             <label class="text-xs uppercase tracking-wide text-zinc-500">Engine
                 <select class="field mt-1" wire:model="editEngine" @disabled($editType === 'proxy')>
                     <option value="caddy">Caddy (direct)</option>

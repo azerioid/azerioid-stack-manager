@@ -25,6 +25,8 @@ class VhostCommand extends Command
         {--db= : Databases to clone with the site, source:target[,source:target] (clone)}
         {--php-memory= : Per-request PHP memory_limit in MB, or "default" to clear (limits)}
         {--max-children= : PHP-FPM pm.max_children for the site, or "default" to clear (limits)}
+        {--memory= : Runtime memory cap in MB for Octane/PM2/Docker, or "default" to clear (limits)}
+        {--cpu= : Runtime CPU cap in percent of one core (100=1 core) for Docker, or "default" to clear (limits)}
         {--upstream= : Upstream host:port for proxy vhosts}
         {--tls= : off|auto|internal|dns01 (aliases: on=auto, dns=dns01, self=internal)}
         {--tls-mode= : Alias of --tls=}
@@ -500,20 +502,21 @@ class VhostCommand extends Command
         }
 
         try {
-            $mem = $this->option('php-memory');
-            $kids = $this->option('max-children');
-            if ($mem === null && $kids === null) {
-                $data = $this->brokerData('vhost.limits.show', [$domain], [], null, false);
-            } else {
-                $stdin = [];
-                if ($mem !== null) {
-                    $stdin['php_memory_limit_mb'] = (string) $mem;
+            $map = [
+                'php_memory_limit_mb' => $this->option('php-memory'),
+                'max_children' => $this->option('max-children'),
+                'memory_mb' => $this->option('memory'),
+                'cpu_percent' => $this->option('cpu'),
+            ];
+            $stdin = [];
+            foreach ($map as $key => $value) {
+                if ($value !== null) {
+                    $stdin[$key] = (string) $value;
                 }
-                if ($kids !== null) {
-                    $stdin['max_children'] = (string) $kids;
-                }
-                $data = $this->brokerData('vhost.limits.set', [$domain], $stdin);
             }
+            $data = $stdin === []
+                ? $this->brokerData('vhost.limits.show', [$domain], [], null, false)
+                : $this->brokerData('vhost.limits.set', [$domain], $stdin);
         } catch (\Throwable $e) {
             return $this->failBroker($e);
         }
@@ -524,9 +527,16 @@ class VhostCommand extends Command
 
         $mem = $data['php_memory_limit_mb'] ?? null;
         $kids = $data['max_children'] ?? null;
-        $this->line("Limits for {$domain}:");
+        $rtMem = $data['memory_mb'] ?? null;
+        $cpu = $data['cpu_percent'] ?? null;
+        $this->line("Limits for {$domain} (runtime: " . ($data['runtime'] ?? 'fpm') . '):');
         $this->line('  PHP memory_limit : ' . ($mem !== null ? $mem . 'M' : 'default'));
         $this->line('  pm.max_children  : ' . ($kids !== null ? $kids : 'default (' . ($data['default_max_children'] ?? 5) . ')'));
+        $this->line('  runtime memory   : ' . ($rtMem !== null ? $rtMem . 'M' : 'uncapped'));
+        $this->line('  runtime CPU      : ' . ($cpu !== null ? $cpu . '% of one core' : 'uncapped'));
+        if (isset($data['enforcement'])) {
+            $this->line('  note: ' . (string) $data['enforcement']);
+        }
 
         return self::SUCCESS;
     }
