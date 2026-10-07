@@ -23,6 +23,10 @@ class TwoFactorSetup extends Component
     #[Locked]
     public string $qr = '';
 
+    /** A83: recovery codes shown once, after a successful confirm. */
+    #[Locked]
+    public array $recoveryCodes = [];
+
     public function mount(PanelAuthenticator $auth): void
     {
         $user = Auth::user();
@@ -53,6 +57,15 @@ class TwoFactorSetup extends Component
 
             return;
         }
+        // Show the one-time recovery codes once; the operator continues from there.
+        $this->recoveryCodes = app(\App\Services\TotpService::class)->recoveryCodes($user->refresh());
+        if ($this->recoveryCodes === []) {
+            $this->redirectRoute('dashboard', navigate: true);
+        }
+    }
+
+    public function finish(): void
+    {
         $this->redirectRoute('dashboard', navigate: true);
     }
 

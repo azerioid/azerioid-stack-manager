@@ -304,6 +304,39 @@ class SettingsPage extends Component
         $this->flash = 'Two-factor authentication disabled. Login is password-only for this account.';
     }
 
+    /** A83: recovery codes shown once right after a regenerate. */
+    public array $newRecoveryCodes = [];
+
+    public function regenerateRecoveryCodes(TotpService $totp): void
+    {
+        $this->totpError = null;
+        $this->newRecoveryCodes = [];
+        $user = Auth::user();
+        abort_unless($user instanceof User, 403);
+        if (! $user->hasTwoFactorEnabled()) {
+            $this->totpError = 'Enable two-factor first.';
+
+            return;
+        }
+        $this->validate(['totp_password' => ['required', 'string']]);
+        if (! Hash::check($this->totp_password, $user->password)) {
+            $this->addError('totp_password', 'Current password is incorrect.');
+
+            return;
+        }
+        $secret = $user->plainTwoFactorSecret();
+        if ($secret === null || $this->totp_code === '' || ! $totp->verify($secret, $this->totp_code)) {
+            $this->addError('totp_code', 'Enter a valid authenticator code to regenerate recovery codes.');
+
+            return;
+        }
+        $codes = $totp->generateRecoveryCodes();
+        $totp->storeRecoveryCodes($user, $codes);
+        $this->newRecoveryCodes = $codes;
+        $this->reset('totp_password', 'totp_code');
+        $this->flash = 'New recovery codes generated. The old codes no longer work.';
+    }
+
     public function resetTotp(TotpService $totp): void
     {
         $this->totpError = null;
@@ -335,6 +368,7 @@ class SettingsPage extends Component
         return view('livewire.settings', [
             'totpRequired' => (bool) config('azerioid.require_totp'),
             'totpEnrolled' => $user instanceof User && $user->hasTwoFactorEnabled(),
+            'recoveryCodesLeft' => $user instanceof User ? count(app(TotpService::class)->recoveryCodes($user)) : 0,
         ])->layoutData([
             'heading' => 'Settings',
             'sub' => 'Admin, session, panel domain, mail, DNS-01 credentials, php.ini',

@@ -122,7 +122,11 @@ final class PanelAuthenticator
             return false;
         }
         $secret = $user->plainTwoFactorSecret();
-        if ($secret === null || ! $this->totp->verify($secret, $code)) {
+        // A83: a one-time recovery code is accepted in place of a TOTP code, so a lost
+        // authenticator does not lock the operator out. A used code is consumed.
+        $ok = ($secret !== null && $this->totp->verify($secret, $code))
+            || $this->totp->consumeRecoveryCode($user, $code);
+        if (! $ok) {
             return false;
         }
         $this->establishSession($user, $ip);
@@ -158,6 +162,11 @@ final class PanelAuthenticator
             return false;
         }
         $this->totp->confirm($user);
+        // A83: issue recovery codes the first time 2FA is confirmed, so the operator
+        // leaves setup with a way back in. Re-enrollment keeps the existing set.
+        if ($this->totp->recoveryCodes($user) === []) {
+            $this->totp->storeRecoveryCodes($user, $this->totp->generateRecoveryCodes());
+        }
 
         return true;
     }

@@ -1,4 +1,14 @@
 <div>
+    @if ($recoveryCodes !== [])
+        <h2 class="mb-1 text-base font-medium text-zinc-100">Save your recovery codes</h2>
+        <p class="mb-4 text-sm text-zinc-500">Each code signs you in once if you lose your authenticator. Store them somewhere safe — they are shown only now.</p>
+        <ul class="mb-5 grid grid-cols-2 gap-2 rounded-md bg-black/30 p-4 font-mono text-sm text-zinc-200">
+            @foreach ($recoveryCodes as $rc)
+                <li class="text-center tracking-[0.15em]">{{ $rc }}</li>
+            @endforeach
+        </ul>
+        <button type="button" class="btn-primary w-full" wire:click="finish">I've saved these — continue</button>
+    @else
     <h2 class="mb-1 text-base font-medium text-zinc-100">
         @if (config('azerioid.require_totp'))
             Two-factor is required
@@ -23,4 +33,5 @@
     @unless (config('azerioid.require_totp'))
         <button type="button" class="btn-ghost mt-3 w-full" wire:click="skip">Skip</button>
     @endunless
+    @endif
 </div>

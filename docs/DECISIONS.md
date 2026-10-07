@@ -2291,3 +2291,20 @@ read a file elsewhere (and `Validator::domain` already rejects slashes / `..`). 
 "Site access log" picker (the managed domains, from `vhost.list`) that switches the tail/search to that site;
 "— system logs —" returns to the fixed keys. App/error logs for runtime sites stay with the Docker logs page and
 the Octane/PM2 status. Tests: tail, search, missing-is-not-an-error, non-access type refused, bad domain rejected.
+
+## A83 — 2FA recovery codes
+
+New feature (quick win). TOTP enrollment (`TwoFactorSetup`/`TwoFactorChallenge`/`PanelAuthenticator`) had no
+fallback — a lost authenticator meant a lockout needing DB surgery. A83 issues one-time recovery codes.
+
+- **Generation & storage.** On the first successful 2FA confirm, `TotpService` generates 8 high-entropy codes
+  (10 hex chars, ~40 bits each) and stores them in the existing `two_factor_recovery_codes` column, encrypted at
+  rest with `Crypt` like the TOTP secret. Shown **once** at the end of setup; re-enrollment keeps the set. The
+  Settings page shows how many remain and can regenerate them (current password + a valid TOTP code required;
+  regenerating invalidates the old set), shown once.
+- **Use.** The challenge form has a "Use a recovery code" mode. `verifyChallengeCode` accepts a code in place of
+  a TOTP (normalized for case/dashes, constant-time per candidate) and **consumes** it — a used code is removed
+  and cannot be reused. It runs through the same pending-login / lockout / fail2ban path as a TOTP attempt, so
+  the brute-force surface is the same (and 40-bit codes under lockout are infeasible to guess).
+- Tests: generation/round-trip/one-time consumption with normalization, and login via a recovery code (spent
+  after use).
