@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseManager;
+use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 
@@ -90,32 +91,22 @@ final class DbClone
             }
             $plain = $dumped->stdout;
 
-            if ($engine === 'mariadb') {
-                // mysqldump emits every view/routine/trigger with a DEFINER bound to
-                // the SOURCE's user. Loaded as-is, a SQL SECURITY DEFINER object in
-                // the clone would run with the source user's grants and reach back
-                // into the SOURCE database — a cross-database isolation bypass (worse
-                // still if the source was dumped by an admin). Rebind every DEFINER to
-                // the clone's own scoped user, so a stored object can touch only the
-                // clone's database. (PostgreSQL is covered by A71's per-target owning
-                // role; MongoDB has no stored DEFINER objects and is refused anyway.)
-                // ponytail: global rewrite; a data value literally matching
-                // DEFINER=`x`@`y` would also be rewritten — pathological, accepted.
-                $plain = (string) preg_replace(
-                    '/DEFINER=`(?:[^`]|``)*`@`(?:[^`]|``)*`/',
-                    'DEFINER=`' . $user . '`@`localhost`',
-                    $plain
-                );
-            }
-
             $backup->prepareTarget($target);
-            $spec = $backup instanceof PostgreSqlBackupEngine
-                ? $backup->restoreCommandFor($target, substr($plain, 0, 16))
-                : $backup->restoreCommand($target);
-            try {
-                $result = $runtime->exec($spec['command'], $plain, 1800);
-            } finally {
-                ($spec['cleanup'])();
+            if ($engine === 'mariadb') {
+                $result = self::loadMariaDb($runtime, $config, $target, $user, $password, $plain);
+            } else {
+                // PostgreSQL: pg_restore of a custom-format archive replays a TOC, not
+                // arbitrary SQL from the payload, and A71 restores under a per-target
+                // unprivileged owning role with PUBLIC revoked — the injection surface
+                // the MariaDB text path has does not apply.
+                $spec = $backup instanceof PostgreSqlBackupEngine
+                    ? $backup->restoreCommandFor($target, substr($plain, 0, 16))
+                    : $backup->restoreCommand($target);
+                try {
+                    $result = $runtime->exec($spec['command'], $plain, 1800);
+                } finally {
+                    ($spec['cleanup'])();
+                }
             }
             if (!$result->ok()) {
                 throw new BrokerException(
@@ -139,5 +130,51 @@ final class DbClone
             'user' => $user,
             'password' => $password,
         ];
+    }
+
+    /**
+     * Load a MariaDB dump into the clone, run AS THE CLONE'S OWN unprivileged user.
+     *
+     * The dump's object definitions and row data are controlled by whoever owns the
+     * source database — which may be a lower-trust application, not the admin running
+     * the clone. Loading as root would let crafted content (or a parser differential
+     * in the DEFINER rewrite below) execute as root. As the clone user the load can
+     * only touch the clone's own database.
+     *
+     * The DEFINER rewrite binds every view/routine/trigger to the clone user, so a
+     * SQL SECURITY DEFINER object cannot reach back into the source database. The two
+     * defenses compose: any DEFINER the rewrite misses is some *other* user, which the
+     * clone user has no privilege to create — so a missed rewrite fails the load
+     * closed (and the clone is rolled back) rather than installing a cross-tenant
+     * object.
+     */
+    private static function loadMariaDb(Runtime $runtime, Config $config, string $target, string $user, string $password, string $dump): ExecResult
+    {
+        // $user is a validated SQL identifier and $password is 48 hex chars, so
+        // neither can break out of the [client] block or the DEFINER clause.
+        $dump = (string) preg_replace(
+            '/DEFINER=`(?:[^`]|``)*`@`(?:[^`]|``)*`/',
+            'DEFINER=`' . $user . '`@`localhost`',
+            $dump
+        );
+
+        $cnf = rtrim($config->stagingDir, '/') . '/mysql-clone-' . bin2hex(random_bytes(6)) . '.cnf';
+        $runtime->mkdir($config->stagingDir, 0750);
+        $runtime->writeFile(
+            $cnf,
+            "[client]\nuser={$user}\npassword={$password}\nsocket={$config->mysqlSocket}\n",
+            0600
+        );
+        try {
+            return $runtime->exec(
+                ['/usr/bin/mysql', '--defaults-extra-file=' . $cnf, '--protocol=socket', '--socket=' . $config->mysqlSocket, $target],
+                $dump,
+                1800
+            );
+        } finally {
+            if ($runtime->fileExists($cnf)) {
+                $runtime->deleteFile($cnf);
+            }
+        }
     }
 }

@@ -58,7 +58,8 @@ final class DbCloneTest extends TestCase
     public function test_clone_dumps_the_source_and_loads_a_fresh_target(): void
     {
         [$kernel, $rt] = $this->mariadbKernel();
-        $rt->execFn = function (array $cmd): ?ExecResult {
+        $restoreCnf = null;
+        $rt->execFn = function (array $cmd, ?string $stdin) use ($rt, &$restoreCnf): ?ExecResult {
             if (($cmd[0] ?? '') === '/usr/bin/mysqldump') {
                 // A view carrying the SOURCE user's DEFINER, as mysqldump emits.
                 return new ExecResult($cmd, 0,
@@ -68,6 +69,13 @@ final class DbCloneTest extends TestCase
                     '');
             }
             if (($cmd[0] ?? '') === '/usr/bin/mysql') {
+                // Capture the credentials file content while it still exists.
+                foreach ($cmd as $arg) {
+                    if (str_starts_with($arg, '--defaults-extra-file=')) {
+                        $restoreCnf = $rt->files[substr($arg, 22)] ?? null;
+                    }
+                }
+
                 return new ExecResult($cmd, 0, '', '');
             }
 
@@ -95,6 +103,11 @@ final class DbCloneTest extends TestCase
         // so a SQL SECURITY DEFINER object cannot reach back into the source DB.
         $this->assertStringContainsString('DEFINER=`shopstg`@`localhost`', $restoreStdin);
         $this->assertStringNotContainsString('DEFINER=`shop`@`localhost`', $restoreStdin);
+        // The load must run as the clone's own unprivileged user, never root, so
+        // crafted dump content can only reach the clone database.
+        $this->assertNotNull($restoreCnf, 'the restore must use a credentials file');
+        $this->assertStringContainsString('user=shopstg', (string) $restoreCnf);
+        $this->assertStringNotContainsString('user=root', (string) $restoreCnf);
         // The generated password must never reach the SQL log (bound as a param).
         $this->assertStringNotContainsString((string) $data['password'], implode("\n", $rt->dbExecLog));
     }
