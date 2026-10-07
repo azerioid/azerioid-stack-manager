@@ -87,6 +87,7 @@ use AzerioidPanel\Broker\Actions\VhostClone;
 use AzerioidPanel\Broker\Actions\VhostDel;
 use AzerioidPanel\Broker\Actions\VhostEdit;
 use AzerioidPanel\Broker\Actions\VhostFilesAction;
+use AzerioidPanel\Broker\Actions\VhostLimits;
 use AzerioidPanel\Broker\Actions\VhostList;
 use AzerioidPanel\Broker\Actions\VhostOctane;
 use AzerioidPanel\Broker\Actions\DockerRegistry;
@@ -119,6 +120,8 @@ final class Kernel
         'vhost.phppool.apply' => SitePhpPool::class,
         'vhost.phppool.converge' => SitePhpPool::class,
         'vhost.phppool.set' => SitePhpPool::class,
+        'vhost.limits.show' => VhostLimits::class,
+        'vhost.limits.set' => VhostLimits::class,
         'panel.fpm.refresh' => PanelFpmRefresh::class,
         'panel.update.check' => PanelUpdateCheck::class,
         'panel.update.apply' => PanelUpdateApply::class,

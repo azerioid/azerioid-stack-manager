@@ -11,7 +11,7 @@ class VhostCommand extends Command
     use CallsBroker;
 
     protected $signature = 'azerioid:vhost
-        {action : list|add|edit|clone|del|files|octane|pm2|docker|reconcile|isolation|php-pool}
+        {action : list|add|edit|clone|del|files|octane|pm2|docker|reconcile|isolation|php-pool|limits}
         {filesOp? : list|read|write|delete|mkdir|rename (with files); enable|disable|reload|status|scale|node (with octane/pm2); enable|disable|build|restart|logs|status|services|settings|env|env-set (with docker); status|apply (with isolation); status|apply|set (with php-pool)}
         {--domain= : Vhost domain}
         {--dry-run : reconcile: report drift without changing the projection; isolation apply: show the plan}
@@ -23,6 +23,8 @@ class VhostCommand extends Command
         {--root= : Document root}
         {--source= : Source vhost domain to clone from (clone)}
         {--db= : Databases to clone with the site, source:target[,source:target] (clone)}
+        {--php-memory= : Per-request PHP memory_limit in MB, or "default" to clear (limits)}
+        {--max-children= : PHP-FPM pm.max_children for the site, or "default" to clear (limits)}
         {--upstream= : Upstream host:port for proxy vhosts}
         {--tls= : off|auto|internal|dns01 (aliases: on=auto, dns=dns01, self=internal)}
         {--tls-mode= : Alias of --tls=}
@@ -72,6 +74,7 @@ class VhostCommand extends Command
             'reconcile' => $this->reconcile(),
             'isolation' => $this->isolation(),
             'php-pool', 'phppool' => $this->phpPool(),
+            'limits' => $this->limits(),
             default => $this->invalidAction(),
         };
     }
@@ -480,6 +483,52 @@ class VhostCommand extends Command
         } catch (\Throwable $e) {
             return $this->failBroker($e);
         }
+    }
+
+    /**
+     * A80: per-vhost PHP-FPM resource limits — the per-request memory_limit and the
+     * pool's pm.max_children. With no --php-memory/--max-children, shows the current
+     * caps.
+     */
+    private function limits(): int
+    {
+        $domain = trim((string) $this->option('domain'));
+        if ($domain === '') {
+            $this->error('Usage: azerioid vhost limits --domain=<domain> [--php-memory=256] [--max-children=12]');
+
+            return self::INVALID;
+        }
+
+        try {
+            $mem = $this->option('php-memory');
+            $kids = $this->option('max-children');
+            if ($mem === null && $kids === null) {
+                $data = $this->brokerData('vhost.limits.show', [$domain], [], null, false);
+            } else {
+                $stdin = [];
+                if ($mem !== null) {
+                    $stdin['php_memory_limit_mb'] = (string) $mem;
+                }
+                if ($kids !== null) {
+                    $stdin['max_children'] = (string) $kids;
+                }
+                $data = $this->brokerData('vhost.limits.set', [$domain], $stdin);
+            }
+        } catch (\Throwable $e) {
+            return $this->failBroker($e);
+        }
+
+        if ($this->wantsJson()) {
+            return $this->emitData($data);
+        }
+
+        $mem = $data['php_memory_limit_mb'] ?? null;
+        $kids = $data['max_children'] ?? null;
+        $this->line("Limits for {$domain}:");
+        $this->line('  PHP memory_limit : ' . ($mem !== null ? $mem . 'M' : 'default'));
+        $this->line('  pm.max_children  : ' . ($kids !== null ? $kids : 'default (' . ($data['default_max_children'] ?? 5) . ')'));
+
+        return self::SUCCESS;
     }
 
     /**

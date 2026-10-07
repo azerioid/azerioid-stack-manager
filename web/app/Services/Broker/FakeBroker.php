@@ -361,6 +361,8 @@ final class FakeBroker
                 'vhost.phppool.apply' => $this->phpPoolApply($stdin),
                 'vhost.phppool.converge' => $this->phpPoolConverge(),
                 'vhost.phppool.set' => $this->phpPoolSet($args, $stdin),
+                'vhost.limits.show' => $this->vhostLimitsShow($args, $stdin),
+                'vhost.limits.set' => $this->vhostLimitsSet($args, $stdin),
                 'program.identity.status' => $this->programIdentityStatus(),
                 'program.identity.apply' => $this->programIdentityApply($stdin),
                 'program.identity.converge' => $this->programIdentityConverge(),
@@ -1183,6 +1185,53 @@ final class FakeBroker
         $this->phpPoolOpenBasedir[$domain] = (bool) ($stdin['open_basedir'] ?? true);
 
         return ['domain' => $domain, 'open_basedir' => $this->phpPoolOpenBasedir[$domain], 'isolated' => true, 'reason' => null];
+    }
+
+    /** @var array<string, array{php_memory_limit_mb:?int, max_children:?int}> A80 per-vhost limits */
+    public array $vhostLimits = [];
+
+    /** @return array<string,mixed> */
+    private function vhostLimitsShow(array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null];
+
+        return ['domain' => $domain, 'php_memory_limit_mb' => $cur['php_memory_limit_mb'], 'max_children' => $cur['max_children'], 'default_max_children' => 5];
+    }
+
+    /** @return array<string,mixed> */
+    private function vhostLimitsSet(array $args, array $stdin): array
+    {
+        $domain = (string) ($args[0] ?? ($stdin['domain'] ?? ''));
+        $cur = $this->vhostLimits[$domain] ?? ['php_memory_limit_mb' => null, 'max_children' => null];
+
+        $cur['php_memory_limit_mb'] = array_key_exists('php_memory_limit_mb', $stdin)
+            ? $this->limitInt($stdin['php_memory_limit_mb'], 16, 8192, 'PHP memory limit (MB)')
+            : $cur['php_memory_limit_mb'];
+        $cur['max_children'] = array_key_exists('max_children', $stdin)
+            ? $this->limitInt($stdin['max_children'], 1, 200, 'max children')
+            : $cur['max_children'];
+
+        $this->vhostLimits[$domain] = $cur;
+
+        return ['domain' => $domain, 'open_basedir' => true, 'isolated' => true, 'reason' => null] + $cur;
+    }
+
+    private function limitInt(mixed $value, int $min, int $max, string $label): ?int
+    {
+        $v = strtolower(trim((string) $value));
+        if ($v === '' || $v === 'default' || $v === 'null') {
+            return null;
+        }
+        if (preg_match('/^\d+$/', $v) !== 1) {
+            throw new BrokerCallException("Invalid {$label}.", 2);
+        }
+        $n = (int) $v;
+        if ($n < $min || $n > $max) {
+            throw new BrokerCallException("{$label} must be between {$min} and {$max}.", 2);
+        }
+
+        return $n;
     }
 
     /** @return array<string,mixed> */

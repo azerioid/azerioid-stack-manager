@@ -81,6 +81,15 @@ class VhostsPage extends Component
     public ?bool $editOpenBasedir = null;
 
     public ?bool $editOpenBasedirWas = null;
+
+    /** A80: per-vhost PHP limits ('' = panel default). */
+    public string $editPhpMemory = '';
+
+    public string $editMaxChildren = '';
+
+    public string $editPhpMemoryWas = '';
+
+    public string $editMaxChildrenWas = '';
     public bool $editTls = false;
     public string $editTlsMode = 'off';
     public string $editDnsProvider = '';
@@ -386,6 +395,9 @@ class VhostsPage extends Component
             $this->editWildcard = false;
             $this->editOpenBasedir = $this->editType === 'php' ? $this->openBasedirOf($domain) : null;
             $this->editOpenBasedirWas = $this->editOpenBasedir;
+            [$this->editPhpMemory, $this->editMaxChildren] = $this->editType === 'php' ? $this->limitsOf($domain) : ['', ''];
+            $this->editPhpMemoryWas = $this->editPhpMemory;
+            $this->editMaxChildrenWas = $this->editMaxChildren;
 
             return;
         }
@@ -394,7 +406,7 @@ class VhostsPage extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine', 'editOpenBasedir', 'editOpenBasedirWas');
+        $this->reset('editingDomain', 'editRoot', 'editPhpVersion', 'editTls', 'editTlsMode', 'editDnsProvider', 'editDnsToken', 'editAcmeStaging', 'editWildcard', 'editType', 'editEngine', 'editOpenBasedir', 'editOpenBasedirWas', 'editPhpMemory', 'editMaxChildren', 'editPhpMemoryWas', 'editMaxChildrenWas');
     }
 
     /** The site's open_basedir switch from the A55 pool status; null when the broker has no answer. */
@@ -411,6 +423,25 @@ class VhostsPage extends Component
         }
 
         return null;
+    }
+
+    /**
+     * A80: the site's PHP memory_limit (MB) and pm.max_children caps as strings
+     * ('' = panel default), from the broker. Empty pair when the broker has no answer.
+     *
+     * @return array{0:string,1:string}
+     */
+    private function limitsOf(string $domain): array
+    {
+        $res = app(BrokerClient::class)->call('vhost.limits.show', [$domain], [], 30, false);
+        if (! $res->ok || ! is_array($res->data)) {
+            return ['', ''];
+        }
+
+        return [
+            $res->data['php_memory_limit_mb'] !== null ? (string) $res->data['php_memory_limit_mb'] : '',
+            $res->data['max_children'] !== null ? (string) $res->data['max_children'] : '',
+        ];
     }
 
     public function saveEdit(BrokerClient $broker): void
@@ -468,6 +499,18 @@ class VhostsPage extends Component
                 $set = $broker->call('vhost.phppool.set', [$domain], ['open_basedir' => $this->editOpenBasedir]);
                 if (! $set->ok) {
                     $this->error = 'Updated '.$domain.', but open_basedir was not changed: '.$this->operatorMessage((string) $set->error);
+
+                    return;
+                }
+            }
+            if ($this->editType === 'php'
+                && ($this->editPhpMemory !== $this->editPhpMemoryWas || $this->editMaxChildren !== $this->editMaxChildrenWas)) {
+                $set = $broker->call('vhost.limits.set', [$domain], [
+                    'php_memory_limit_mb' => $this->editPhpMemory,
+                    'max_children' => $this->editMaxChildren,
+                ]);
+                if (! $set->ok) {
+                    $this->error = 'Updated '.$domain.', but the resource limits were not changed: '.$this->operatorMessage((string) $set->error);
 
                     return;
                 }

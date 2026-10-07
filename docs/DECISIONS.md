@@ -2212,3 +2212,25 @@ the source database (possibly a lower-trust app, not the admin running the clone
   **fails the load closed** (and the clone is rolled back) instead of installing a cross-tenant object. The two
   defenses compose. PostgreSQL is unaffected: `pg_restore` replays a TOC (not arbitrary SQL) under A71's
   per-target unprivileged owning role.
+
+## A80 — Per-vhost resource limits
+
+New feature (post-audit roadmap). An operator can cap a site's resource use. The roadmap assumed systemd units,
+but the real architecture is mixed, which bounds what each runtime can enforce — so A80 lands in increments.
+
+### A80 increment 1 — PHP-FPM per-site limits
+
+A PHP-FPM site's caps are pool settings, so they reuse the A55 per-site pool machinery:
+
+- **What's capped.** `php_admin_value[memory_limit]` (the per-request memory cap — `php_admin_value`, so the app
+  cannot raise it at runtime) and `pm.max_children` (the pool's concurrency). Stored in the site's existing pool
+  settings file (`site-php/<name>.json`), alongside `open_basedir`/`isolated`, as `php_memory_limit_mb` and
+  `max_children`; `null` = the panel default (5 children, PHP's default memory_limit).
+- **How it applies.** `vhost.limits.set` validates the values (memory 16–8192 MB, children 1–200), saves them, and
+  re-renders the pool through `SitePool::ensure` — which already php-fpm-validates the pool and rolls back a bad
+  one before reloading. `vhost.limits.show` reads them back. CLI: `azerioid vhost limits --domain= [--php-memory=]
+  [--max-children=]`; UI: fields in the vhost edit modal (PHP sites only).
+- **Honest scope.** FPM has no native per-pool *total* memory cgroup cap and no per-pool CPU control, so increment
+  1 is a per-request memory cap plus a concurrency cap — not a hard total-memory or CPU cap. A true cgroup total
+  cap for Octane/PM2 (`systemd-run --scope -p MemoryMax/CPUQuota`) and container limits for Docker follow in later
+  increments. Tests cover the rendered pool, show, clear-to-default, and range rejection.
