@@ -14,6 +14,23 @@ class TwoFactorChallenge extends Component
 {
     public string $code = '';
 
+    /** A83: switch the form to accept a one-time recovery code instead of a TOTP. */
+    public bool $useRecovery = false;
+
+    public function useRecoveryCode(): void
+    {
+        $this->useRecovery = true;
+        $this->reset('code');
+        $this->resetErrorBag();
+    }
+
+    public function useAuthenticatorCode(): void
+    {
+        $this->useRecovery = false;
+        $this->reset('code');
+        $this->resetErrorBag();
+    }
+
     public function mount(PanelAuthenticator $auth): void
     {
         $pendingId = session()->has('login.id') ? (int) session('login.id') : null;
@@ -29,7 +46,9 @@ class TwoFactorChallenge extends Component
 
     public function verify(PanelAuthenticator $auth): void
     {
-        $this->validate(['code' => ['required', 'digits:6']]);
+        $this->validate(['code' => $this->useRecovery
+            ? ['required', 'string', 'regex:/^[A-Za-z0-9\- ]{8,40}$/']
+            : ['required', 'digits:6']]);
 
         if (! session()->has('login.id')) {
             $this->redirectRoute('login', navigate: true);

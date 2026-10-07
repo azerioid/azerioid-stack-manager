@@ -59,12 +59,24 @@
             @endif
             <div class="flex flex-wrap gap-2">
                 <button type="button" class="btn-ghost" wire:click="resetTotp" wire:confirm="Generate a new authenticator secret? You must confirm a new code before it activates.">Reset / re-enroll</button>
+                <button type="button" class="btn-ghost" wire:click="regenerateRecoveryCodes" wire:confirm="Generate new recovery codes? The current codes stop working immediately.">Regenerate recovery codes</button>
                 @unless ($totpRequired)
                     <button type="button" class="btn-danger" wire:click="disableTotp" wire:confirm="Disable two-factor for this account?">Disable TOTP</button>
                 @else
                     <p class="text-sm text-zinc-500">Disable is unavailable while instance TOTP is required.</p>
                 @endunless
             </div>
+            <p class="text-xs text-zinc-500">Recovery codes left: <span class="font-mono">{{ $recoveryCodesLeft }}</span>. Each signs you in once if you lose your authenticator.</p>
+            @if ($newRecoveryCodes !== [])
+                <div class="rounded-md border border-warn/30 bg-warn/10 p-4">
+                    <p class="mb-2 text-sm text-warn">New recovery codes — shown once. Save them now.</p>
+                    <ul class="grid grid-cols-2 gap-2 font-mono text-sm text-zinc-200">
+                        @foreach ($newRecoveryCodes as $rc)
+                            <li class="text-center tracking-[0.15em]">{{ $rc }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
         @endif
     </section>
 
