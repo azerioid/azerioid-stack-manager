@@ -2100,3 +2100,15 @@ so a `git push` to the deploy branch redeploys automatically.
   band via `systemd-run` (fast 202). It returns a generic rejection (never revealing whether the token or
   signature failed). The deploy itself still runs as the site identity (A41). Tests cover HMAC accept/forge,
   branch filter, body cap, and token shape.
+
+### A78 erratum — webhook fails closed on an unknown branch; secret shown once
+
+Two commit-review findings on the first A78 cut:
+- **Fail-open:** `webhook()` only rejected a *different* branch (`$pushed !== '' && $pushed !== $configured`), so a
+  signed payload with no determinable branch — GitHub's `ping`, any non-push event, a malformed ref — skipped the
+  check and deployed. Now it deploys only when `$pushed === $configured` (empty/unknown ref ⇒ rejected).
+- **Secret exposure / logs:** `config()` (called on every page load) returned `webhook_secret`, spreading it
+  through Livewire page snapshots and any logging of the config. The secret is now **show-once**: `config()`
+  returns `webhook_configured` + `webhook_token` only; `configure()`/`rotateWebhook()` return the secret the one
+  time it is created, and the panel displays it once. `signature` is added to the broker/web audit redaction
+  denylist (the webhook body/token/secret were already redacted).

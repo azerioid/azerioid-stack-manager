@@ -43,6 +43,9 @@ class VhostDeployPage extends Component
 
     public ?string $webhookToken = null;
 
+    public bool $webhookConfigured = false;
+
+    // Shown once, right after save/rotate — never re-fetched from config().
     public ?string $webhookSecret = null;
 
     public ?string $flash = null;
@@ -70,7 +73,9 @@ class VhostDeployPage extends Component
         $this->preset = (string) ($d['preset'] ?? $this->preset);
         $this->command = (string) ($d['command'] ?? '');
         $this->webhookToken = ($d['webhook_token'] ?? null) !== null ? (string) $d['webhook_token'] : null;
-        $this->webhookSecret = ($d['webhook_secret'] ?? null) !== null ? (string) $d['webhook_secret'] : null;
+        $this->webhookConfigured = (bool) ($d['webhook_configured'] ?? false);
+        // config() never returns the secret; it is shown once by save()/rotateWebhook().
+        $this->webhookSecret = null;
         $schedule = (string) ($d['schedule'] ?? 'off');
         if (str_starts_with($schedule, 'daily@')) {
             $this->scheduleMode = 'daily';
@@ -99,8 +104,11 @@ class VhostDeployPage extends Component
 
             return;
         }
+        $secret = (array) $res->data;
         $this->flash = 'Saved. Add the deploy key below to the repository (read-only access is enough) before the first deploy.';
         $this->load($broker);
+        // After load() (which clears it): surface the webhook secret once.
+        $this->webhookSecret = ($secret['webhook_secret'] ?? null) !== null ? (string) $secret['webhook_secret'] : null;
     }
 
     public function deployNow(OperationDispatcher $operations): void

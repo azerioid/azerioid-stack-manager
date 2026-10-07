@@ -75,10 +75,12 @@ final class GitDeploy
             'preset' => $cfg['preset'] ?? null,
             'command' => $cfg['command'] ?? null,
             'schedule' => $cfg['schedule'] ?? 'off',
-            // A78: token is the public id in the webhook URL; secret is the HMAC
-            // key the operator pastes into GitHub/GitLab (admin-only panel read).
+            // A78: token is the public id in the webhook URL. The secret is NOT
+            // returned here — config() runs on every page load, so emitting the
+            // secret each time would spread it through page snapshots and any
+            // operation logging. It is shown once, by configure()/rotateWebhook().
             'webhook_token' => $cfg['webhook_token'] ?? null,
-            'webhook_secret' => $cfg['webhook_secret'] ?? null,
+            'webhook_configured' => ($cfg['webhook_secret'] ?? '') !== '',
             'public_key' => $this->runtime->fileExists($this->dir($domain) . '/id_ed25519.pub')
                 ? trim($this->runtime->readFile($this->dir($domain) . '/id_ed25519.pub')) : null,
             'state' => $this->state($domain),
@@ -131,7 +133,8 @@ final class GitDeploy
             $this->generateKey($domain);
         }
 
-        return $this->config($domain);
+        // Show the secret once, here (config() never re-emits it).
+        return $this->config($domain) + ['webhook_secret' => $webhookSecret];
     }
 
     /** A new key: the old one stops working the moment the provider forgets it. */
@@ -175,7 +178,8 @@ final class GitDeploy
             0600
         );
 
-        return $this->config($domain);
+        // Show the new secret once (config() never re-emits it).
+        return $this->config($domain) + ['webhook_secret' => $cfg['webhook_secret']];
     }
 
     /**
@@ -212,10 +216,17 @@ final class GitDeploy
             throw new BrokerException('Webhook rejected.', 2);
         }
 
+        // Fail closed: only deploy on a confirmed push to the configured branch.
+        // A payload with no determinable branch (a ping/non-push event, or a
+        // malformed ref) must NOT deploy.
         $pushed = self::branchFromPayload($body);
         $configured = (string) ($cfg['branch'] ?? 'main');
-        if ($pushed !== '' && $pushed !== $configured) {
-            return ['accepted' => false, 'domain' => $domain, 'reason' => 'branch ' . $pushed . ' != ' . $configured];
+        if ($pushed === '' || $pushed !== $configured) {
+            return [
+                'accepted' => false,
+                'domain' => $domain,
+                'reason' => 'branch ' . ($pushed !== '' ? $pushed : '(none)') . ' != ' . $configured,
+            ];
         }
 
         // Launch the deploy out of band so the webhook returns immediately; the

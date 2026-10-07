@@ -140,6 +140,24 @@ final class GitDeployTest extends TestCase
         }
     }
 
+    public function test_push_webhook_fails_closed_on_a_payload_without_a_branch(): void
+    {
+        // A signed but non-push payload (e.g. GitHub's "ping", or any body with no
+        // ref) must NOT deploy — the branch cannot be confirmed.
+        $deploy = new GitDeploy($this->cfg, $this->rt);
+        $cfg = $deploy->configure(self::DOMAIN, ['repository' => 'git@github.com:acme/shop.git', 'branch' => 'main', 'preset' => 'none']);
+        $body = '{"zen":"Keep it simple"}';
+        $sig = 'sha256='.hash_hmac('sha256', $body, (string) $cfg['webhook_secret']);
+
+        $out = $deploy->webhook((string) $cfg['webhook_token'], 'github', $sig, $body);
+
+        $this->assertFalse($out['accepted']);
+        foreach ($this->rt->execLog as $e) {
+            $this->assertFalse(($e['command'][0] ?? '') === '/usr/bin/systemd-run' && in_array('deploy.run', $e['command'], true),
+                'a payload with no branch must not launch a deploy');
+        }
+    }
+
     public function test_a_custom_command_needs_the_typed_confirm(): void
     {
         $this->expectException(BrokerException::class);
