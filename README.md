@@ -6,6 +6,16 @@ AZERIOID Stack Manager is a self-contained stack manager and web control panel f
 
 Built for VPS and bare-metal operators who want a clean bootstrap, a real UI for day-two work, and a privileged broker that keeps package installs and host changes out of the web app process.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=azerioid/azerioid-stack-manager&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=azerioid/azerioid-stack-manager&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=azerioid/azerioid-stack-manager&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=azerioid/azerioid-stack-manager&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## Screenshots
 
 Captured from a live Ubuntu 24.04 panel host (UI anonymized where needed). Reflects the post–v1.6 Virtual Hosts redesign and current Mail / runtime pages.
