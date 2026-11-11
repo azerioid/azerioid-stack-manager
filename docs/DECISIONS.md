@@ -2482,3 +2482,24 @@ subkey are each refused with no keyring or sources list left behind; on EL the r
 port has only run against the fake runtime.
 
 **Validated on the Rocky staging host (2026-11-12)** against gpg 2.3.3 and the key fetched from artifacts.elastic.co: the genuine key yields a keyring with the single pinned primary, binary and armored; a file holding the pinned key plus a freshly generated second key yields the **same** one-key keyring (the second key is dropped rather than trusted); a file with only the other key is refused and leaves no output. No repository or rpm key was installed by the test.
+## A92 — The terminal's auth subrequest is pinned to the loopback site
+
+Security audit run-2 (2026-11-11), finding AZ-15 (status: plausible — it rests on Caddy behaviour that the
+repository cannot show). Each web-terminal session gets a Caddy route that asks the panel
+(`forward_auth 127.0.0.1:<panel port>`, `uri /internal/terminal/auth/<id>`) whether the browser's session owns that
+terminal, and only then proxies to the session's ttyd socket (A70). The Adminer route does the same and adds
+`header_up Host 127.0.0.1`; the terminal route did not. Without it Caddy forwards the browser's own `Host`. The
+panel's loopback listener serves one site, `http://127.0.0.1:<port>`; on an install published on a public address
+or domain the forwarded Host is not that, so whether the subrequest reaches the panel's check or is answered by
+Caddy's handling of an unmatched Host depends on Caddy, not on anything this repository writes.
+
+Decision: do not depend on it. `TerminalManager::renderCaddyRoutes` emits `header_up Host 127.0.0.1` in the
+`forward_auth` block, exactly as `AdminerTool::writeCaddyRoutes` does, so the session check is always the one that
+answers. Tunnel-only installs were not affected (their Host is already `127.0.0.1`).
+
+Not done here: a fail-closed answer for unknown Hosts on the loopback listener (`PanelCaddy::render`,
+`deploy/lib/caddy.sh`), which would make a missing pin harmless in future routes. Worth doing separately.
+
+Test: `TerminalSessionTest::test_the_auth_subrequest_is_pinned_to_the_loopback_site`. Not validated on a host:
+after release, open a terminal on a public-mode host and confirm it still connects (the route change is
+user-facing), and that the route file carries the header.
