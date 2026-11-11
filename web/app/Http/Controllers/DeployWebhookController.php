@@ -47,6 +47,13 @@ class DeployWebhookController
         ], 30, audit: false);
 
         if (! $res->ok) {
+            // Code 1 is only reached past signature verification: the push was
+            // genuine but the deploy did not start. Say so, so the provider shows
+            // the delivery as failed instead of the push silently going nowhere.
+            if ($res->code === 1) {
+                return response('deploy could not be started', 500);
+            }
+
             // Generic — never reveal whether the token or the signature failed.
             return response('rejected', 401);
         }

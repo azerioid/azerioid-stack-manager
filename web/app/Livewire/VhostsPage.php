@@ -394,9 +394,6 @@ class VhostsPage extends Component
 
     public string $cloneDb = '';
 
-    /** The result of a finished clone (incl. one-time DB passwords), shown once. */
-    public array $cloneResult = [];
-
     public function startClone(string $domain): void
     {
         $this->error = null;
@@ -407,7 +404,6 @@ class VhostsPage extends Component
                 $this->cloningDomain = $domain;
                 $this->cloneTarget = '';
                 $this->cloneDb = '';
-                $this->cloneResult = [];
 
                 return;
             }
@@ -416,10 +412,10 @@ class VhostsPage extends Component
 
     public function cancelClone(): void
     {
-        $this->reset('cloningDomain', 'cloneTarget', 'cloneDb', 'cloneResult');
+        $this->reset('cloningDomain', 'cloneTarget', 'cloneDb');
     }
 
-    public function saveClone(BrokerClient $broker): void
+    public function saveClone(BrokerClient $broker, OperationDispatcher $operations): void
     {
         $this->error = null;
         if ($this->cloningDomain === null) {
@@ -449,19 +445,44 @@ class VhostsPage extends Component
             return;
         }
 
+        foreach ($this->vhosts as $v) {
+            if (($v['domain'] ?? '') === $target) {
+                $this->addError('cloneTarget', "A site for {$target} already exists.");
+
+                return;
+            }
+        }
+
         $stdin = [];
-        if (trim($this->cloneDb) !== '') {
-            $stdin['db'] = trim($this->cloneDb);
+        $db = trim($this->cloneDb);
+        if ($db !== '') {
+            // Checked here as well as in the broker: the clone runs queued, so a
+            // typo would otherwise only show up as a failed operation.
+            try {
+                foreach (explode(',', $db) as $pair) {
+                    [$from, $to] = array_pad(explode(':', trim($pair), 2), 2, '');
+                    Validator::dbName(trim($from));
+                    Validator::dbName(trim($to));
+                }
+            } catch (\Throwable) {
+                $this->addError('cloneDb', 'Give each database as source:target, e.g. shop:shop_staging.');
+
+                return;
+            }
+            $stdin['db'] = $db;
         }
 
-        $res = $broker->call('vhost.clone', [$this->cloningDomain, $target], $stdin, 1800);
-        if (! $res->ok) {
-            $this->addError('cloneTarget', $this->operatorMessage((string) $res->error));
-
-            return;
+        // Queued (B5): copying a site tree and dumping its databases routinely takes
+        // minutes, and a panel web request is cut off after 35–60 seconds — an inline
+        // call left a half-finished clone behind a dead request.
+        $source = $this->cloningDomain;
+        try {
+            $operations->dispatch('vhost.clone', [$source, $target], $stdin);
+            $this->flash = "Clone of {$source} to {$target} queued. Follow it on the Operations page; the new site appears here once it finishes.";
+        } catch (\Throwable $e) {
+            $this->error = $this->operatorMessage($e->getMessage());
         }
-        $this->cloneResult = is_array($res->data) ? $res->data : [];
-        $this->flash = "Cloned {$this->cloningDomain} → {$target}.";
+        $this->cancelClone();
         $this->reload($broker);
     }
 

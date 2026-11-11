@@ -241,46 +241,20 @@
 
     @if ($cloningDomain)
         <div class="panel space-y-4 p-5">
-            @if ($cloneResult === [])
-                <p class="text-sm text-zinc-400">Clone <span class="font-mono text-zinc-200">{{ $cloningDomain }}</span> to a new staging site — files are copied into a fresh isolated vhost; an Octane/PM2 runtime is replicated. Docker sites aren't cloneable.</p>
-                <label class="block text-xs uppercase tracking-wide text-zinc-500">New domain
-                    <input class="field mt-1 font-mono text-sm" wire:model="cloneTarget" placeholder="staging.example.com">
-                </label>
-                @error('cloneTarget') <p class="text-sm text-bad">{{ $message }}</p> @enderror
-                <label class="block text-xs uppercase tracking-wide text-zinc-500">Databases to clone (optional)
-                    <input class="field mt-1 font-mono text-sm" wire:model="cloneDb" placeholder="shop:shop_staging,log:log_staging">
-                    <span class="block normal-case text-xs text-zinc-500">source:target pairs, comma-separated. Each is copied into a fresh database + user; the new passwords are shown once here.</span>
-                </label>
-                <div class="flex gap-3">
-                    <button class="btn-primary" type="button" wire:click="saveClone">Clone</button>
-                    <button class="btn-ghost" type="button" wire:click="cancelClone">Cancel</button>
-                </div>
-            @else
-                <h2 class="text-sm font-medium text-good">Clone complete → <span class="font-mono">{{ $cloneResult['domain'] ?? '' }}</span></h2>
-                <p class="text-xs text-zinc-500">{{ $cloneResult['note'] ?? '' }}</p>
-                @if (!empty($cloneResult['databases']))
-                    <div class="rounded-md border border-warn/30 bg-warn/10 p-4">
-                        <p class="mb-2 text-sm text-warn">New database credentials — shown once. Update the clone's config now.</p>
-                        <table class="w-full text-left text-xs font-mono">
-                            <thead class="text-zinc-500"><tr><th class="py-1 pr-4">Database</th><th class="py-1 pr-4">User</th><th class="py-1">Password</th></tr></thead>
-                            <tbody>
-                                @foreach ($cloneResult['databases'] as $db)
-                                    <tr><td class="py-1 pr-4">{{ $db['target'] ?? '' }}</td><td class="py-1 pr-4">{{ $db['user'] ?? '' }}</td><td class="py-1">{{ $db['password'] ?? '' }}</td></tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                @endif
-                @if (!empty($cloneResult['database_errors']))
-                    @foreach ($cloneResult['database_errors'] as $err)
-                        <p class="text-sm text-bad">Database {{ $err['source'] ?? '' }} → {{ $err['target'] ?? '' }} not cloned: {{ $err['error'] ?? '' }}</p>
-                    @endforeach
-                @endif
-                @if (!empty($cloneResult['runtime_error']))
-                    <p class="text-sm text-warn">Runtime not enabled on the clone: {{ $cloneResult['runtime_error'] }}</p>
-                @endif
-                <button class="btn-primary" type="button" wire:click="cancelClone">Done</button>
-            @endif
+            <p class="text-sm text-zinc-400">Clone <span class="font-mono text-zinc-200">{{ $cloningDomain }}</span> to a new staging site — files are copied into a fresh isolated vhost; an Octane/PM2 runtime is replicated. Docker sites aren't cloneable. The clone runs in the background; follow it on the Operations page.</p>
+            <label class="block text-xs uppercase tracking-wide text-zinc-500">New domain
+                <input class="field mt-1 font-mono text-sm" wire:model="cloneTarget" placeholder="staging.example.com">
+            </label>
+            @error('cloneTarget') <p class="text-sm text-bad">{{ $message }}</p> @enderror
+            <label class="block text-xs uppercase tracking-wide text-zinc-500">Databases to clone (optional)
+                <input class="field mt-1 font-mono text-sm" wire:model="cloneDb" placeholder="shop:shop_staging,log:log_staging">
+                <span class="block normal-case text-xs text-zinc-500">source:target pairs, comma-separated. Each is copied into a fresh database with its own user, named after the target. When the clone finishes, set that user's password under Databases → Reset password and put it in the clone's config.</span>
+            </label>
+            @error('cloneDb') <p class="text-sm text-bad">{{ $message }}</p> @enderror
+            <div class="flex gap-3">
+                <button class="btn-primary" type="button" wire:click="saveClone">Clone</button>
+                <button class="btn-ghost" type="button" wire:click="cancelClone">Cancel</button>
+            </div>
         </div>
     @endif
 

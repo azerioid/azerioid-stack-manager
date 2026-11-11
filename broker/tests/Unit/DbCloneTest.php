@@ -59,21 +59,13 @@ final class DbCloneTest extends TestCase
     {
         [$kernel, $rt] = $this->mariadbKernel();
         $restoreCnf = null;
-        $rt->execFn = function (array $cmd, ?string $stdin) use ($rt, &$restoreCnf): ?ExecResult {
-            if (($cmd[0] ?? '') === '/usr/bin/mysqldump') {
-                // A view carrying the SOURCE user's DEFINER, as mysqldump emits.
-                return new ExecResult($cmd, 0,
-                    "-- SQL dump\nCREATE TABLE t (id int);\n"
-                    . "/*!50013 DEFINER=`shop`@`localhost` SQL SECURITY DEFINER */\n"
-                    . "/*!50001 VIEW `v` AS SELECT 1 */;\n",
-                    '');
-            }
-            if (($cmd[0] ?? '') === '/usr/bin/mysql') {
+        $pipeline = null;
+        $rt->execFn = function (array $cmd) use ($rt, &$restoreCnf, &$pipeline): ?ExecResult {
+            if (($cmd[0] ?? '') === '/bin/bash') {
+                $pipeline = (string) $cmd[2];
                 // Capture the credentials file content while it still exists.
-                foreach ($cmd as $arg) {
-                    if (str_starts_with($arg, '--defaults-extra-file=')) {
-                        $restoreCnf = $rt->files[substr($arg, 22)] ?? null;
-                    }
+                if (preg_match("/--defaults-extra-file=([^' ]*mysql-clone-[^' ]*)/", $pipeline, $m) === 1) {
+                    $restoreCnf = $rt->files[$m[1]] ?? null;
                 }
 
                 return new ExecResult($cmd, 0, '', '');
@@ -89,20 +81,36 @@ final class DbCloneTest extends TestCase
         $this->assertSame('shopstg', $data['user'] ?? null);
         $this->assertSame(48, strlen((string) ($data['password'] ?? '')));
 
-        $dumped = false;
-        $restoreStdin = null;
-        foreach ($rt->execLog as $e) {
-            $dumped = $dumped || ($e['command'][0] ?? '') === '/usr/bin/mysqldump';
-            if (($e['command'][0] ?? '') === '/usr/bin/mysql') {
-                $restoreStdin = (string) $e['stdin'];
-            }
-        }
-        $this->assertTrue($dumped, 'clone must dump the source');
-        $this->assertNotNull($restoreStdin, 'clone must load the target');
-        // The DEFINER must be rebound to the clone's own user, not the source's,
-        // so a SQL SECURITY DEFINER object cannot reach back into the source DB.
-        $this->assertStringContainsString('DEFINER=`shopstg`@`localhost`', $restoreStdin);
-        $this->assertStringNotContainsString('DEFINER=`shop`@`localhost`', $restoreStdin);
+        // One streamed pipeline — dump | DEFINER rewrite | load — so the dump is never
+        // buffered in the broker; pipefail makes a failed dump fail the clone.
+        $this->assertNotNull($pipeline, 'clone must stream the dump into the target');
+        $this->assertStringStartsWith('set -o pipefail; ', $pipeline);
+        $stages = explode(' | ', substr($pipeline, strlen('set -o pipefail; ')));
+        $this->assertCount(3, $stages);
+        $this->assertStringContainsString('/usr/bin/mysqldump', $stages[0]);
+        $this->assertStringContainsString("'shop'", $stages[0]);
+        $this->assertStringContainsString('/usr/bin/mysql', $stages[2]);
+        $this->assertStringContainsString("'shopstg'", $stages[2]);
+
+        // Run the rewrite stage for real on a view carrying the SOURCE user's DEFINER,
+        // as mysqldump emits it. The DEFINER must be rebound to the clone's own user,
+        // not the source's, so a SQL SECURITY DEFINER object cannot reach back into
+        // the source DB.
+        $dump = "CREATE TABLE t (id int);\n"
+            . "/*!50013 DEFINER=`shop`@`localhost` SQL SECURITY DEFINER */\n"
+            . "/*!50003 CREATE DEFINER=`we``ird`@`%` PROCEDURE `p`() SELECT `t`.`id` FROM `t` */;\n"
+            . "INSERT INTO `notes` VALUES (1,'how to: DEFINER=`root`@`localhost`');\n";
+        $proc = proc_open(['/bin/sh', '-c', $stages[1]], [['pipe', 'r'], ['pipe', 'w']], $pipes);
+        fwrite($pipes[0], $dump);
+        fclose($pipes[0]);
+        $rewritten = (string) stream_get_contents($pipes[1]);
+        $this->assertSame(0, proc_close($proc));
+        $this->assertSame(2, substr_count($rewritten, 'DEFINER=`shopstg`@`localhost`'));
+        $this->assertStringNotContainsString('`shop`@', $rewritten);
+        $this->assertStringNotContainsString('ird`@`%`', $rewritten);
+        $this->assertStringContainsString('PROCEDURE `p`() SELECT `t`.`id` FROM `t`', $rewritten);
+        // Row data that merely looks like a clause is copied untouched.
+        $this->assertStringContainsString("(1,'how to: DEFINER=`root`@`localhost`')", $rewritten);
         // The load must run as the clone's own unprivileged user, never root, so
         // crafted dump content can only reach the clone database.
         $this->assertNotNull($restoreCnf, 'the restore must use a credentials file');
@@ -140,10 +148,7 @@ final class DbCloneTest extends TestCase
     {
         [$kernel, $rt] = $this->mariadbKernel();
         $rt->execFn = function (array $cmd): ?ExecResult {
-            if (($cmd[0] ?? '') === '/usr/bin/mysqldump') {
-                return new ExecResult($cmd, 0, "-- SQL dump\n", '');
-            }
-            if (($cmd[0] ?? '') === '/usr/bin/mysql') {
+            if (($cmd[0] ?? '') === '/bin/bash') {
                 return new ExecResult($cmd, 1, '', 'restore blew up');
             }
 

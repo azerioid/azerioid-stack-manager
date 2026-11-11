@@ -65,6 +65,9 @@ class OperationDispatcher
         // A deploy fetches, checks out and runs composer/npm (A53).
         'deploy.run' => ['deploy', 'vhost', ['domain']],
         'deploy.rollback' => ['deploy.rollback', 'vhost', ['domain']],
+        // Copies a whole site tree and dumps/loads its databases (A79). Subject is
+        // the source, so a deploy of the source cannot run under the copy.
+        'vhost.clone' => ['vhost.clone', 'vhost', []],
         // Restore verification restores a whole dump into a scratch database.
         'backup.verify' => ['backup.verify', 'database', ['name']],
     ];

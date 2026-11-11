@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Operation;
 use App\Models\User;
 use App\Services\Broker\FakeBroker;
 use App\Services\TotpService;
@@ -11,14 +12,14 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * A79 web UI: "Clone to…" on the vhost page clones a site (and optionally its DBs)
- * and shows the new one-time database credentials once.
+ * A79 web UI: "Clone to…" on the vhost page queues a clone of a site (and
+ * optionally its DBs) as an operation — it is far too slow for a web request.
  */
 final class VhostCloneUxTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_clone_action_creates_the_site_and_shows_db_credentials_once(): void
+    public function test_clone_action_queues_an_operation_that_creates_the_site(): void
     {
         $this->actingAs($this->admin());
         $this->app->make(FakeBroker::class);
@@ -29,9 +30,32 @@ final class VhostCloneUxTest extends TestCase
             ->set('cloneTarget', 'staging.example.com')
             ->set('cloneDb', 'projob:projob_staging')
             ->call('saveClone')
-            ->assertSet('cloneResult.domain', 'staging.example.com')
-            // The cloned DB and its one-time password are surfaced in the result.
-            ->assertSeeHtml('projob_staging');
+            ->assertHasNoErrors()
+            ->assertSet('cloningDomain', null)
+            ->assertSee('queued')
+            // The queue is synchronous in tests: the clone has already run.
+            ->assertSee('staging.example.com');
+
+        $op = Operation::query()->where('broker_action', 'vhost.clone')->sole();
+        $this->assertSame(['shop.example.com', 'staging.example.com'], $op->args);
+        $this->assertSame(Operation::STATUS_COMPLETED, $op->status);
+        // The record names the cloned database but never carries its password.
+        $this->assertStringContainsString('projob_staging', (string) $op->log);
+        $this->assertStringNotContainsString('password', strtolower((string) $op->log));
+    }
+
+    public function test_clone_rejects_a_malformed_database_pair_before_queueing(): void
+    {
+        $this->actingAs($this->admin());
+        $this->app->make(FakeBroker::class);
+
+        Livewire::test(\App\Livewire\VhostsPage::class)
+            ->call('startClone', 'shop.example.com')
+            ->set('cloneTarget', 'staging.example.com')
+            ->set('cloneDb', 'projob')
+            ->call('saveClone')
+            ->assertHasErrors('cloneDb');
+        $this->assertSame(0, Operation::query()->count());
     }
 
     public function test_clone_rejects_a_bad_target_domain(): void
@@ -43,8 +67,8 @@ final class VhostCloneUxTest extends TestCase
             ->call('startClone', 'shop.example.com')
             ->set('cloneTarget', 'not a domain')
             ->call('saveClone')
-            ->assertHasErrors('cloneTarget')
-            ->assertSet('cloneResult', []);
+            ->assertHasErrors('cloneTarget');
+        $this->assertSame(0, Operation::query()->count());
     }
 
     public function test_clone_refuses_an_unknown_or_client_forged_source(): void
@@ -57,8 +81,8 @@ final class VhostCloneUxTest extends TestCase
             ->set('cloningDomain', 'not-a-real-vhost.example.com')
             ->set('cloneTarget', 'staging.example.com')
             ->call('saveClone')
-            ->assertSet('cloneResult', [])
             ->assertSet('cloningDomain', null);
+        $this->assertSame(0, Operation::query()->count());
     }
 
     private function admin(): User

@@ -2356,3 +2356,81 @@ Second live run on the Rocky host: `docker run --cpus` exits so fast that `super
 fail-safe above was skipped and the site stayed down. `applyLimits` now treats a throwing restart exactly like a
 port that never opens: record `docker_limits_unenforced`, rewrite the command without the caps, restart. Regression
 test: `DockerWorkloadTest::test_a80_a_cap_that_fails_the_restart_falls_back_to_running_uncapped`.
+
+## A85 — Review of the post-audit feature line (A78–A84)
+
+A code review of everything written after the last full audit (`v2.8.33..v2.14.5`) found ten defects. None came
+from host validation — they are from reading the code — and each fix carries a regression test. The two that
+change stored behaviour (clone UI, DB clone transport) are marked.
+
+**Clone (A79)**
+
+- **`.env` hardening was undone, and the symlink sweep missed the app tree.** `VhostClone` ran
+  `VhostUser::ensure` (whose A72 pass forces `.env` to 0600 and removes site-escaping symlinks) and *then*
+  handed the whole copied tree over with `applyOwnership`, which stamps every file 0660 — group-readable, and the
+  web server is in every site group. With a docroot that is the site top, the clone's `.env` (the source's
+  production secrets) was readable over HTTP. The sweep itself had run while everything above the docroot was
+  still root-owned, so it could not remove an escaping symlink there. `hardenContent` now runs again after the
+  handover (skipped, as in `ensure`, for a not-yet-migrated identity).
+- **Execute bits were stripped.** The same 0660 stamp broke `vendor/bin`, `node_modules/.bin` targets, `artisan`
+  and scripts above the docroot. `applyOwnership` takes a `keepExec` flag (`u=rwX,g=rwX,o=`); only the clone
+  handover uses it. The docroot itself still gets 0660 from `ensure`, exactly as on the source.
+- **A failed copy left a routed, half-provisioned vhost and refused the retry.** rsync exit 24 (source files
+  vanished — routine on a live site) is now success; any other failure rolls back through `VhostDel` (pool,
+  identity, routing) plus removal of the copy. The existing fail-closed handover path uses the same rollback.
+- **The seeded welcome page stayed in the clone** whenever the source had no file of that name. It is removed
+  before the copy (`$dstTop` is verified not to exist beforehand, so anything in the docroot is that seed).
+- **npm-mode PM2 sources were not enabled on the clone** ("Entry file not found: npmstart"): `Pm2Manager::enable`
+  now treats the npm marker as auto-detect, like every other caller since the A80 inc2 erratum. The clone also
+  carries the source's Node major, since `node_modules` was built against it.
+- **Database pairs are validated before anything is provisioned** — a malformed `--db` used to surface after
+  the whole site had been copied.
+- **Clone UI is queued (behaviour change).** "Clone to…" called a 1800 s broker action inside a web request that
+  Caddy cuts at 35 s and php-fpm at 60 s. It is now an `OperationDispatcher` action (subject: the source site,
+  so a deploy of the source cannot run under the copy) and reports on the Operations page from the action's
+  `detail` lines. Consequence: the one-time database passwords can no longer be shown — the operations table is
+  stored and readable for 180 days and must not hold them. The operator sets the clone user's password with
+  Databases → Reset password. The CLI is unchanged and still prints them.
+- **DB clone streams (behaviour change).** `DbClone` buffered the whole dump in PHP (several times the
+  database's size) and a memory-limit fatal bypassed the rollback. Dump and load are now one shell pipeline
+  under `pipefail`; the MariaDB DEFINER rewrite is the same expression as a `sed -E` stage under `LC_ALL=C`, and
+  the load still runs as the clone's own user, so the A79-inc2 composed defence is unchanged. The rewrite now
+  skips `INSERT INTO` lines: mysqldump never puts a DEFINER clause there, and rewriting row data silently
+  altered any stored text that merely looked like one (found by a checksum mismatch in the validation below).
+- **PostgreSQL driver reuses one connection** (found during the same validation, older than A79).
+  `PostgreSQLDriver::pdo()` opened a new connection per statement, so the `SET password_encryption =
+  'scram-sha-256'` that `add()`/`resetPassword()` issue never reached the following `CREATE/ALTER ROLE`. On a
+  server whose default is still md5 the role got an md5 hash that the panel's scram `pg_hba` line rejects.
+  Panel-provisioned hosts were masked by the provisioner's `ALTER SYSTEM`.
+
+**Validated on the Rocky 9.8 staging host** (PHP 8.4, `memory_limit` 128M; PostgreSQL 13 and a throwaway MariaDB
+10.5, both since removed), running the branch's broker from a temp directory against real databases:
+
+| Case | Result |
+|---|---|
+| PostgreSQL clone (table, index, sequence, view, SECURITY DEFINER function) | data and objects identical; owner is the clone role, not a superuser; clone user logs in with the returned password (SCRAM) |
+| PostgreSQL load fails (event trigger the clone owner may not create) | exit 1, target database and role removed, no pgpass left |
+| PostgreSQL 393 MB database, **v2.14.5 broker** | `Allowed memory size … exhausted`; target database, role **and the admin pgpass file** left behind |
+| PostgreSQL 393 MB database, branch broker | cloned in 50 s, 3,000,000 rows |
+| MariaDB clone (view, procedure, trigger, binary and quote-heavy rows) | `CHECKSUM TABLE` identical; all three DEFINERs rebound to the clone user; clone user denied on the source database |
+| MariaDB load fails (view reaching into another database) | exit 1, target database and user removed, no credentials file left |
+| MariaDB 353 MB database, branch broker | cloned in 66 s, checksums identical |
+
+Not validated on a host: the file-clone changes, the queued clone UI, the webhook's two-unit launch and the 2FA
+limit — those rest on the unit and feature tests.
+
+**2FA (A83)** — the challenge step had no attempt limit; A83's note that it shared the password step's lockout
+was wrong. Whoever held the password could guess TOTP codes without bound. `verifyChallengeCode` now rate-limits
+per **account** (5 wrong codes per 15 minutes; not per session or IP, which the attacker controls, and not
+cleared by a new password step), writes the fail2ban line, and refuses even a correct code while throttled.
+Accepted cost: someone who knows the password can lock the owner's second factor out for 15 minutes.
+
+**Push-to-deploy (A78)** — a push that arrived while that site's deploy unit was running was answered `202
+queued` and never deployed: `systemd-run` refuses a duplicate unit name and the result was ignored. There are now
+two unit names serialised by `flock` on `<deploy dir>/deploy.lock`; a push that finds the first taken starts the
+second, which waits and then fetches. If both exist one is still waiting and covers the push. If nothing starts
+and nothing is running the broker fails with code 1 and the route answers 500, so the provider shows a failed
+delivery. Ceiling: a deploy started from the panel does not take this lock.
+
+**Limits (A80)** — `vhost.limits.set` accepted an alias domain, stored the values under the alias and applied
+them to nothing. The alias is resolved to the site's primary domain first.

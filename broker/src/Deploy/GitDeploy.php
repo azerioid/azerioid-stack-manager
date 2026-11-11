@@ -231,13 +231,31 @@ final class GitDeploy
 
         // Launch the deploy out of band so the webhook returns immediately; the
         // deploy itself runs as the site identity inside GitDeploy::deploy.
-        $this->runtime->exec([
-            '/usr/bin/systemd-run', '--quiet', '--collect',
-            '--unit=azerioid-deploy-' . substr(hash('sha256', $domain), 0, 16),
-            rtrim($this->config->panelRoot, '/') . '/broker', 'deploy.run', $domain,
-        ], null, 30);
-
-        return ['accepted' => true, 'domain' => $domain];
+        //
+        // A deploy for this site may already be running, and systemd refuses a second
+        // unit of the same name — the push would be answered "queued" and never
+        // deployed. So there are two unit names, serialised by a lock: a push that
+        // finds the first taken starts the second, which waits for the lock and then
+        // fetches. If both are taken, one of them is still waiting and has not
+        // fetched yet, so it will pick this push up: nothing more to start.
+        $unit = 'azerioid-deploy-' . substr(hash('sha256', $domain), 0, 16);
+        foreach ([$unit, $unit . '-next'] as $name) {
+            $started = $this->runtime->exec([
+                '/usr/bin/systemd-run', '--quiet', '--collect', '--unit=' . $name,
+                '/usr/bin/flock', $this->dir($domain) . '/deploy.lock',
+                rtrim($this->config->panelRoot, '/') . '/broker', 'deploy.run', $domain,
+            ], null, 30);
+            if ($started->ok()) {
+                return ['accepted' => true, 'domain' => $domain];
+            }
+        }
+        // Neither started. That is fine only if it is because both exist.
+        foreach ([$unit, $unit . '-next'] as $name) {
+            if ($this->runtime->exec(['/usr/bin/systemctl', 'is-active', '--quiet', $name . '.service'], null, 10)->ok()) {
+                return ['accepted' => true, 'domain' => $domain];
+            }
+        }
+        throw new BrokerException('The deploy could not be started: ' . trim($started->stderr), 1);
     }
 
     private static function verifySignature(string $provider, string $secret, string $signature, string $body): bool

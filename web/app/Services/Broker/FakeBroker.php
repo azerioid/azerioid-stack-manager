@@ -2506,6 +2506,10 @@ final class FakeBroker
             'files_copied' => true,
             'databases' => $cloned,
             'database_errors' => $dbErrors,
+            'detail' => array_merge(
+                ["Copied /data/www/{$src} to /data/www/{$dst}."],
+                array_map(static fn (array $db): string => "Database {$db['source']} cloned to {$db['target']} (user {$db['user']}).", $cloned),
+            ),
             'note' => $cloned === [] && $dbErrors === []
                 ? 'Databases and Octane/PM2/Docker runtimes are not cloned yet.'
                 : 'Update the clone\'s config with the new database name, user and password. Octane/PM2/Docker runtimes are not cloned yet.',
