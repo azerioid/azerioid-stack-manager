@@ -2476,6 +2476,25 @@ Alpine evaluate attribute expressions), so it remains no second line of defence 
 Tests: `VhostFilesChmodSearchTest::test_a_search_hit_name_is_encoded_for_javascript_not_only_for_html` and
 `::test_no_view_puts_a_blade_echo_inside_a_quoted_javascript_string`.
 
+## A89 — Dependency floors for advisories that are reachable here
+
+Security audit run-2 (2026-11-11), finding AZ-08. `composer audit` listed 13 advisories against `web/composer.lock`.
+Twelve are not reachable in this application (features it does not use, or dev-only packages). One is:
+CVE-2026-108082 in `symfony/http-foundation` 8.1.6 — `HeaderUtils::split()` backtracks on a `Cache-Control` request
+header, and Laravel parses that header while building the request, before the panel's middleware (IP allowlist,
+throttling, authentication) runs. On a publicly bound panel any client can spend panel CPU with it.
+
+Decision: update `symfony/http-foundation` (now 8.1.11), and record the floor in a test
+(`DependencyFloorTest`) so a later lock-file change cannot bring the affected release back unnoticed. The test is
+a list: add a row when another advisory turns out to be reachable. The remaining advisories are left for a
+routine dependency refresh rather than folded into a security fix.
+
+Hosts pick the new version up through the normal release path (`PanelUpdater` runs `composer install` from the
+lock file).
+
+Not done here: a `composer audit` step in CI. It would fail today on the unreachable advisories; it belongs with
+the dependency refresh.
+
 ## A91 — A pinned repository key is rebuilt from the pin, in the broker as in the installer
 
 Security audit run-2 (2026-11-11), finding AZ-04. `ComponentRepoInstaller::installElasticRepo` (A54) downloaded
