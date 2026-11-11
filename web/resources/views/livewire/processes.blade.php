@@ -110,12 +110,12 @@
                             </td>
                             <td class="px-4 py-3 font-mono text-xs text-zinc-400 max-w-xs truncate" title="{{ $program['command'] ?? '' }}">{{ $program['command'] ?? '' }}</td>
                             <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
-                                <button type="button" class="text-xs text-accent" wire:click="askControl('start', '{{ $program['name'] }}')">Start</button>
-                                <button type="button" class="text-xs text-zinc-400" wire:click="askControl('stop', '{{ $program['name'] }}')">Stop</button>
-                                <button type="button" class="text-xs text-zinc-400" wire:click="askControl('restart', '{{ $program['name'] }}')">Restart</button>
-                                <button type="button" class="text-xs text-zinc-400" wire:click="startEdit('{{ $program['name'] }}')">Edit</button>
-                                <button type="button" class="text-xs text-zinc-400" wire:click="showLogs('{{ $program['name'] }}')">Logs</button>
-                                <button type="button" class="text-xs text-bad" wire:click="askControl('delete', '{{ $program['name'] }}')">Delete</button>
+                                <button type="button" class="text-xs text-accent" wire:click="askControl('start', @js($program['name']))">Start</button>
+                                <button type="button" class="text-xs text-zinc-400" wire:click="askControl('stop', @js($program['name']))">Stop</button>
+                                <button type="button" class="text-xs text-zinc-400" wire:click="askControl('restart', @js($program['name']))">Restart</button>
+                                <button type="button" class="text-xs text-zinc-400" wire:click="startEdit(@js($program['name']))">Edit</button>
+                                <button type="button" class="text-xs text-zinc-400" wire:click="showLogs(@js($program['name']))">Logs</button>
+                                <button type="button" class="text-xs text-bad" wire:click="askControl('delete', @js($program['name']))">Delete</button>
                             </td>
                         </tr>
                     @empty

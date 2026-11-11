@@ -93,7 +93,7 @@
                                 @foreach ($dockerImageSuggestions as $sug)
                                     <li>
                                         <button type="button" class="block w-full px-2 py-1 text-left font-mono hover:bg-white/5"
-                                            wire:click="pickDockerImage('{{ $sug['repo_name'] }}')">{{ $sug['repo_name'] }}</button>
+                                            wire:click="pickDockerImage(@js($sug['repo_name']))">{{ $sug['repo_name'] }}</button>
                                     </li>
                                 @endforeach
                             </ul>
@@ -355,7 +355,7 @@
                             @foreach ($dockerImageSuggestions as $sug)
                                 <li>
                                     <button type="button" class="block w-full px-2 py-1 text-left font-mono hover:bg-white/5"
-                                        wire:click="pickDockerImage('{{ $sug['repo_name'] }}')">{{ $sug['repo_name'] }}</button>
+                                        wire:click="pickDockerImage(@js($sug['repo_name']))">{{ $sug['repo_name'] }}</button>
                                 </li>
                             @endforeach
                         </ul>

@@ -78,7 +78,7 @@
                             <button
                                 type="button"
                                 class="btn-primary text-xs"
-                                wire:click="adopt('{{ $id }}')"
+                                wire:click="adopt(@js($id))"
                                 wire:confirm="Bring this existing installation under panel management?"
                                 @disabled($operationBusy)
                             >Adopt</button>
@@ -87,7 +87,7 @@
                             <button
                                 type="button"
                                 class="btn-primary text-xs"
-                                wire:click="askInstall('{{ $id }}')"
+                                wire:click="askInstall(@js($id))"
                                 @disabled($operationBusy)
                             >Install</button>
                         @endif
@@ -95,7 +95,7 @@
                             <button
                                 type="button"
                                 class="btn-ghost text-xs text-bad"
-                                wire:click="askUninstall('{{ $id }}')"
+                                wire:click="askUninstall(@js($id))"
                                 @disabled($operationBusy)
                             >Uninstall</button>
                         @endif

@@ -42,7 +42,7 @@
                 <span>{{ $b['domain'] }} · {{ $b['created_at'] ?? $b['bundle'] }} · {{ $b['destination'] }}</span>
                 <span class="text-zinc-500">{{ implode(', ', array_diff($b['parts'], ['manifest'])) }} · {{ number_format(($b['size'] ?? 0) / 1048576, 1) }} MB</span>
                 @if ($b['complete'])
-                    <button type="button" class="btn-ghost" wire:click="previewRestore('{{ $b['domain'] }}', '{{ $b['bundle'] }}', '{{ $b['destination'] }}')">Restore…</button>
+                    <button type="button" class="btn-ghost" wire:click="previewRestore(@js($b['domain']), @js($b['bundle']), @js($b['destination']))">Restore…</button>
                 @else
                     <span class="text-bad">incomplete</span>
                 @endif

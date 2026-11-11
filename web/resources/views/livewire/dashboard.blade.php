@@ -28,7 +28,7 @@
                 <div class="mt-2 text-xs uppercase tracking-wide text-zinc-500">{{ $svc['description'] ?? $svc['sub_state'] ?? '' }}</div>
                 <div class="mt-1 font-mono text-xs text-zinc-400">{{ $svc['active_state'] ?? '' }} · {{ $svc['sub_state'] ?? '' }}</div>
                 @if (!empty($svc['controllable']))
-                    <button type="button" class="btn-ghost mt-3 text-xs" wire:click="restartService('{{ $svc['unit'] }}')" wire:confirm="Restart {{ $svc['unit'] }}?">Restart</button>
+                    <button type="button" class="btn-ghost mt-3 text-xs" wire:click="restartService(@js($svc['unit']))" wire:confirm="Restart {{ $svc['unit'] }}?">Restart</button>
                 @else
                     <div class="mt-3 font-mono text-[10px] uppercase tracking-wide text-zinc-600">observed · no control</div>
                 @endif

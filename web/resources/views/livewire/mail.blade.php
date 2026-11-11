@@ -184,10 +184,10 @@
                             <td class="text-zinc-400">{{ $domain['alias_count'] }}</td>
                             <td class="font-mono text-xs text-zinc-500">{{ $domain['dkim_selector'] }}</td>
                             <td class="text-right">
-                                <button type="button" class="btn-ghost text-xs" wire:click="selectDnsDomain('{{ $domain['domain'] }}')">DNS</button>
-                                <button type="button" class="btn-ghost text-xs" wire:click="rotateDkim('{{ $domain['domain'] }}')">Rotate DKIM</button>
+                                <button type="button" class="btn-ghost text-xs" wire:click="selectDnsDomain(@js($domain['domain']))">DNS</button>
+                                <button type="button" class="btn-ghost text-xs" wire:click="rotateDkim(@js($domain['domain']))">Rotate DKIM</button>
                                 @if ($domain['enabled'])
-                                    <button type="button" class="btn-ghost text-xs text-bad" wire:click="askDisableDomain('{{ $domain['domain'] }}')">Disable</button>
+                                    <button type="button" class="btn-ghost text-xs text-bad" wire:click="askDisableDomain(@js($domain['domain']))">Disable</button>
                                 @endif
                             </td>
                         </tr>
@@ -288,12 +288,12 @@
                             <td class="{{ $mailbox['disabled'] ? 'text-warn' : 'text-good' }}">{{ $mailbox['disabled'] ? 'disabled' : 'active' }}</td>
                             <td class="font-mono text-xs text-zinc-500">{{ $mailbox['created_at'] }}</td>
                             <td class="text-right">
-                                <button type="button" class="btn-ghost text-xs" wire:click="resetMailboxPassword('{{ $mailbox['address'] }}')">Reset password</button>
+                                <button type="button" class="btn-ghost text-xs" wire:click="resetMailboxPassword(@js($mailbox['address']))">Reset password</button>
                                 <button type="button" class="btn-ghost text-xs"
-                                        wire:click="toggleMailbox('{{ $mailbox['address'] }}', {{ $mailbox['disabled'] ? 'false' : 'true' }})">
+                                        wire:click="toggleMailbox(@js($mailbox['address']), {{ $mailbox['disabled'] ? 'false' : 'true' }})">
                                     {{ $mailbox['disabled'] ? 'Enable' : 'Disable' }}
                                 </button>
-                                <button type="button" class="btn-ghost text-xs text-bad" wire:click="askDeleteMailbox('{{ $mailbox['address'] }}')">Delete</button>
+                                <button type="button" class="btn-ghost text-xs text-bad" wire:click="askDeleteMailbox(@js($mailbox['address']))">Delete</button>
                             </td>
                         </tr>
                     @endforeach
@@ -354,7 +354,7 @@
                             <td class="font-mono text-zinc-300">{{ $alias['destination'] }}</td>
                             <td class="{{ $alias['external'] ? 'text-warn' : 'text-zinc-400' }}">{{ $alias['external'] ? 'external' : 'local' }}</td>
                             <td class="text-right">
-                                <button type="button" class="btn-ghost text-xs text-bad" wire:click="deleteAlias('{{ $alias['address'] }}')">Delete</button>
+                                <button type="button" class="btn-ghost text-xs text-bad" wire:click="deleteAlias(@js($alias['address']))">Delete</button>
                             </td>
                         </tr>
                     @endforeach
