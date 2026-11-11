@@ -134,12 +134,50 @@ YAML;
             ->install('elasticsearch', 'op-1', ['low_memory' => true, 'confirm' => 'yes']);
     }
 
-    public function test_a_signing_key_without_the_pinned_fingerprint_is_refused(): void
+    /** A fake host where gpg lists $showKeys for the rebuilt keyring. */
+    private function hostListing(string $showKeys): FakeRuntime
     {
         $rt = new FakeRuntime();
-        $rt->execFn = static fn (array $c, ?string $s): ?ExecResult => ($c[0] ?? '') === '/usr/bin/gpg' && in_array('--show-keys', $c, true)
-            ? new ExecResult($c, 0, "pub:-:2048:1:D27D666CD88E42B4:1379356800:::-:\nfpr:::::::::0000000000000000000000000000000000000000:\n", '')
-            : null;
+        $rt->execFn = static function (array $c, ?string $s) use ($rt, $showKeys): ?ExecResult {
+            if (($c[0] ?? '') === '/usr/bin/mktemp') {
+                return new ExecResult($c, 0, "/tmp/azerioid-elastic.TESTTEST\n", '');
+            }
+            if (($c[0] ?? '') === '/usr/bin/gpg' && in_array('--export', $c, true)) {
+                $rt->files[$c[array_search('--output', $c, true) + 1]] = 'exported-key';
+
+                return new ExecResult($c, 0, '', '');
+            }
+            if (($c[0] ?? '') === '/usr/bin/gpg' && in_array('--show-keys', $c, true)) {
+                return new ExecResult($c, 0, $showKeys, '');
+            }
+
+            return null;
+        };
+
+        return $rt;
+    }
+
+    private const OTHER_KEY = '0000000000000000000000000000000000000000';
+
+    /** @return array<string, array{0:string}> */
+    public static function untrustworthyKeyListings(): array
+    {
+        $pin = ComponentRepoInstaller::ELASTIC_KEY_FINGERPRINT;
+
+        return [
+            'a different key' => ["pub:-:2048:1:X:1::::::\nfpr:::::::::" . self::OTHER_KEY . ":\n"],
+            // A91: the pinned key is there, and so is a second primary key.
+            'the pinned key plus another primary' => ["pub:-:2048:1:X:1::::::\nfpr:::::::::{$pin}:\npub:-:2048:1:Y:1::::::\nfpr:::::::::" . self::OTHER_KEY . ":\n"],
+            // A key selector also matches a subkey: the pin as a SUBKEY of someone else's key.
+            'the pin only as a subkey' => ["pub:-:2048:1:X:1::::::\nfpr:::::::::" . self::OTHER_KEY . ":\nsub:-:2048:1:Z:1::::::\nfpr:::::::::{$pin}:\n"],
+            'nothing exported' => [''],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('untrustworthyKeyListings')]
+    public function test_a_keyring_that_is_not_exactly_the_pinned_key_is_refused(string $showKeys): void
+    {
+        $rt = $this->hostListing($showKeys);
 
         try {
             (new ComponentRepoInstaller($rt))->ensureForInstall(new OsRelease('ubuntu', '24.04', 'noble', 'ubuntu', 'apt'), 'elasticsearch', [], new OperationLogger($rt, '/tmp/es.log'));
@@ -148,14 +186,12 @@ YAML;
             $this->assertStringContainsString('pinned fingerprint', $e->getMessage());
         }
         $this->assertArrayNotHasKey('/etc/apt/sources.list.d/elastic-9.x.list', $rt->files);
+        $this->assertArrayNotHasKey('/usr/share/keyrings/elasticsearch-keyring.gpg', $rt->files, 'a refused keyring must not be left installed');
     }
 
     public function test_the_pinned_key_adds_the_repository(): void
     {
-        $rt = new FakeRuntime();
-        $rt->execFn = static fn (array $c, ?string $s): ?ExecResult => ($c[0] ?? '') === '/usr/bin/gpg' && in_array('--show-keys', $c, true)
-            ? new ExecResult($c, 0, 'fpr:::::::::' . ComponentRepoInstaller::ELASTIC_KEY_FINGERPRINT . ":\n", '')
-            : null;
+        $rt = $this->hostListing("pub:-:2048:1:X:1::::::\nfpr:::::::::" . ComponentRepoInstaller::ELASTIC_KEY_FINGERPRINT . ":\nsub:-:2048:1:Z:1::::::\nfpr:::::::::" . self::OTHER_KEY . ":\n");
 
         (new ComponentRepoInstaller($rt))->ensureForInstall(new OsRelease('ubuntu', '24.04', 'noble', 'ubuntu', 'apt'), 'elasticsearch', [], new OperationLogger($rt, '/tmp/es.log'));
 
@@ -163,6 +199,22 @@ YAML;
             "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/9.x/apt stable main\n",
             $rt->files['/etc/apt/sources.list.d/elastic-9.x.list']
         );
+        // The keyring is the re-exported pinned key, never the downloaded file.
+        $commands = array_column($rt->execLog, 'command');
+        $this->assertSame([], array_filter($commands, static fn (array $c): bool => in_array('--dearmor', $c, true)));
+        $this->assertContains(['/bin/rm', '-rf', '--one-file-system', '/tmp/azerioid-elastic.TESTTEST'], $commands);
+    }
+
+    public function test_on_el_the_repo_trusts_the_pinned_local_key_not_a_url(): void
+    {
+        $rt = $this->hostListing("pub:-:2048:1:X:1::::::\nfpr:::::::::" . ComponentRepoInstaller::ELASTIC_KEY_FINGERPRINT . ":\n");
+
+        (new ComponentRepoInstaller($rt))->ensureForInstall(new OsRelease('rocky', '9.8', '', 'el', 'dnf'), 'elasticsearch', [], new OperationLogger($rt, '/tmp/es.log'));
+
+        $repo = $rt->files['/etc/yum.repos.d/elasticsearch.repo'];
+        $this->assertStringContainsString('gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-elasticsearch', $repo);
+        $this->assertStringNotContainsString('gpgkey=https://', $repo);
+        $this->assertContains(['/usr/bin/rpm', '--import', '/etc/pki/rpm-gpg/RPM-GPG-KEY-elasticsearch'], array_column($rt->execLog, 'command'));
     }
 
     public function test_the_password_is_stored_root_only_and_reaches_curl_on_stdin(): void

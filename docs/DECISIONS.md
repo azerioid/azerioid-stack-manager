@@ -2456,3 +2456,27 @@ it is changed in Settings. Operators of such hosts must change it.
 Test: `AuthTest::test_cli_admin_creation_refuses_a_password_below_the_setup_policy`.
 
 **Validated on the Rocky staging host (2026-11-12)**, with this command run from a throwaway copy of the installed v2.14.5 app against its own empty database: the old default, a long password without a symbol or upper case, and an empty value each exit 1 and create no user; a compliant password creates the admin. The installer's interactive re-prompt was not exercised (it needs a TTY).
+## A91 — A pinned repository key is rebuilt from the pin, in the broker as in the installer
+
+Security audit run-2 (2026-11-11), finding AZ-04. `ComponentRepoInstaller::installElasticRepo` (A54) downloaded
+Elastic's signing key, checked that the pinned fingerprint was **among** the fingerprints in the file, and then
+installed the **whole file** — `gpg --dearmor` on apt, `rpm --import` on EL, where the repo definition also kept
+`gpgkey=https://…` so dnf would fetch a key from that URL again later. A file carrying the pinned key plus a
+second key passed the check, and packages signed by the second key would then have been accepted as root-installed
+software. `deploy/lib/repos.sh` had already solved this for the bootstrap repositories (A66,
+`extract_pinned_key`); the broker's copy of the idea stopped at "is the pin present".
+
+Decision: the broker gets the same construction, `ComponentRepoInstaller::extractPinnedKey`. The fetched file is
+imported into a throwaway keyring, only the pinned key is exported (`export-minimal`), and the result must list
+exactly one primary key equal to the pin — a gpg selector also matches subkeys, so export-by-pin alone does not
+prove the primary is the pin. On EL the armored re-export is written to `/etc/pki/rpm-gpg/`, imported with a
+checked exit status, and the repo file names that local file as `gpgkey`. The download and the throwaway keyring
+live in a `mktemp -d` directory (exclusive, root-only) instead of a predictable name in `/tmp`.
+
+The helper takes the fingerprint as a parameter so the component repositories that have no pin yet (Docker,
+MongoDB, PHP, NodeSource — audit finding AZ-05, not addressed here) can adopt it.
+
+Tests: `ElasticsearchTest` — a different key, the pinned key plus another primary, and the pin present only as a
+subkey are each refused with no keyring or sources list left behind; on EL the repo file contains no
+`gpgkey=https://`. Not validated on a host: the gpg invocations mirror `repos.sh`, which was (A66), but this PHP
+port has only run against the fake runtime.

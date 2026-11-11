@@ -235,13 +235,14 @@ final class ComponentRepoInstaller
     private const ELASTIC_MAJOR = '9.x';
 
     /**
-     * Elastic's own repository for Elasticsearch (A54). The downloaded key must carry the
-     * pinned fingerprint before anything signed by it is trusted.
+     * Elastic's own repository for Elasticsearch (A54). What gets trusted is a keyring
+     * rebuilt from the pinned key alone (A91), never the file that was downloaded.
      */
     private function installElasticRepo(OsRelease $os, OperationLogger $log): void
     {
         $major = self::ELASTIC_MAJOR;
         $keyring = '/usr/share/keyrings/elasticsearch-keyring.gpg';
+        $rpmKey = '/etc/pki/rpm-gpg/RPM-GPG-KEY-elasticsearch';
         if ($os->pkgMgr === 'apt' && $this->runtime->fileExists('/etc/apt/sources.list.d/elastic-' . $major . '.list')) {
             return;
         }
@@ -249,27 +250,22 @@ final class ComponentRepoInstaller
             return;
         }
         $log->info("Adding Elastic {$major} repository (signing key fingerprint pinned).");
-        $staging = '/tmp/azerioid-elastic-' . bin2hex(random_bytes(4)) . '.asc';
-        $fetch = $this->runtime->exec(['/usr/bin/curl', '-fsSL', '--max-time', '60', '-o', $staging, 'https://artifacts.elastic.co/GPG-KEY-elasticsearch'], null, 90);
-        if (!$fetch->ok()) {
-            throw new BrokerException('Could not download Elastic\'s signing key.', 1);
+        // mktemp -d creates the directory exclusively and root-only, so neither the
+        // download nor the throwaway keyring sits under a name another account could
+        // have prepared in /tmp.
+        $made = $this->runtime->exec(['/usr/bin/mktemp', '-d', '/tmp/azerioid-elastic.XXXXXXXX'], null, 10);
+        $work = trim($made->stdout);
+        if (!$made->ok() || !str_starts_with($work, '/tmp/azerioid-elastic.')) {
+            throw new BrokerException('Could not create a private staging directory for Elastic\'s signing key.', 1);
         }
         try {
-            $show = $this->runtime->exec(['/usr/bin/gpg', '--batch', '--with-colons', '--show-keys', '--with-fingerprint', $staging], null, 30);
-            $fingerprints = [];
-            foreach (explode("\n", $show->stdout) as $line) {
-                if (str_starts_with($line, 'fpr:')) {
-                    $fingerprints[] = strtoupper(explode(':', $line)[9] ?? '');
-                }
-            }
-            if (!in_array(self::ELASTIC_KEY_FINGERPRINT, $fingerprints, true)) {
-                throw new BrokerException('Elastic\'s signing key does not have the pinned fingerprint; refusing to trust it.', 1);
+            $fetched = $work . '/fetched.asc';
+            $fetch = $this->runtime->exec(['/usr/bin/curl', '-fsSL', '--max-time', '60', '-o', $fetched, 'https://artifacts.elastic.co/GPG-KEY-elasticsearch'], null, 90);
+            if (!$fetch->ok()) {
+                throw new BrokerException('Could not download Elastic\'s signing key.', 1);
             }
             if ($os->pkgMgr === 'apt') {
-                $dearmor = $this->runtime->exec(['/usr/bin/gpg', '--batch', '--yes', '--dearmor', '-o', $keyring, $staging], null, 30);
-                if (!$dearmor->ok()) {
-                    throw new BrokerException('Could not install Elastic\'s signing key.', 1);
-                }
+                $this->extractPinnedKey($work, $fetched, self::ELASTIC_KEY_FINGERPRINT, $keyring, false);
                 $this->runtime->writeFile(
                     '/etc/apt/sources.list.d/elastic-' . $major . '.list',
                     "deb [signed-by={$keyring}] https://artifacts.elastic.co/packages/{$major}/apt stable main\n",
@@ -279,18 +275,65 @@ final class ComponentRepoInstaller
 
                 return;
             }
-            $this->runtime->exec(['/usr/bin/rpm', '--import', $staging], null, 60);
+            $this->extractPinnedKey($work, $fetched, self::ELASTIC_KEY_FINGERPRINT, $rpmKey, true);
+            if (!$this->runtime->exec(['/usr/bin/rpm', '--import', $rpmKey], null, 60)->ok()) {
+                throw new BrokerException('Could not install Elastic\'s signing key.', 1);
+            }
+            // gpgkey points at the pinned local copy: a URL here would let dnf fetch and
+            // import whatever that URL serves the next time it needs a key.
             $this->runtime->writeFile(
                 '/etc/yum.repos.d/elasticsearch.repo',
                 "[elasticsearch]\nname=Elasticsearch repository for {$major} packages\nbaseurl=https://artifacts.elastic.co/packages/{$major}/yum\n"
-                . "gpgcheck=1\ngpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch\nenabled=1\nautorefresh=1\ntype=rpm-md\n",
+                . "gpgcheck=1\ngpgkey=file://{$rpmKey}\nenabled=1\nautorefresh=1\ntype=rpm-md\n",
                 0644
             );
             $this->runtime->exec(['/usr/bin/dnf', '-y', 'makecache'], null, 300);
         } finally {
-            if ($this->runtime->fileExists($staging)) {
-                $this->runtime->deleteFile($staging);
+            $this->runtime->exec(['/bin/rm', '-rf', '--one-file-system', $work], null, 30);
+        }
+    }
+
+    /**
+     * Write to $dest a keyring holding ONLY the pinned key from a fetched key file — the
+     * PHP counterpart of extract_pinned_key in deploy/lib/repos.sh (A66).
+     *
+     * Checking that the pinned fingerprint is present in the fetched file and then
+     * installing that file trusts every other key in it as well. So the file is imported
+     * into a throwaway keyring, only the pinned key is exported, and the result must
+     * contain exactly one primary key equal to the pin (a gpg key selector also matches
+     * subkey fingerprints, so export-by-pin alone does not prove that).
+     */
+    private function extractPinnedKey(string $work, string $src, string $fingerprint, string $dest, bool $armor): void
+    {
+        $home = $work . '/gnupg';
+        $this->runtime->mkdir($home, 0700);
+        $gpg = ['/usr/bin/gpg', '--homedir', $home, '--batch', '--quiet'];
+        $primaries = [];
+        if ($this->runtime->exec([...$gpg, '--import', $src], null, 30)->ok()
+            && $this->runtime->exec(
+                [...$gpg, '--yes', ...($armor ? ['--armor'] : []), '--export-options', 'export-minimal', '--output', $dest, '--export', $fingerprint],
+                null,
+                30
+            )->ok()) {
+            $afterPub = false;
+            $show = $this->runtime->exec(['/usr/bin/gpg', '--batch', '--with-colons', '--show-keys', $dest], null, 30);
+            foreach (explode("\n", $show->ok() ? $show->stdout : '') as $line) {
+                $field = explode(':', $line);
+                if ($field[0] === 'pub') {
+                    $afterPub = true;
+                } elseif ($field[0] === 'fpr' && $afterPub) {
+                    $primaries[] = strtoupper($field[9] ?? '');
+                    $afterPub = false;
+                } elseif ($field[0] === 'sub') {
+                    $afterPub = false;
+                }
             }
+        }
+        if ($primaries !== [strtoupper($fingerprint)]) {
+            if ($this->runtime->fileExists($dest)) {
+                $this->runtime->deleteFile($dest);
+            }
+            throw new BrokerException('The downloaded signing key does not yield exactly the pinned fingerprint; refusing to trust it.', 1);
         }
     }
 
