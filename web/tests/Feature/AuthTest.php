@@ -190,6 +190,18 @@ class AuthTest extends TestCase
             ->assertRedirect(route('two-factor.setup'));
     }
 
+    public function test_cli_admin_creation_refuses_a_password_below_the_setup_policy(): void
+    {
+        // The installer used to fall back to the literal "password" (A87).
+        foreach (['password', 'longenoughbutplain', 'Short1!'] as $weak) {
+            putenv('PANEL_INSTALL_ADMIN_PASSWORD='.$weak);
+            $this->artisan('panel:create-admin', ['--email' => 'cli-admin@example.com'])->assertFailed();
+        }
+        putenv('PANEL_INSTALL_ADMIN_PASSWORD');
+
+        $this->assertSame(0, User::query()->count());
+    }
+
     public function test_cli_created_admin_has_no_totp_and_enrolls_on_first_login(): void
     {
         config(['azerioid.require_totp' => true]);

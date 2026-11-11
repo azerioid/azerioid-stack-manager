@@ -2434,3 +2434,23 @@ delivery. Ceiling: a deploy started from the panel does not take this lock.
 
 **Limits (A80)** — `vhost.limits.set` accepted an alias domain, stored the values under the alias and applied
 them to nothing. The alias is resolved to the site's primary domain first.
+
+## A87 — The installer never creates the admin with a built-in password
+
+Security audit run-2 (2026-11-11), finding AZ-01. `deploy/install.sh` and `deploy/lib/interactive.sh` defaulted
+`ADMIN_PASSWORD` to a literal value, the interactive prompt offered it as the bracketed default, and
+`panel:create-admin` accepted any non-empty string — unlike `/setup`, which enforces
+`Password::min(12)->mixedCase()->numbers()->symbols()`. The only guard was a warning, and only on a public install.
+The account is root-equivalent by design, so a known credential on it is a known credential for the host.
+
+Decision: the policy is enforced in **one place, `CreatePanelAdmin::handle()`**, because every installer path
+creates the account through that command. The shell scripts keep no default and no "default password in use" flag
+(it can no longer be true): an empty or weak `ADMIN_PASSWORD` makes the command fail, the interactive installer
+then asks once more, and a non-interactive install stops at the admin step with the existing hint (create the
+account in the browser at `/setup`, or re-run with a compliant password). Nothing changes for an install that
+supplied a compliant password or that does not create an admin.
+
+Existing hosts are not touched by this: an admin that was created with the old default keeps that password until
+it is changed in Settings. Operators of such hosts must change it.
+
+Test: `AuthTest::test_cli_admin_creation_refuses_a_password_below_the_setup_policy`.
