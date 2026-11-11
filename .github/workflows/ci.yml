@@ -75,7 +75,10 @@ jobs:
 
   lint:
     name: Lint and static checks
-    runs-on: ubuntu-latest
+    # Pinned to the Ubuntu release the installer supports (deploy/lib/detect-os.sh).
+    # ubuntu-latest moved to 26.04, whose sudo-rs visudo rejects the template's
+    # `!requiretty` — a real gap for 26.04 support, but not a regression here.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 

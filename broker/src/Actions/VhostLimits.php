@@ -30,10 +30,12 @@ final class VhostLimits
     /** @return array<string,mixed> */
     public function handle(string $action, array $args, array $input, Runtime $runtime, Config $config): array
     {
-        $domain = Validator::domain((string) ($args[0] ?? ($input['domain'] ?? '')));
+        // Limits belong to the site, and everything that enforces them (the pool,
+        // the runtime program) is keyed by its primary domain — so an alias is
+        // resolved to it here rather than stored under a name nothing reads.
+        [$domain, $kind] = $this->resolve($runtime, $config, Validator::domain((string) ($args[0] ?? ($input['domain'] ?? ''))));
         $pools = new SitePool($config, $runtime);
         $current = $pools->settings($domain);
-        $kind = $this->runtimeOf($runtime, $config, $domain);
 
         if ($action === 'vhost.limits.show') {
             return $this->view($domain, $kind, $current);
@@ -99,11 +101,12 @@ final class VhostLimits
         };
     }
 
-    private function runtimeOf(Runtime $runtime, Config $config, string $domain): string
+    /** @return array{0:string,1:string} the site's primary domain and its runtime */
+    private function resolve(Runtime $runtime, Config $config, string $domain): array
     {
         foreach (WebServers::for($config)->listVhosts($runtime, $config) as $vhost) {
             if (($vhost['domain'] ?? '') === $domain || in_array($domain, $vhost['domains'] ?? [], true)) {
-                return AppRuntime::normalize((string) ($vhost['runtime'] ?? AppRuntime::FPM));
+                return [(string) $vhost['domain'], AppRuntime::normalize((string) ($vhost['runtime'] ?? AppRuntime::FPM))];
             }
         }
 

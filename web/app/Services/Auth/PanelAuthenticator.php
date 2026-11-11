@@ -114,6 +114,8 @@ final class PanelAuthenticator
      * Verify TOTP for a pending login.id. On success, establishes the session.
      *
      * @return bool true when the code is valid and the session was established
+     *
+     * @throws ValidationException after too many wrong codes for this account
      */
     public function verifyChallengeCode(string $code, string $ip): bool
     {
@@ -121,14 +123,25 @@ final class PanelAuthenticator
         if (! $user || ! $user->hasTwoFactorEnabled()) {
             return false;
         }
+        // Keyed by account, not by session or address: whoever holds the password can
+        // open a fresh session from a fresh IP at will, and a 6-digit code falls to
+        // unlimited guessing. For the same reason a new password step does not clear it.
+        $key = 'two-factor|' . $user->id;
+        if (RateLimiter::tooManyAttempts($key, (int) config('azerioid.login.max_attempts', 5))) {
+            throw ValidationException::withMessages(['code' => 'Too many attempts. Try again later.']);
+        }
         $secret = $user->plainTwoFactorSecret();
         // A83: a one-time recovery code is accepted in place of a TOTP code, so a lost
         // authenticator does not lock the operator out. A used code is consumed.
         $ok = ($secret !== null && $this->totp->verify($secret, $code))
             || $this->totp->consumeRecoveryCode($user, $code);
         if (! $ok) {
+            RateLimiter::hit($key, 60 * (int) config('azerioid.login.lockout_minutes', 15));
+            AuthFailLog::write($ip);
+
             return false;
         }
+        RateLimiter::clear($key);
         $this->establishSession($user, $ip);
         session()->forget('login.id');
 

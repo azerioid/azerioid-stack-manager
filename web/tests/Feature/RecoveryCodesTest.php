@@ -56,6 +56,27 @@ class RecoveryCodesTest extends TestCase
         $this->assertFalse($auth->verifyChallengeCode($codes[0], '127.0.0.1'));
     }
 
+    public function test_challenge_stops_accepting_codes_after_too_many_wrong_ones(): void
+    {
+        $totp = app(TotpService::class);
+        $user = $this->enrolledUser();
+        $codes = $totp->generateRecoveryCodes();
+        $totp->storeRecoveryCodes($user, $codes);
+        $auth = app(PanelAuthenticator::class);
+
+        for ($i = 0; $i < 5; $i++) {
+            // A fresh pending login each time: the limit must follow the account,
+            // not the session, or redoing the password step would reset it.
+            session()->flush();
+            session(['login.id' => $user->id]);
+            $this->assertFalse($auth->verifyChallengeCode('000000', '127.0.0.1'));
+        }
+
+        // Even a correct code is refused while the account is throttled.
+        $this->expectException(\Illuminate\Validation\ValidationException::class);
+        $auth->verifyChallengeCode($codes[0], '127.0.0.1');
+    }
+
     public function test_re_enrollment_issues_fresh_codes_and_invalidates_the_old_set(): void
     {
         $totp = app(TotpService::class);

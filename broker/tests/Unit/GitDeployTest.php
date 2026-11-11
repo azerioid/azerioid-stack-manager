@@ -116,6 +116,49 @@ final class GitDeployTest extends TestCase
         $this->assertTrue($launched, 'a verified webhook must launch the deploy out of band');
     }
 
+    public function test_push_during_a_running_deploy_takes_the_second_slot_and_a_dead_launcher_is_an_error(): void
+    {
+        $deploy = new GitDeploy($this->cfg, $this->rt);
+        $cfg = $deploy->configure(self::DOMAIN, ['repository' => 'git@github.com:acme/shop.git', 'branch' => 'main', 'preset' => 'none']);
+        $body = '{"ref":"refs/heads/main"}';
+        $sig = 'sha256='.hash_hmac('sha256', $body, (string) $cfg['webhook_secret']);
+
+        // The first unit name is taken by a running deploy: systemd-run refuses it.
+        $busy = ['first' => true, 'next' => false];
+        $active = false;
+        $this->rt->execFn = function (array $cmd) use (&$busy, &$active): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/systemd-run') {
+                $taken = str_ends_with((string) $cmd[3], '-next') ? $busy['next'] : $busy['first'];
+
+                return new \AzerioidPanel\Broker\ExecResult($cmd, $taken ? 1 : 0, '', $taken ? 'Unit was already loaded' : '');
+            }
+            if (($cmd[0] ?? '') === '/usr/bin/systemctl' && ($cmd[1] ?? '') === 'is-active') {
+                return new \AzerioidPanel\Broker\ExecResult($cmd, $active ? 0 : 3, '', '');
+            }
+
+            return null;
+        };
+
+        $this->assertTrue($deploy->webhook((string) $cfg['webhook_token'], 'github', $sig, $body)['accepted']);
+        $units = array_values(array_map(
+            static fn (array $e): string => (string) $e['command'][3],
+            array_filter($this->rt->execLog, static fn (array $e): bool => ($e['command'][0] ?? '') === '/usr/bin/systemd-run')
+        ));
+        $this->assertCount(2, $units);
+        $this->assertStringEndsWith('-next', $units[1]);
+
+        // Both slots taken and really running: the waiting one covers this push.
+        $busy['next'] = true;
+        $active = true;
+        $this->assertTrue($deploy->webhook((string) $cfg['webhook_token'], 'github', $sig, $body)['accepted']);
+
+        // Nothing started and nothing is running: that is a failure, not "queued".
+        $active = false;
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionCode(1);
+        $deploy->webhook((string) $cfg['webhook_token'], 'github', $sig, $body);
+    }
+
     public function test_push_webhook_rejects_a_forged_signature(): void
     {
         $deploy = new GitDeploy($this->cfg, $this->rt);

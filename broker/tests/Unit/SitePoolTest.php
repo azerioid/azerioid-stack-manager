@@ -249,6 +249,21 @@ final class SitePoolTest extends TestCase
         $this->assertStringNotContainsString('memory_limit]', $pool);
     }
 
+    public function test_a80_limits_set_through_an_alias_land_on_the_site(): void
+    {
+        $this->assertSame(0, $this->broker(['vhost.add', 'shop.example.com', '/data/www/shop.example.com/public', 'php', '8.4'])[0]);
+        $conf = $this->rt->files[self::CONF];
+        $this->assertStringContainsString("\nhttp://shop.example.com {", $conf);
+        $this->rt->files[self::CONF] = str_replace("\nhttp://shop.example.com {", "\nhttp://shop.example.com, http://www.shop.example.com {", $conf);
+
+        [$code, $json] = $this->broker(['vhost.limits.set', 'www.shop.example.com'], ['max_children' => '12']);
+        $this->assertSame(0, $code, json_encode($json));
+        // Stored and enforced under the primary domain, not orphaned under the alias.
+        $this->assertSame('shop.example.com', $json['data']['domain'] ?? null);
+        $this->assertStringContainsString('pm.max_children = 12', $this->rt->files[$this->poolPath('8.4')]);
+        $this->assertSame(12, $this->broker(['vhost.limits.show', 'shop.example.com'])[1]['data']['max_children'] ?? null);
+    }
+
     public function test_a80_rejects_out_of_range_limits(): void
     {
         $this->assertSame(0, $this->broker(['vhost.add', 'shop.example.com', '/data/www/shop.example.com/public', 'php', '8.4'])[0]);

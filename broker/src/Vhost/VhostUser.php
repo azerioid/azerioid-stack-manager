@@ -233,7 +233,11 @@ final class VhostUser
         return '/usr/sbin/runuser';
     }
 
-    public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group): void
+    /**
+     * $keepExec keeps a file's execute bit (0770 instead of 0660) — for a tree that
+     * holds code above the docroot, where 0660 would break vendor/bin and scripts.
+     */
+    public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group, bool $keepExec = false): void
     {
         if ($runtime->getuid() !== 0 || !$runtime->isDir($root)) {
             return;
@@ -245,7 +249,7 @@ final class VhostUser
         ], null, 120);
         $runtime->exec([
             '/bin/sh', '-c',
-            'find ' . escapeshellarg($root) . ' -type f -exec chmod 0660 {} +',
+            'find ' . escapeshellarg($root) . ' -type f -exec chmod ' . ($keepExec ? 'u=rwX,g=rwX,o=' : '0660') . ' {} +',
         ], null, 120);
     }
 

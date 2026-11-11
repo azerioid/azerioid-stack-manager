@@ -81,6 +81,68 @@ final class VhostCloneTest extends TestCase
         $this->assertTrue($ownedByClone, 'the whole copied tree must be chowned to the clone identity');
     }
 
+    /** Clone src.test → dst.test with rsync answering $rsyncExit; returns [code, json]. */
+    private function cloneWithRsyncExit(int $rsyncExit): array
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
+        $this->rt->execFn = function (array $cmd) use ($rsyncExit): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
+                $this->rt->dirs['/data/www/dst.test'] = true;
+
+                return new \AzerioidPanel\Broker\ExecResult($cmd, $rsyncExit, '', $rsyncExit === 0 ? '' : 'rsync error');
+            }
+
+            return null;
+        };
+
+        return $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+    }
+
+    public function test_clone_rehardens_after_the_whole_tree_handover_and_keeps_execute_bits(): void
+    {
+        [$code, $json] = $this->cloneWithRsyncExit(0);
+        $this->assertSame(0, $code, json_encode($json));
+
+        // Order matters: the whole-tree chmod resets .env to group-readable, so the
+        // A72 pass (.env 0600, escaping symlinks) must run once more AFTER it.
+        $handover = null;
+        $lastHarden = null;
+        foreach ($this->rt->execLog as $i => $e) {
+            $line = implode(' ', $e['command']);
+            if (str_contains($line, "find '/data/www/dst.test' -type f -exec chmod")) {
+                $handover = $i;
+                $this->assertStringContainsString('u=rwX,g=rwX,o=', $line, 'the handover must keep execute bits');
+            }
+            if (str_contains($line, 'azerioid-harden /data/www/dst.test')) {
+                $lastHarden = $i;
+            }
+        }
+        $this->assertNotNull($handover);
+        $this->assertNotNull($lastHarden);
+        $this->assertGreaterThan($handover, $lastHarden, 'content hardening must run after the whole-tree handover');
+        // The welcome page seeded by vhost.add is not part of the clone.
+        $this->assertArrayNotHasKey('/data/www/dst.test/public/index.php', $this->rt->files);
+    }
+
+    public function test_clone_rolls_back_when_the_copy_fails_but_tolerates_vanished_files(): void
+    {
+        [$code, $json] = $this->cloneWithRsyncExit(23);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('clone was removed', (string) ($json['error'] ?? ''));
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files, 'a failed copy must not leave the vhost routing');
+        $this->assertContains(
+            ['/bin/rm', '-rf', '--one-file-system', '/data/www/dst.test'],
+            array_column($this->rt->execLog, 'command')
+        );
+
+        // Retry is not refused, and rsync 24 (files vanished on a live site) is success.
+        unset($this->rt->dirs['/data/www/dst.test']);
+        [$code, $json] = $this->cloneWithRsyncExit(24);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertArrayHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
+    }
+
     public function test_clone_refuses_same_domain_and_an_existing_target(): void
     {
         $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);

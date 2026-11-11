@@ -203,8 +203,19 @@ final class PostgreSQLDriver implements DatabaseDriver
         $this->pdo()->exec($sql);
     }
 
+    /**
+     * One connection for the driver's lifetime. A connection per call made every
+     * session setting a no-op: add()/resetPassword() issue SET password_encryption
+     * and then CREATE/ALTER ROLE, and on a server whose default is md5 (EL) the
+     * role got an md5 hash that the panel's scram-sha-256 pg_hba line rejects.
+     */
+    private ?PDO $pdo = null;
+
     private function pdo(): PDO
     {
+        if ($this->pdo instanceof PDO) {
+            return $this->pdo;
+        }
         if (!$this->isConfigured()) {
             throw new BrokerException('PostgreSQL is not configured in broker.json.', 3);
         }
@@ -214,7 +225,7 @@ final class PostgreSQLDriver implements DatabaseDriver
             $this->config->postgresqlPort
         );
         try {
-            return new PDO(
+            return $this->pdo = new PDO(
                 $dsn,
                 $this->config->postgresqlUser,
                 $this->config->postgresqlPassword,

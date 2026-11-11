@@ -85,7 +85,9 @@ final class Pm2Manager
             throw new BrokerException("PM2 is already enabled for {$domain}.", 3);
         }
 
-        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, $input['entry'] ?? null);
+        // The entry may be a label read back from another vhost (clone, restore): the
+        // npm-mode marker is not a file, so it means "auto-detect" here too.
+        $detected = $this->assertNodeApp($domain, $vhost['root'] ?? null, self::entryHintFromVhost(['pm2_entry' => is_scalar($input['entry'] ?? null) ? $input['entry'] : null]));
         $instances = $this->resolveInstances($input['instances'] ?? self::DEFAULT_INSTANCES);
         $reserved = $this->reservedPorts($domain);
         if (array_key_exists('port', $input) && $input['port'] !== null && $input['port'] !== '') {

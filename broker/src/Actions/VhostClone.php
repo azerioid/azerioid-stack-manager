@@ -36,6 +36,13 @@ final class VhostClone
             throw new BrokerException("{$dst} is managed externally and can't be created.", 3);
         }
 
+        // Validate the database input before anything is provisioned: a malformed
+        // pair must fail the request, not surface after the whole site was copied.
+        $pairs = $this->databasePairs($input);
+        $engine = $pairs === []
+            ? ''
+            : (new DatabaseManager($config, $runtime))->resolveEngine((string) ($input['engine'] ?? ''));
+
         $servers = WebServers::for($config);
         $all = $servers->listVhosts($runtime, $config);
         $source = null;
@@ -100,6 +107,15 @@ final class VhostClone
             'upstream' => $source['reverse_proxy'] ?? null,
             'engine' => (string) ($source['engine'] ?? 'caddy'),
         ]);
+        // addVhost seeds a welcome index into the empty docroot. It is not part of
+        // the source: left in place it survives the copy whenever the source has no
+        // file of that name. $dstTop did not exist before addVhost, so anything in
+        // the docroot now is that seed.
+        foreach (['index.php', 'index.html'] as $seeded) {
+            if ($runtime->fileExists($dstRoot . '/' . $seeded)) {
+                $runtime->deleteFile($dstRoot . '/' . $seeded);
+            }
+        }
 
         // Copy the whole source site tree into the clone. Deliberately NOT rsync -a:
         //  -rlt      — recurse, keep symlinks as links (not followed), keep mtimes;
@@ -120,8 +136,13 @@ final class VhostClone
             '--chmod=ug-s', '--exclude', '.git/',
             rtrim($srcTop, '/') . '/', rtrim($dstTop, '/') . '/',
         ], null, 1800);
-        if (!$copy->ok()) {
-            throw new BrokerException('Copying the site files failed: ' . trim($copy->stderr), 1);
+        // Exit 24 is "some source files vanished during the transfer" — routine on a
+        // live site (sessions, cache files) and the copy is otherwise complete. Any
+        // other failure leaves a half-copied tree behind a vhost that already routes:
+        // remove both, so nothing half-built is served and a retry is not refused.
+        if (!$copy->ok() && $copy->exitCode !== 24) {
+            $this->rollback($runtime, $config, $dst, $dstTop);
+            throw new BrokerException('Copying the site files failed; the clone was removed. ' . trim($copy->stderr), 1);
         }
 
         // Create the clone's identity and hand it the docroot + top directory; the
@@ -141,11 +162,20 @@ final class VhostClone
         if ($grp === '') {
             // Fail closed: a clone the identity does not own is both useless and a
             // root-owned tree we must not leave behind. Roll back the copy and vhost.
-            $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
-            $servers->removeVhost($runtime, $config, $dst);
+            $this->rollback($runtime, $config, $dst, $dstTop);
             throw new BrokerException('Could not hand the clone over to its identity; the clone was removed.', 1);
         }
-        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp);
+        // keepExec: the code above the docroot (vendor/bin, node_modules/.bin targets,
+        // artisan, deploy scripts) must stay runnable, as it is on the source.
+        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp, true);
+        // The handover above reset every file's mode, undoing the .env 0600 that
+        // ensure()'s A72 pass had set — and that pass ran while everything above the
+        // docroot was still root's, so it could not remove an escaping symlink there.
+        // Run it again now that the clone owns its tree. (ensure() skips it for a
+        // not-yet-migrated identity, whose pool does not run as the site user.)
+        if ($grp !== VhostUser::LEGACY_GROUP) {
+            VhostUser::hardenContent($runtime, $config, $dstRoot, VhostUser::username($dst));
+        }
 
         // A79 increment 2: optionally clone named databases alongside the files.
         // The operator names each as source:target (databases are global and not
@@ -154,15 +184,11 @@ final class VhostClone
         // back (DbClone) and is reported, but never undoes the file clone above.
         $cloned = [];
         $dbErrors = [];
-        $pairs = $this->databasePairs($input);
-        if ($pairs !== []) {
-            $engine = (new DatabaseManager($config, $runtime))->resolveEngine((string) ($input['engine'] ?? ''));
-            foreach ($pairs as [$dbSource, $dbTarget]) {
-                try {
-                    $cloned[] = DbClone::run($runtime, $config, $engine, $dbSource, $dbTarget, $dbTarget);
-                } catch (\Throwable $e) {
-                    $dbErrors[] = ['source' => $dbSource, 'target' => $dbTarget, 'error' => $e->getMessage()];
-                }
+        foreach ($pairs as [$dbSource, $dbTarget]) {
+            try {
+                $cloned[] = DbClone::run($runtime, $config, $engine, $dbSource, $dbTarget, $dbTarget);
+            } catch (\Throwable $e) {
+                $dbErrors[] = ['source' => $dbSource, 'target' => $dbTarget, 'error' => $e->getMessage()];
             }
         }
 
@@ -191,9 +217,12 @@ final class VhostClone
             }
         } elseif ($srcRuntime === AppRuntime::PM2) {
             try {
-                (new Pm2Manager($config, $runtime))->enable($dst, array_filter([
+                $pm2 = new Pm2Manager($config, $runtime);
+                $pm2->enable($dst, array_filter([
                     'instances' => $source['pm2_instances'] ?? null,
                     'entry' => $source['pm2_entry'] ?? null,
+                    // node_modules were built against the source's Node major.
+                    'node' => $pm2->nodeOf($src),
                 ], static fn ($v) => $v !== null));
                 $runtimeEnabled = AppRuntime::PM2;
             } catch (\Throwable $e) {
@@ -208,6 +237,22 @@ final class VhostClone
             ? 'The ' . $srcRuntime . ' runtime could not be enabled on the clone; it is serving as a plain PHP site.'
             : '';
 
+        // What the panel's Operations page keeps of a queued clone. No passwords:
+        // that record is stored and readable for months.
+        $detail = ["Copied {$srcTop} to {$dstTop}."];
+        foreach ($cloned as $db) {
+            $detail[] = "Database {$db['source']} cloned to {$db['target']} (user {$db['user']}).";
+        }
+        foreach ($dbErrors as $err) {
+            $detail[] = "Database {$err['source']} → {$err['target']} NOT cloned: {$err['error']}";
+        }
+        if ($runtimeEnabled !== null) {
+            $detail[] = "Runtime {$runtimeEnabled} enabled on the clone.";
+        }
+        if ($runtimeError !== null) {
+            $detail[] = $rtNote . ' ' . $runtimeError;
+        }
+
         return [
             'source' => $src,
             'domain' => $dst,
@@ -218,6 +263,7 @@ final class VhostClone
             'database_errors' => $dbErrors,
             'runtime' => $runtimeEnabled,
             'runtime_error' => $runtimeError,
+            'detail' => $detail,
             'note' => trim($dbNote . $rtNote) !== '' ? trim($dbNote . $rtNote) : 'Clone complete.',
         ];
     }
@@ -251,6 +297,20 @@ final class VhostClone
         return $pairs;
     }
 
+    /**
+     * Undo a clone that failed before it was handed over. VhostDel is the full
+     * inverse of addVhost (pool, identity, routing); the copied tree goes too —
+     * it is a copy, and $dstTop was verified not to exist before we created it.
+     */
+    private function rollback(Runtime $runtime, Config $config, string $dst, string $dstTop): void
+    {
+        try {
+            (new VhostDel())->handle('vhost.del', [$dst], [], $runtime, $config);
+        } catch (\Throwable) {
+            WebServers::for($config)->removeVhost($runtime, $config, $dst);
+        }
+        $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
+    }
 
     private function siteTop(Config $config, string $root): string
     {

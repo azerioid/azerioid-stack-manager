@@ -8,7 +8,6 @@ use AzerioidPanel\Broker\Backup\PostgreSqlBackupEngine;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseManager;
-use AzerioidPanel\Broker\ExecResult;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
 
@@ -72,45 +71,46 @@ final class DbClone
 
         try {
             // Dump the source and load it straight into the fresh target through the
-            // audited backup-engine path. dumpCommand/restoreCommand stream plain
-            // text (unlike DatabaseDriver::dump, which gzips to a file), so the dump
-            // is piped in memory — never written to disk in the clear — and
-            // PostgreSQL keeps its A71 per-target unprivileged owning role.
+            // audited backup-engine commands, joined by a shell pipe. The dump is
+            // never written to disk in the clear and never held in this process:
+            // buffering it here cost several times the database's size in memory,
+            // and a memory-limit fatal cannot be caught, so the rollback below never
+            // ran and a half-loaded clone was left behind. PostgreSQL keeps its A71
+            // per-target unprivileged owning role.
             $backup = (new BackupEngines($config, $runtime))->for($engine);
             $dumpSpec = $backup->dumpCommand($source);
+            $cleanups = [$dumpSpec['cleanup']];
             try {
-                $dumped = $runtime->exec($dumpSpec['command'], null, 1800);
+                $backup->prepareTarget($target);
+                if ($engine === 'mariadb') {
+                    [$stages, $cleanups[]] = self::mariaDbLoad($runtime, $config, $target, $user, $password);
+                } else {
+                    // PostgreSQL: pg_restore of a custom-format archive (what
+                    // dumpCommand's pg_dump -Fc produces) replays a TOC, not arbitrary
+                    // SQL from the payload, and A71 restores under a per-target
+                    // unprivileged owning role with PUBLIC revoked — the injection
+                    // surface the MariaDB text path has does not apply.
+                    $spec = $backup instanceof PostgreSqlBackupEngine
+                        ? $backup->restoreCommandFor($target, PostgreSqlBackupEngine::CUSTOM_FORMAT_MAGIC)
+                        : $backup->restoreCommand($target);
+                    $cleanups[] = $spec['cleanup'];
+                    $stages = [$spec['command']];
+                }
+                // Every word is a fixed path, a validated identifier or a generated
+                // file name; pipefail makes a failed dump fail the whole clone.
+                $pipeline = implode(' | ', array_map(
+                    static fn (array $argv): string => implode(' ', array_map('escapeshellarg', $argv)),
+                    [$dumpSpec['command'], ...$stages]
+                ));
+                $result = $runtime->exec(['/bin/bash', '-c', 'set -o pipefail; ' . $pipeline], null, 3600);
             } finally {
-                ($dumpSpec['cleanup'])();
-            }
-            if (!$dumped->ok() || $dumped->stdout === '') {
-                throw new BrokerException(
-                    trim($dumped->stderr) !== '' ? trim($dumped->stderr) : 'Dumping the source database failed.',
-                    1
-                );
-            }
-            $plain = $dumped->stdout;
-
-            $backup->prepareTarget($target);
-            if ($engine === 'mariadb') {
-                $result = self::loadMariaDb($runtime, $config, $target, $user, $password, $plain);
-            } else {
-                // PostgreSQL: pg_restore of a custom-format archive replays a TOC, not
-                // arbitrary SQL from the payload, and A71 restores under a per-target
-                // unprivileged owning role with PUBLIC revoked — the injection surface
-                // the MariaDB text path has does not apply.
-                $spec = $backup instanceof PostgreSqlBackupEngine
-                    ? $backup->restoreCommandFor($target, substr($plain, 0, 16))
-                    : $backup->restoreCommand($target);
-                try {
-                    $result = $runtime->exec($spec['command'], $plain, 1800);
-                } finally {
-                    ($spec['cleanup'])();
+                foreach ($cleanups as $cleanup) {
+                    $cleanup();
                 }
             }
             if (!$result->ok()) {
                 throw new BrokerException(
-                    trim($result->stderr) !== '' ? trim($result->stderr) : 'Loading the dump into the clone failed.',
+                    trim($result->stderr) !== '' ? trim($result->stderr) : 'Copying the database into the clone failed.',
                     1
                 );
             }
@@ -133,7 +133,8 @@ final class DbClone
     }
 
     /**
-     * Load a MariaDB dump into the clone, run AS THE CLONE'S OWN unprivileged user.
+     * The pipeline stages that load a MariaDB dump into the clone, run AS THE
+     * CLONE'S OWN unprivileged user, plus the cleanup for their credentials file.
      *
      * The dump's object definitions and row data are controlled by whoever owns the
      * source database — which may be a lower-trust application, not the admin running
@@ -147,34 +148,37 @@ final class DbClone
      * clone user has no privilege to create — so a missed rewrite fails the load
      * closed (and the clone is rolled back) rather than installing a cross-tenant
      * object.
+     *
+     * @return array{0: list<list<string>>, 1: callable():void}
      */
-    private static function loadMariaDb(Runtime $runtime, Config $config, string $target, string $user, string $password, string $dump): ExecResult
+    private static function mariaDbLoad(Runtime $runtime, Config $config, string $target, string $user, string $password): array
     {
-        // $user is a validated SQL identifier and $password is 48 hex chars, so
-        // neither can break out of the [client] block or the DEFINER clause.
-        $dump = (string) preg_replace(
-            '/DEFINER=`(?:[^`]|``)*`@`(?:[^`]|``)*`/',
-            'DEFINER=`' . $user . '`@`localhost`',
-            $dump
-        );
-
         $cnf = rtrim($config->stagingDir, '/') . '/mysql-clone-' . bin2hex(random_bytes(6)) . '.cnf';
         $runtime->mkdir($config->stagingDir, 0750);
+        // $user is a validated SQL identifier ([A-Za-z0-9_]) and $password is 48 hex
+        // chars, so neither can break out of the [client] block, the DEFINER clause
+        // or the sed replacement.
         $runtime->writeFile(
             $cnf,
             "[client]\nuser={$user}\npassword={$password}\nsocket={$config->mysqlSocket}\n",
             0600
         );
-        try {
-            return $runtime->exec(
+
+        return [
+            [
+                // LC_ALL=C: match bytes, so a row with invalid UTF-8 cannot hide a clause.
+                // Row data is left alone: mysqldump writes each INSERT on one line and
+                // never puts a DEFINER clause on it, and rewriting there silently
+                // altered any stored text that merely looked like one.
+                ['/usr/bin/env', 'LC_ALL=C', '/usr/bin/sed', '-E',
+                    '/^INSERT INTO /!s/DEFINER=`([^`]|``)*`@`([^`]|``)*`/DEFINER=`' . $user . '`@`localhost`/g'],
                 ['/usr/bin/mysql', '--defaults-extra-file=' . $cnf, '--protocol=socket', '--socket=' . $config->mysqlSocket, $target],
-                $dump,
-                1800
-            );
-        } finally {
-            if ($runtime->fileExists($cnf)) {
-                $runtime->deleteFile($cnf);
-            }
-        }
+            ],
+            static function () use ($runtime, $cnf): void {
+                if ($runtime->fileExists($cnf)) {
+                    $runtime->deleteFile($cnf);
+                }
+            },
+        ];
     }
 }
