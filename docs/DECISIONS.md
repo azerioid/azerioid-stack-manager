@@ -2495,6 +2495,25 @@ lock file).
 Not done here: a `composer audit` step in CI. It would fail today on the unreachable advisories; it belongs with
 the dependency refresh.
 
+## A90 — The installer writes the A60 socket ownership too
+
+Security audit run-2 (2026-11-11), finding AZ-16. A60 made the panel FPM socket web-user-owned and
+panel-user-grouped, in `PanelIdentityMigrator::writePool` and (for already migrated hosts) in `PanelUpdater`. The
+installer's own pool template in `deploy/lib/fpm.sh` was not changed: it still rendered
+`listen.owner = ${PANEL_USER}` / `listen.group = ${WEB_USER}`. On a first install both names are the same account,
+so nothing was wrong there. On a host that had been migrated (A39), **re-running the installer** rewrote the pool
+with the pre-A60 ownership and restarted FPM, so every pool in the web user's group could open the panel socket
+again until the next self-update healed it. `verify-release.sh` already reports that state
+(`CHECK_PANEL_SOCKET_NOT_WEB_GROUP`), but nothing repaired it.
+
+Decision: the two variables are swapped in the template, so the installer and the migrator write the same thing.
+No behaviour change on a first install. Not added: a repair step in `PanelIdentityMigrator::status()`; the
+existing self-update heal and the verify check cover a host that drifted before this release.
+
+Test: `PanelIdentityMigratorTest::test_the_installer_pool_template_keeps_the_a60_socket_ownership` (the installer
+has no shell harness, so the test reads the template). Not validated on a host: run `install.sh` twice on the
+staging host and require `CHECK_PANEL_SOCKET_NOT_WEB_GROUP=pass`.
+
 ## A91 — A pinned repository key is rebuilt from the pin, in the broker as in the installer
 
 Security audit run-2 (2026-11-11), finding AZ-04. `ComponentRepoInstaller::installElasticRepo` (A54) downloaded

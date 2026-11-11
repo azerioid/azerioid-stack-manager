@@ -542,4 +542,17 @@ final class PanelIdentityMigratorTest extends TestCase
         }
         $this->assertFalse($this->ran(['/usr/bin/git', '-C', $src, 'checkout', '-f', '--detach', str_repeat('a', 40)]));
     }
+
+    /**
+     * A90: the installer writes the same socket ownership as the migrator (A60). A re-run
+     * on a migrated host used to put the socket back to panel-owned, web-grouped.
+     */
+    public function test_the_installer_pool_template_keeps_the_a60_socket_ownership(): void
+    {
+        $script = (string) file_get_contents(dirname(__DIR__, 3) . '/deploy/lib/fpm.sh');
+
+        $this->assertStringContainsString("listen.owner = \${WEB_USER}\nlisten.group = \${PANEL_USER}\nlisten.mode = 0660", $script);
+        $this->assertStringNotContainsString('listen.group = ${WEB_USER}', $script);
+        $this->assertStringNotContainsString('listen.owner = ${PANEL_USER}', $script);
+    }
 }
