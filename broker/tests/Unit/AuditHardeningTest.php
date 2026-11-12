@@ -483,6 +483,38 @@ final class AuditHardeningTest extends TestCase
         $this->assertContains(['/usr/bin/chown', '-R', 'az-vh-site-test:az-vh-site-test', '/data/www/site/app/public'], array_column($rt->execLog, 'command'));
     }
 
+    /**
+     * A96: two domains with the same long slug get different (hashed) accounts but
+     * would share every slug-keyed resource; the second one is refused.
+     */
+    public function test_a_second_domain_with_the_same_long_slug_is_refused(): void
+    {
+        $rt = new FakeRuntime();
+        $cfg = new Config();
+        $first = 'a-very-long-shop-name-example.com';
+        $second = 'a.very.long.shop.name.example.com';
+        $this->assertNotSame(VhostUser::username($first), VhostUser::username($second), 'precondition: the accounts differ');
+        $this->assertSame(VhostUser::slug($first), VhostUser::slug($second));
+
+        $rt->dirs['/data/www/' . $first] = true;
+        VhostUser::ensure($rt, $cfg, $first, '/data/www/' . $first);
+
+        $rt->dirs['/data/www/' . $second] = true;
+        try {
+            VhostUser::ensure($rt, $cfg, $second, '/data/www/' . $second);
+            $this->fail('expected refusal');
+        } catch (BrokerException $e) {
+            $this->assertSame(2, $e->errorCode);
+            $this->assertStringContainsString('reduce to the same name', $e->getMessage());
+        }
+
+        // A domain whose slug differs is still accepted, and the recorded one keeps working.
+        $rt->dirs['/data/www/other-shop.example.com'] = true;
+        VhostUser::ensure($rt, $cfg, 'other-shop.example.com', '/data/www/other-shop.example.com');
+        VhostUser::ensure($rt, $cfg, $first, '/data/www/' . $first);
+        $this->assertTrue(true);
+    }
+
     public function test_write_file_is_never_world_readable_for_a_private_mode(): void
     {
         $rt = new PosixRuntime();
