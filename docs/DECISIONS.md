@@ -2938,3 +2938,27 @@ it is not done here.
 Tests: `PanelUpdaterTest` — tags are listed from `main` only; a tag whose commit is not on `main` and a release other
 than the checked commit are refused and never checked out; `RunPanelUpdateJobTest` — a "latest" update passes the
 checked commit, an explicit tag does not.
+
+## A105 — PM2 is installed from a lockfile shipped with the broker, with no install scripts
+
+Security audit run-2 (2026-11-11), finding AZ-07. A51 pins each Node.js build by SHA-256, but right after unpacking it
+root ran `npm install -g pm2@7`: a version range resolved against the public registry at install time, with no
+lockfile, and with every package's lifecycle scripts enabled. The result became the PM2 that every PM2 site on that
+Node major executes. The same install ran from `ensurePm2` for system Node.
+
+Decision: `broker/src/Vhost/pm2/` ships a `package.json` with an exact `pm2` version (7.1.2) and its
+`package-lock.json`, in which every one of the 45 packages carries a `sha512` integrity value and a
+`registry.npmjs.org` URL. `NodeRuntimes::installLockedPm2` copies both into `<prefix>/lib/azerioid-pm2`, runs
+`npm ci --prefix … --omit=dev --omit=optional --ignore-scripts`, and links `bin/pm2` and `bin/pm2-runtime` to the
+tree. `npm ci` refuses a tarball whose hash differs from the lock, so the trust anchor for PM2 is this repository
+like the Node build itself, and no package code runs as root while installing. System Node gets the same tree under
+`/usr/local`. pm2 7.1.2 has no install script; the only package in the tree with one is the macOS-only `fsevents`
+(optional, omitted). To update: change the version in `package.json` and run
+`npm install --package-lock-only --ignore-scripts` there.
+
+PM2 installed before this release by `npm install -g` stays as it is until that Node component is reinstalled.
+
+Tests: `NodeRuntimesTest` — the install runs `npm ci` from the shipped lockfile with `--ignore-scripts`, writes that
+exact lockfile, links the binaries, and runs no `-g` install; the shipped lockfile pins an exact version and gives
+every package a sha512 integrity from the npm registry. Checked by hand: `npm ci` from the lockfile into a scratch
+prefix installs 45 packages and the PM2 API loads at 7.1.2.
