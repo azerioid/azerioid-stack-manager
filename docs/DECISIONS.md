@@ -2456,6 +2456,7 @@ it is changed in Settings. Operators of such hosts must change it.
 Test: `AuthTest::test_cli_admin_creation_refuses_a_password_below_the_setup_policy`.
 
 **Validated on the Rocky staging host (2026-11-12)**, with this command run from a throwaway copy of the installed v2.14.5 app against its own empty database: the old default, a long password without a symbol or upper case, and an empty value each exit 1 and create no user; a compliant password creates the admin. The installer's interactive re-prompt was not exercised (it needs a TTY).
+
 ## A88 — Values inside Livewire action attributes are encoded with `@js`, never `'{{ }}'`
 
 Security audit run-2 (2026-11-11), finding AZ-02. Blade's `{{ }}` escapes for HTML. Inside a `wire:click="…"`
@@ -2495,6 +2496,29 @@ lock file).
 Not done here: a `composer audit` step in CI. It would fail today on the unreachable advisories; it belongs with
 the dependency refresh.
 
+## A90 — The installer writes the A60 socket ownership too
+
+Security audit run-2 (2026-11-11), finding AZ-16. A60 made the panel FPM socket web-user-owned and
+panel-user-grouped, in `PanelIdentityMigrator::writePool` and (for already migrated hosts) in `PanelUpdater`. The
+installer's own pool template in `deploy/lib/fpm.sh` was not changed: it still rendered
+`listen.owner = ${PANEL_USER}` / `listen.group = ${WEB_USER}`. On a first install both names are the same account,
+so nothing was wrong there. On a host that had been migrated (A39), **re-running the installer** rewrote the pool
+with the pre-A60 ownership and restarted FPM, so every pool in the web user's group could open the panel socket
+again until the next self-update healed it. `verify-release.sh` already reports that state
+(`CHECK_PANEL_SOCKET_NOT_WEB_GROUP`), but nothing repaired it.
+
+Decision: the two variables are swapped in the template, so the installer and the migrator write the same thing.
+No behaviour change on a first install. Not added: a repair step in `PanelIdentityMigrator::status()`; the
+existing self-update heal and the verify check cover a host that drifted before this release.
+
+Test: `PanelIdentityMigratorTest::test_the_installer_pool_template_keeps_the_a60_socket_ownership` (the installer
+has no shell harness, so the test reads the template). Not validated on a host: run `install.sh` twice on the
+staging host and require `CHECK_PANEL_SOCKET_NOT_WEB_GROUP=pass`.
+
+
+
+**Validated on the Rocky staging host (2026-11-12)**, which is migrated (`web_user` caddy, `panel_user` azerioid-panel) and whose live pool has `listen.owner = caddy`, `listen.group = azerioid-panel`: the v2.14.5 template renders `azerioid-panel` / `caddy` for that host (the regression), this template renders exactly the live values. The installer itself was not re-run.
+
 ## A91 — A pinned repository key is rebuilt from the pin, in the broker as in the installer
 
 Security audit run-2 (2026-11-11), finding AZ-04. `ComponentRepoInstaller::installElasticRepo` (A54) downloaded
@@ -2521,6 +2545,7 @@ subkey are each refused with no keyring or sources list left behind; on EL the r
 port has only run against the fake runtime.
 
 **Validated on the Rocky staging host (2026-11-12)** against gpg 2.3.3 and the key fetched from artifacts.elastic.co: the genuine key yields a keyring with the single pinned primary, binary and armored; a file holding the pinned key plus a freshly generated second key yields the **same** one-key keyring (the second key is dropped rather than trusted); a file with only the other key is refused and leaves no output. No repository or rpm key was installed by the test.
+
 ## A92 — The terminal's auth subrequest is pinned to the loopback site
 
 Security audit run-2 (2026-11-11), finding AZ-15 (status: plausible — it rests on Caddy behaviour that the
