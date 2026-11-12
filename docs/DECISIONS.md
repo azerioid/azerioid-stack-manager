@@ -2718,3 +2718,24 @@ Not done here: binding the git-deploy directory to the domain recorded in its `s
 fix for an already existing pair).
 
 Test: `AuditHardeningTest::test_a_second_domain_with_the_same_long_slug_is_refused`.
+
+## A97 — Recursive ownership changes in site trees use `find -execdir`
+
+Security audit run-2 (2026-11-11), finding AZ-14. The A49 and A56 migrators renumber and regroup a site's files
+with `find <top> -xdev -uid|-group … -exec /usr/bin/chown|chgrp -h … {} +`. `find` walks without following links
+and `-h` protects the final component, but with `-exec` the command receives a **full path**, which the kernel
+resolves again component by component after the walk. Every directory on that path belongs to the site, so the
+site could swap one for a symlink between the walk and the `chown`, and root would change the owner or group of
+files outside the tree. Reachable on hosts in a migration transition, which the scheduler re-runs every five
+minutes.
+
+Decision: `-execdir` instead of `-exec` in `ProgramIdentityMigrator::remap` and
+`VhostIsolationMigrator::chgrpCommand` (keeping `-h` and `{} +`). `-execdir` runs the command inside the directory
+`find` itself entered and hands it `./name`, so no path is re-resolved through directories the site controls.
+
+Not changed here: `VhostUser::applyOwnership` (the A77 `find -exec chmod` and the A95 `chown -R`), which is a
+separate change.
+
+Tests: `SiteDockerTest` assertions updated to `-execdir`, `VhostIsolationTest` ordering check updated, and
+`SiteDockerTest::test_find_based_ownership_changes_use_execdir` fails on any `-exec chown|chgrp` in either migrator.
+The swap itself cannot be modelled by the fake runtime.

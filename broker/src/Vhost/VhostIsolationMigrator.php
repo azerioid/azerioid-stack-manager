@@ -561,8 +561,9 @@ final class VhostIsolationMigrator
         $legacy = VhostUser::LEGACY_GROUP;
 
         // Files before the primary group: usermod -g would otherwise chgrp the home tree
-        // on its own terms. find -h never follows a symlink a site planted to escape its
-        // tree, and -xdev never walks into another filesystem mounted under it.
+        // on its own terms. find never follows a symlink a site planted to escape its
+        // tree, -execdir with chgrp -h acts on each entry inside the directory find
+        // itself entered (A97), and -xdev never walks into another filesystem.
         if ($item['legacy_files'] && $this->runtime->isDir($top)) {
             $this->must($this->chgrpCommand($top, $legacy, $group), "regroup {$top} {$legacy} → {$group}");
             $this->journal[] = ['cmd' => $this->chgrpCommand($top, $group, $legacy), 'what' => "regroup {$top} back to {$legacy}"];
@@ -891,7 +892,9 @@ final class VhostIsolationMigrator
     /** @return list<string> */
     private function chgrpCommand(string $root, string $from, string $to): array
     {
-        return ['/usr/bin/find', $root, '-xdev', '-group', $from, '-exec', '/usr/bin/chgrp', '-h', $to, '{}', '+'];
+        // A97: -execdir so chgrp acts on ./name inside the directory find entered,
+        // not on a full path the site could redirect through a swapped directory.
+        return ['/usr/bin/find', $root, '-xdev', '-group', $from, '-execdir', '/usr/bin/chgrp', '-h', $to, '{}', '+'];
     }
 
     private function assertSafeRoot(string $root): void

@@ -392,16 +392,21 @@ final class ProgramIdentityMigrator
 
             return null;
         };
+        // A97: -execdir, not -exec. With -exec find hands chown a full path, which the
+        // kernel resolves again component by component after the walk - and the site
+        // owns every directory on the way, so it can swap one for a symlink in between.
+        // -execdir runs the command inside the directory find itself entered (never
+        // through a link) on ./name, and -h keeps the final component from being followed.
         foreach (array_keys($uids) as $uid) {
             $new = $map($uid, $fromStart, $toStart, $fromUid, $toUid);
             if ($new !== null) {
-                $this->runtime->exec(['/usr/bin/find', $top, '-xdev', '-uid', (string) $uid, '-exec', '/usr/bin/chown', '-h', (string) $new, '{}', '+'], null, 600);
+                $this->runtime->exec(['/usr/bin/find', $top, '-xdev', '-uid', (string) $uid, '-execdir', '/usr/bin/chown', '-h', (string) $new, '{}', '+'], null, 600);
             }
         }
         foreach (array_keys($gids) as $gid) {
             $new = $map($gid, $fromStart, $toStart, $fromGid, $toGid);
             if ($new !== null) {
-                $this->runtime->exec(['/usr/bin/find', $top, '-xdev', '-gid', (string) $gid, '-exec', '/usr/bin/chgrp', '-h', (string) $new, '{}', '+'], null, 600);
+                $this->runtime->exec(['/usr/bin/find', $top, '-xdev', '-gid', (string) $gid, '-execdir', '/usr/bin/chgrp', '-h', (string) $new, '{}', '+'], null, 600);
             }
         }
     }
