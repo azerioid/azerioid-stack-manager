@@ -1,0 +1,8 @@
+{
+  "name": "azerioid-pm2",
+  "private": true,
+  "description": "PM2 as installed into each Node.js prefix (ADR A105). Update with: npm install --package-lock-only --ignore-scripts",
+  "dependencies": {
+    "pm2": "7.1.2"
+  }
+}

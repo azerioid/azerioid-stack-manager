@@ -38,10 +38,29 @@ final class NodeRuntimesTest extends TestCase
                 ($c[0] ?? '') === '/usr/bin/sha256sum' => new ExecResult($c, 0, $this->tarballSha . '  ' . $c[1] . "\n", ''),
                 str_ends_with((string) ($c[0] ?? ''), '/bin/node') && ($c[1] ?? '') === '--version' => new ExecResult($c, 0, "v22.23.3\n", ''),
                 ($c[0] ?? '') === '/usr/bin/tar' => $this->unpack($c),
-                in_array('install', $c, true) && in_array(NodeRuntimes::PM2_SPEC, $c, true) => $this->installPm2($c),
+                ($c[0] ?? '') === '/bin/ln' => $this->link($c),
                 default => null,
             };
         };
+    }
+
+    /** A105: the shipped lockfile pins every package of PM2 by sha512, from the npm registry. */
+    public function test_the_shipped_pm2_lockfile_pins_every_package(): void
+    {
+        $dir = dirname(__DIR__, 2) . '/src/Vhost/pm2';
+        $manifest = json_decode((string) file_get_contents($dir . '/package.json'), true);
+        $lock = json_decode((string) file_get_contents($dir . '/package-lock.json'), true);
+        $this->assertSame('pm2@' . $manifest['dependencies']['pm2'], NodeRuntimes::PM2_SPEC);
+        $this->assertMatchesRegularExpression('/^\d+\.\d+\.\d+$/', $manifest['dependencies']['pm2'], 'an exact version, not a range');
+        $this->assertSame($manifest['dependencies']['pm2'], $lock['packages']['node_modules/pm2']['version']);
+        $this->assertGreaterThan(10, count($lock['packages']));
+        foreach ($lock['packages'] as $path => $pkg) {
+            if ($path === '') {
+                continue;
+            }
+            $this->assertStringStartsWith('sha512-', (string) ($pkg['integrity'] ?? ''), $path);
+            $this->assertStringStartsWith('https://registry.npmjs.org/', (string) ($pkg['resolved'] ?? ''), $path);
+        }
     }
 
     // -------------------------------------------------------------- install
@@ -52,8 +71,13 @@ final class NodeRuntimesTest extends TestCase
 
         $this->assertArrayHasKey('/opt/azerioid-node/22/bin/node', $this->rt->files);
         $this->assertArrayHasKey('/opt/azerioid-node/22/bin/pm2-runtime', $this->rt->files);
-        $npm = $this->command(static fn (array $c): bool => in_array(NodeRuntimes::PM2_SPEC, $c, true));
+        $npm = $this->command(static fn (array $c): bool => in_array('ci', $c, true));
         $this->assertStringStartsWith('PATH=/opt/azerioid-node/.22.new/bin:', $npm[1], 'pm2 installs under the new Node, not the system one');
+        // A105: from the shipped lockfile, no install scripts, nothing resolved at install time.
+        $this->assertSame(['/opt/azerioid-node/.22.new/bin/npm', 'ci', '--prefix', '/opt/azerioid-node/.22.new/lib/azerioid-pm2', '--omit=dev', '--omit=optional', '--ignore-scripts'], array_slice($npm, 2, 7));
+        $this->assertNull($this->command(static fn (array $c): bool => in_array('-g', $c, true)), 'no global install from a version range');
+        $this->assertSame(file_get_contents(dirname(__DIR__, 2) . '/src/Vhost/pm2/package-lock.json'), $this->rt->files['/opt/azerioid-node/22/lib/azerioid-pm2/package-lock.json'] ?? null);
+        $this->assertContains(['/bin/ln', '-sfn', '../lib/azerioid-pm2/node_modules/pm2/bin/pm2-runtime', '/opt/azerioid-node/.22.new/bin/pm2-runtime'], array_column($this->rt->execLog, 'command'));
         $curl = $this->command(static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/curl');
         $this->assertSame('https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz', end($curl));
         $tar = $this->command(static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/tar');
@@ -237,12 +261,9 @@ final class NodeRuntimesTest extends TestCase
         return new ExecResult($c, 0, '', '');
     }
 
-    private function installPm2(array $c): ExecResult
+    private function link(array $c): ExecResult
     {
-        $prefix = dirname((string) $c[2], 2);
-        foreach (['pm2', 'pm2-runtime'] as $bin) {
-            $this->rt->files["{$prefix}/bin/{$bin}"] = '';
-        }
+        $this->rt->files[(string) end($c)] = '';
 
         return new ExecResult($c, 0, '', '');
     }

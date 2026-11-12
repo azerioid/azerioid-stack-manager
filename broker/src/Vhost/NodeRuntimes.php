@@ -31,7 +31,18 @@ final class NodeRuntimes
     /** @var list<string> */
     public const MAJORS = ['20', '22', '24'];
 
-    public const PM2_SPEC = 'pm2@7';
+    /**
+     * A105: PM2 is installed from the lockfile shipped next to this class (pm2/), whose every
+     * package carries a sha512 integrity value — not resolved from the registry at install
+     * time, and with no install scripts run as root.
+     */
+    public const PM2_SPEC = 'pm2@7.1.2';
+
+    /** Where the locked PM2 tree lives, relative to a prefix; bin/ links point into it. */
+    private const PM2_DIR = 'lib/azerioid-pm2';
+
+    /** @var list<string> */
+    private const PM2_BINS = ['pm2', 'pm2-runtime'];
 
     public function __construct(
         private readonly Config $config,
@@ -149,14 +160,43 @@ final class NodeRuntimes
         if ($npm === null) {
             throw new BrokerException('npm is required to install PM2 for Node.js ' . $node . '.', 1);
         }
-        $result = $this->runtime->exec(
-            ['/usr/bin/env', self::pathEnv($node), $npm, 'install', '-g', self::PM2_SPEC, '--no-audit', '--no-fund'],
+        // System Node's npm owns /usr/lib; the locked tree goes under /usr/local instead.
+        $this->installLockedPm2($node === self::SYSTEM ? '/usr/local' : self::prefix($node), $npm, self::pathEnv($node));
+        if ($this->bin($node, 'pm2-runtime') === null) {
+            throw new BrokerException('pm2-runtime is missing after installing PM2 for Node.js ' . $node . '.', 1);
+        }
+    }
+
+    /**
+     * A105: `npm ci` from the shipped lockfile into <prefix>/lib/azerioid-pm2, then link the
+     * PM2 binaries into <prefix>/bin. --ignore-scripts: no package code runs as root at install.
+     */
+    private function installLockedPm2(string $prefix, string $npm, string $pathEnv): void
+    {
+        $dir = rtrim($prefix, '/') . '/' . self::PM2_DIR;
+        $manifest = @file_get_contents(__DIR__ . '/pm2/package.json');
+        $lock = @file_get_contents(__DIR__ . '/pm2/package-lock.json');
+        if (!is_string($manifest) || !is_string($lock)) {
+            throw new BrokerException('The PM2 lockfile shipped with the broker is missing.', 1);
+        }
+        $this->runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dir], null, 120);
+        $this->runtime->mkdir($dir, 0755);
+        $this->runtime->writeFile($dir . '/package.json', $manifest, 0644);
+        $this->runtime->writeFile($dir . '/package-lock.json', $lock, 0644);
+        $ci = $this->runtime->exec(
+            ['/usr/bin/env', $pathEnv, $npm, 'ci', '--prefix', $dir, '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund'],
             null,
             600
         );
-        if (!$result->ok() || $this->bin($node, 'pm2-runtime') === null) {
-            throw new BrokerException('npm install -g pm2 failed for Node.js ' . $node . ': '
-                . substr(trim($result->stderr . "\n" . $result->stdout), -300), 1);
+        if (!$ci->ok()) {
+            throw new BrokerException('Installing PM2 from its lockfile failed: ' . substr(trim($ci->stderr . "\n" . $ci->stdout), -300), 1);
+        }
+        $this->runtime->mkdir(rtrim($prefix, '/') . '/bin', 0755);
+        foreach (self::PM2_BINS as $name) {
+            $link = $this->runtime->exec(['/bin/ln', '-sfn', '../' . self::PM2_DIR . '/node_modules/pm2/bin/' . $name, rtrim($prefix, '/') . '/bin/' . $name], null, 10);
+            if (!$link->ok()) {
+                throw new BrokerException('Could not link ' . $name . ': ' . trim($link->stderr), 1);
+            }
         }
     }
 
@@ -209,14 +249,7 @@ final class NodeRuntimes
                 throw new BrokerException('The unpacked Node.js does not run (' . trim($probe->stdout . ' ' . $probe->stderr) . ').', 1);
             }
             $log->info('Installing ' . self::PM2_SPEC . " into the Node.js {$major} prefix.");
-            $npm = $this->runtime->exec(
-                ['/usr/bin/env', 'PATH=' . $next . '/bin:/usr/local/bin:/usr/bin:/bin', $next . '/bin/npm', 'install', '-g', self::PM2_SPEC, '--no-audit', '--no-fund'],
-                null,
-                600
-            );
-            if (!$npm->ok()) {
-                throw new BrokerException('npm install -g pm2 failed: ' . substr(trim($npm->stderr . "\n" . $npm->stdout), -300), 1);
-            }
+            $this->installLockedPm2($next, $next . '/bin/npm', 'PATH=' . $next . '/bin:/usr/local/bin:/usr/bin:/bin');
             if ($this->runtime->isDir($prefix)) {
                 $this->runtime->rename($prefix, $old);
             }
