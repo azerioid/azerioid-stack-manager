@@ -2978,3 +2978,32 @@ page's inline code waits for it (Vite modules run deferred). `https://cdn.jsdeli
 Tests: `AuthTest` — the CSP names no CDN script host; no view loads a script, or a stylesheet other than the
 `fonts.bunny.net` font CSS, from another host. Checked in a browser: the built module opens a terminal and the fit
 addon sizes it.
+
+## A107 — Every component repository trusts only a pinned signing key; no setup script is piped into a shell
+
+Security audit run-2 (2026-11-11), finding AZ-05. A66 pinned the installer's repository keys and A91 the Elastic key
+in the broker, but the other component repositories the broker adds did not: Docker, MongoDB and Sury keys were
+`curl … | gpg --dearmor`-ed straight into apt keyrings, EL repo files were fetched (`dnf config-manager --add-repo`)
+or pointed `gpgkey=` at a URL, Remi's release RPM was installed unverified, and NodeSource's `setup_<major>.x` was
+piped into a root `bash`. Whoever could answer those HTTPS requests chose what root trusted or ran. No exit status of
+the key pipelines was checked.
+
+Decision: one path for every repository key — `ComponentRepoInstaller::fetchPinnedKey` downloads the vendor's key file
+into a fresh root-only `mktemp -d` directory and installs a keyring holding only the pinned primary key
+(`extractPinnedKey`, A91); a key file that does not yield exactly the pin adds no repository. Repo files are written
+by the broker, with `gpgkey=file://` to the pinned local copy on EL. Remi's key is imported first and
+`remi-release` is installed with `--setopt=localpkg_gpgcheck=1`, as the installer does. NodeSource's repository is
+written as its setup script writes it (deb822 `nodesource.sources` with `Signed-By`, the `nodejs` pin at priority
+600; `nodesource-nodejs.repo` on EL) instead of running the script. Elastic uses the same helper.
+
+Pins (primary fingerprints), computed from the vendors' key files: Docker deb `9DC85822…0EBFCD88`, Docker rpm
+`060A61C5…621E9F35` (both as published in Docker's install docs), MongoDB 8.0 `4B0752C1…4E7DCA05`, NodeSource deb
+`6F71F525…9B1BE0B4`, NodeSource rpm `242B8138…3AF28A14` (both also pinned by several independent projects), Sury and
+Remi as in `deploy/lib/repos.sh`. A vendor key rotation makes the add fail with "does not yield exactly the pinned
+fingerprint" until the pin is updated here — by design.
+
+Repositories already on a host (their list/repo file or the NodeSource marker exists) are left as they are.
+
+Tests: `ComponentRepoInstallerTest` — for docker, mongodb, nodejs and php on apt and dnf, only the pinned key is
+exported, no `| bash`, `| gpg` or `--add-repo` runs, and no repo file points `gpgkey` at a URL; Remi's release is
+installed with `localpkg_gpgcheck`; a key file without the pinned key adds no repository and installs nothing.
