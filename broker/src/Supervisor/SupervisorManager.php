@@ -91,7 +91,7 @@ final class SupervisorManager
         $spec['vhost_domain'] = $vhost;
         $spec['user'] = $this->runUser($name, $vhost, $input);
         if ($vhost !== null && $spec['user'] === SupervisedUser::USERNAME) {
-            $this->grantDirectoryAccess($spec['directory']);
+            $this->grantDirectoryAccess($spec['directory'], (string) $vhost);
         }
 
         $this->writeProgramConfig($name, $spec, null);
@@ -124,7 +124,7 @@ final class SupervisorManager
         }
         $spec['user'] = $this->runUser($name, $spec['vhost_domain'], $input);
         if ($spec['vhost_domain'] !== null && $spec['user'] === SupervisedUser::USERNAME) {
-            $this->grantDirectoryAccess($spec['directory']);
+            $this->grantDirectoryAccess($spec['directory'], (string) $spec['vhost_domain']);
         }
 
         $this->writeProgramConfig($name, $spec, $before);
@@ -602,16 +602,56 @@ INI;
         return $v === 'unexpected' ? 'unexpected' : ($v ? 'true' : 'false');
     }
 
-    private function grantDirectoryAccess(string $directory): void
+    private function grantDirectoryAccess(string $directory, string $domain): void
     {
         if ($this->runtime->getuid() !== 0) {
             return;
         }
+        // A100: root changes the ACL of a path that was validated once, against the
+        // www root as a whole, and that lies in a tree the site owns. Re-check it now:
+        // a plain path under the real www root (no symlinked component, A95), inside
+        // the top directory of the site the program is bound to - not another site's.
+        \AzerioidPanel\Broker\Vhost\VhostUser::assertStoredRootIsReal($this->runtime, $this->config, $directory);
+        $www = rtrim($this->runtime->realPath(rtrim($this->config->wwwRoot, '/')), '/');
+        $siteRoot = '';
+        $otherRoots = [];
+        foreach (\AzerioidPanel\Broker\Web\WebServers::for($this->config)->listVhosts($this->runtime, $this->config) as $v) {
+            $r = rtrim((string) ($v['root'] ?? ''), '/');
+            if (($v['domain'] ?? '') === $domain) {
+                $siteRoot = $r;
+            } elseif ($r !== '') {
+                $otherRoots[] = $r;
+            }
+        }
+        $dir = rtrim($directory, '/');
+        $top = static fn (string $p): string => str_starts_with($p, $www . '/') ? explode('/', substr($p, strlen($www) + 1))[0] : '';
+        if ($siteRoot === '' || $top($siteRoot) === '' || $top($dir) !== $top($siteRoot)) {
+            throw new BrokerException("The program directory {$directory} is not inside the site directory of {$domain}.", 3);
+        }
+        // On a top shared by several sites (A62/A63) the top alone does not say whose
+        // files these are: a directory in a sibling site's docroot is not this site's.
+        foreach ($otherRoots as $other) {
+            if (($dir === $other || str_starts_with($dir, $other . '/')) && !($siteRoot === $other || str_starts_with($siteRoot, $other . '/'))) {
+                throw new BrokerException("The program directory {$directory} is inside another site's web root; it is not inside the site directory of {$domain}.", 3);
+            }
+        }
+        // Run as the site's identity, not as root: it owns its tree and may set ACLs on
+        // its own files, and a path redirected after the checks above then reaches only
+        // what the site already owns. A directory it does not own just fails, which
+        // was already non-fatal (hosts without `acl` fall back to group access, A49).
         $user = SupervisedUser::USERNAME;
+        $runuser = '/usr/sbin/runuser';
+        foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+            if ($this->runtime->fileExists($bin)) {
+                $runuser = $bin;
+                break;
+            }
+        }
         $this->runtime->exec([
+            $runuser, '-u', \AzerioidPanel\Broker\Vhost\VhostUser::username($domain), '--',
             '/usr/bin/setfacl', '-m', 'u:' . $user . ':rwx',
             '-m', 'd:u:' . $user . ':rwx',
-            $directory,
+            '--', $directory,
         ], null, 15);
     }
 }
