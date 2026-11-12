@@ -2480,3 +2480,5 @@ Tests: `ElasticsearchTest` — a different key, the pinned key plus another prim
 subkey are each refused with no keyring or sources list left behind; on EL the repo file contains no
 `gpgkey=https://`. Not validated on a host: the gpg invocations mirror `repos.sh`, which was (A66), but this PHP
 port has only run against the fake runtime.
+
+**Validated on the Rocky staging host (2026-11-12)** against gpg 2.3.3 and the key fetched from artifacts.elastic.co: the genuine key yields a keyring with the single pinned primary, binary and armored; a file holding the pinned key plus a freshly generated second key yields the **same** one-key keyring (the second key is dropped rather than trusted); a file with only the other key is refused and leaves no output. No repository or rpm key was installed by the test.
