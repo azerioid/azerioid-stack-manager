@@ -162,13 +162,22 @@ final class AdminerTool
         }
 
         $dest = rtrim(self::TOOL_DIR, '/') . '/' . $filename;
-        if ($this->runtime->fileExists($dest)) {
-            $this->runtime->deleteFile($dest);
-        }
-        $this->runtime->rename($staging, $dest);
-        $this->runtime->exec(['/usr/bin/chown', AdminerUser::USERNAME . ':' . AdminerUser::USERNAME, $dest], null, 15);
-        $this->runtime->exec(['/usr/bin/chmod', '0640', $dest], null, 15);
+        $this->moveIntoToolDir($staging, $dest);
         $log->info('Installed ' . $dest);
+    }
+
+    /**
+     * A98: the tool directory belongs to the Adminer pool's account, so a path inside
+     * it is the account's to swap for a symlink. Set owner and mode while the file is
+     * still in the root-owned staging directory, then rename it in: rename() replaces
+     * whatever entry is at $dest (a planted link included) without following it, so
+     * root never chowns, chmods or writes through a path the account controls.
+     */
+    private function moveIntoToolDir(string $staged, string $dest): void
+    {
+        $this->runtime->exec(['/usr/bin/chown', '-h', AdminerUser::USERNAME . ':' . AdminerUser::USERNAME, $staged], null, 15);
+        $this->runtime->exec(['/usr/bin/chmod', '0640', $staged], null, 15);
+        $this->runtime->rename($staged, $dest);
     }
 
     private function writeFpmPool(OperationLogger $log): void
@@ -316,7 +325,15 @@ CADDY;
         $caddy = $this->runtime->fileExists($path) ? $this->runtime->readFile($path) : null;
         $poolFile = $this->fpmPoolFile();
         $fpm = $this->runtime->fileExists($poolFile) ? $this->runtime->readFile($poolFile) : null;
-        $artifact = $this->runtime->fileExists(self::ARTIFACT_PATH) ? $this->runtime->readFile(self::ARTIFACT_PATH) : null;
+        // A98: read as the pool's account, not as root. The entry is the account's to
+        // swap for a symlink (to /etc/shadow, say); a root read would copy that target
+        // into the rollback, which is then installed readable by the account. As the
+        // account, the read can only return what the account could read already.
+        $artifact = null;
+        if ($this->runtime->fileExists(self::ARTIFACT_PATH) || $this->runtime->isLink(self::ARTIFACT_PATH)) {
+            $read = $this->runtime->exec([$this->runuserBin(), '-u', AdminerUser::USERNAME, '--', '/bin/cat', '--', self::ARTIFACT_PATH], null, 30);
+            $artifact = $read->ok() ? $read->stdout : null;
+        }
 
         return ['caddy' => $caddy, 'fpm' => $fpm, 'artifact' => $artifact];
     }
@@ -345,7 +362,23 @@ CADDY;
                 $this->runtime->deleteFile(self::ARTIFACT_PATH);
             }
         } else {
-            $this->runtime->writeFile(self::ARTIFACT_PATH, $snap['artifact'], 0640);
+            // A98: staged in the root-owned staging dir and renamed in, as on install;
+            // a direct write would also leave it root:root, unreadable by the pool.
+            $this->runtime->mkdir($this->config->stagingDir, 0750);
+            $staged = rtrim($this->config->stagingDir, '/') . '/adminer-restore-' . bin2hex(random_bytes(6)) . '.php';
+            $this->runtime->writeFile($staged, $snap['artifact'], 0600);
+            $this->moveIntoToolDir($staged, self::ARTIFACT_PATH);
         }
+    }
+
+    private function runuserBin(): string
+    {
+        foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+            if ($this->runtime->fileExists($bin)) {
+                return $bin;
+            }
+        }
+
+        return '/usr/sbin/runuser';
     }
 }

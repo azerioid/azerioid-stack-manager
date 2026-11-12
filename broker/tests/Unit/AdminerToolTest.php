@@ -114,6 +114,20 @@ final class AdminerToolTest extends TestCase
         $this->assertFalse(str_starts_with(AdminerTool::TMP_DIR, AdminerTool::TOOL_DIR . '/'));
         $this->assertArrayHasKey(AdminerTool::ARTIFACT_PATH, $rt->files);
         $this->assertSame('<?php // fake adminer', $rt->files[AdminerTool::ARTIFACT_PATH]);
+
+        // A98: root changes owner and mode of the download only in the root-owned staging
+        // directory; nothing inside the pool-owned tool directory is chowned or chmodded.
+        $inToolDir = array_filter(
+            array_column($rt->execLog, 'command'),
+            static fn (array $c): bool => in_array($c[0] ?? '', ['/usr/bin/chown', '/usr/bin/chmod'], true)
+                && str_starts_with((string) end($c), AdminerTool::TOOL_DIR . '/')
+        );
+        $this->assertSame([], array_values($inToolDir));
+        $staged = array_values(array_filter(
+            array_column($rt->execLog, 'command'),
+            static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/chown' && in_array('-h', $c, true) && str_ends_with((string) end($c), '.download')
+        ));
+        $this->assertCount(1, $staged, 'the staged download is handed to the pool account before the rename');
     }
 
     public function test_uninstall_clears_routes_and_artifact(): void
@@ -164,5 +178,21 @@ final class AdminerToolTest extends TestCase
         $units = array_map(static fn (array $c): string => $c[2] ?? '', $reloads);
         $this->assertSame(2, count(array_keys($units, 'php8.4-fpm', true)), 'install and uninstall each reload the distro master: ' . json_encode($units));
         $this->assertNotContains('azerioid-panel-php-fpm', $units, 'the panel master does not hold the Adminer pool on apt');
+    }
+
+    /** A98: the rollback copy of adminer.php is read as the pool account, never by root through a path it controls. */
+    public function test_rollback_snapshot_reads_the_artifact_as_the_pool_account(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->files['/etc/os-release'] = "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n";
+        $rt->files[AdminerTool::ARTIFACT_PATH] = '<?php // previous';
+        $rt->execFn = static fn (array $c): ?\AzerioidPanel\Broker\ExecResult => ($c[0] ?? '') === '/usr/sbin/runuser' && in_array('/bin/cat', $c, true)
+            ? new \AzerioidPanel\Broker\ExecResult($c, 0, '<?php // previous', '')
+            : null;
+        $m = new \ReflectionMethod(AdminerTool::class, 'snapshot');
+        $snap = $m->invoke(new AdminerTool(new \AzerioidPanel\Broker\Config(), $rt));
+
+        $this->assertSame('<?php // previous', $snap['artifact']);
+        $this->assertContains(['/usr/sbin/runuser', '-u', \AzerioidPanel\Broker\Tool\AdminerUser::USERNAME, '--', '/bin/cat', '--', AdminerTool::ARTIFACT_PATH], array_column($rt->execLog, 'command'));
     }
 }
