@@ -167,7 +167,7 @@ final class VhostClone
         }
         // keepExec: the code above the docroot (vendor/bin, node_modules/.bin targets,
         // artisan, deploy scripts) must stay runnable, as it is on the source.
-        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp, true);
+        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp, true, $config->wwwRoot);
         // The handover above reset every file's mode, undoing the .env 0600 that
         // ensure()'s A72 pass had set — and that pass ran while everything above the
         // docroot was still root's, so it could not remove an escaping symlink there.

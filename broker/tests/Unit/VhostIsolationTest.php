@@ -647,7 +647,7 @@ final class VhostIsolationTest extends TestCase
 
                 return $this->ok();
             case '/usr/bin/chown':
-                $spec = $c[1] === '-h' ? $c[2] : $c[2];
+                $spec = $c[count($c) - 2];
                 $path = end($c);
                 [$owner, $group] = explode(':', $spec);
                 $this->treeOwner[$path] = $owner === '0' ? 'root' : $owner;

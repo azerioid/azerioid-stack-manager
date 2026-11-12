@@ -120,8 +120,8 @@ final class SitePoolTest extends TestCase
         $this->assertSame('isolated', $out['sites']['shop.example.com']['result']);
         $this->assertStringContainsString(self::OWN, $this->rt->files[self::CONF]);
         // What the shared pool wrote (uploads, caches) is handed to the site, group write kept.
-        $this->assertContains(['/usr/bin/chown', '-R', '-h', 'az-vh-shop-example-com:az-vh-shop-example-com', '/data/www/shop.example.com'], $this->commands());
-        $this->assertContains(['/usr/bin/chmod', '-R', 'g+rwX', '/data/www/shop.example.com'], $this->commands());
+        $this->assertContains(\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo('/data/www/shop.example.com', ['/usr/bin/chown', '-R', '-h', 'az-vh-shop-example-com:az-vh-shop-example-com', '.']), $this->commands());
+        $this->assertContains(['/usr/sbin/runuser', '-u', 'az-vh-shop-example-com', '--', ...\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo('/data/www/shop.example.com', ['/usr/bin/chmod', '-R', 'g+rwX', '.'])], $this->commands(), 'modes are set as the site, after the handover');
         $status = $migrator->status();
         $this->assertTrue($status['migrated']);
         $this->assertSame(['started' => false, 'reason' => 'nothing to do'], $migrator->converge(false));

@@ -2824,3 +2824,36 @@ Tests: `DockerWorkloadTest::test_data_volumes_are_bind_mounted_from_inside_the_a
 `NodeRuntimesTest::test_a_pm2_vhost_runs_under_the_chosen_major_and_can_move` now assert the pinned owner `chmod` and that
 no root `chmod` touched the leaf. The pinned form was checked on a real swapped directory: the command exits 1 and
 the link target keeps its mode.
+
+## A102 — Recursive handovers of a site's tree run pinned to the directory that was checked
+
+Security audit run-2 (2026-11-11), the race left open by A95 and A99. Both re-check a stored root (no symlinked
+component, no dot segment) right before a recursive `chown`/`chmod`, but the walk is a separate process that runs
+for seconds on a tree the site owns. Between the check and the walk the site can replace a component of a nested
+docroot — its own top directory, which `claimTop` gave it — with a link, and root's walk then starts wherever the
+link points.
+
+Decision: every recursive ownership or mode walk over a site-owned tree goes through `VhostUser::execPinned`. It
+pins the checked path itself — not a realpath taken at that moment, which would follow a swap made before it; only a
+trusted root-owned base (the www root, the PM2 base), which may be a link on some hosts, is mapped to its real path —
+and runs `sh -c 'cd -P -- "$1" && [ "$(pwd -P)" = "$1" ] && exec …' sh <real>
+<command> .`, so the command acts on `.` — the inode the shell entered — and a root swapped after the check fails the
+`pwd -P` comparison: nothing is changed. Inside the walk links are not followed: `chown -R -h`/`chgrp -R -h` (`-P` is
+the default), `find … -execdir`, `setfacl -R -P`, `chcon -R -h`. `chmod` has no no-follow mode, so once the `chown`
+has made the tree the site's, the mode walks run **as that owner** (`runuser -u <owner> --` around the pinned
+command): a leaf swapped for a link between `find`'s stat and the `chmod` then reaches only what the owner already
+owns. Octane's path for a supervised program (`setfacl -R -P`, or `chgrp -R -h` + `chmod -R g+rwX` without `acl`)
+runs as the site that owns the app tree (A49): it may set ACLs and modes on its own files and is a member of its own
+docroot group. A file in that tree the site does not own is left as it was instead of being changed by root. The callers are `VhostUser::applyOwnership`, the
+`SitePool` handover, the PM2 home, and Octane's app and Laravel writable directories. Root-owned trees (panel, mail,
+Node runtimes) are not site-writable and stay as they are. A failed pin is treated like a failed walk was before:
+best effort, except where the caller already required success.
+
+`FakeRuntime` unwraps a pinned command for its simulations (the shell would run the inner command on that
+directory); the log keeps the pinned form.
+
+Tests: `AuditHardeningTest::test_a_pinned_command_refuses_a_directory_swapped_for_a_link` runs the pinned form with
+the real shell on a temporary directory swapped for a link, both as the raw pinned form and through `execPinned` with
+`PosixRuntime` (the command fails, the target keeps its mode);
+`test_recursive_handovers_of_site_trees_are_pinned` refuses an unpinned recursive walk in those files; the
+VhostClone, VhostIsolation, SitePool and Octane tests assert the pinned form.

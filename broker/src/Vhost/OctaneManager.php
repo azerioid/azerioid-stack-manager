@@ -99,7 +99,7 @@ final class OctaneManager
         // Composer / octane:install write vendor + the FrankenPHP binary, and the worker writes
         // storage: the account it runs as (the site's own, A56) needs the full Laravel app.
         $user = ProgramIdentity::userFor($this->runtime, $domain, self::programName($domain));
-        $this->ensureAppWritable($appDir, VhostUser::docrootGroup($this->runtime, $domain), $user);
+        $this->ensureAppWritable($appDir, VhostUser::docrootGroup($this->runtime, $domain), $user, VhostUser::username($domain));
         $this->installOctanePackage($appDir, $php, $user);
         $this->installFrankenPhpServer($appDir, $php, $user);
 
@@ -462,7 +462,7 @@ final class OctaneManager
         ]));
     }
 
-    private function ensureAppWritable(string $appDir, string $group, string $runAs): void
+    private function ensureAppWritable(string $appDir, string $group, string $runAs, string $siteUser): void
     {
         if ($this->runtime->getuid() !== 0) {
             return;
@@ -473,8 +473,9 @@ final class OctaneManager
         if (ProgramIdentity::isSiteIdentity($runAs)) {
             // The site's own files: whatever another account left in them becomes the site's,
             // group write kept (A55 does the same when a site gets its PHP pool).
-            $this->runtime->exec(['/usr/bin/chown', '-R', '-h', $runAs . ':' . $group, $appDir], null, 600);
-            $this->runtime->exec(['/usr/bin/chmod', '-R', 'g+rwX', $appDir], null, 600);
+            // A102: pinned to the checked app directory for the length of the walk.
+            VhostUser::execPinned($this->runtime, $appDir, ['/usr/bin/chown', '-R', '-h', $runAs . ':' . $group, '.'], 600, $this->config->wwwRoot);
+            VhostUser::execPinned($this->runtime, $appDir, ['/usr/bin/chmod', '-R', 'g+rwX', '.'], 600, $this->config->wwwRoot, $runAs);
 
             return;
         }
@@ -490,23 +491,28 @@ final class OctaneManager
             }
         }
         if ($setfacl !== null) {
-            $acl = $this->runtime->exec([
+            // A102: pinned, a physical walk (-P), and run as the site that owns the tree
+            // (A49 hands it every file): neither setfacl nor chmod has a no-follow mode
+            // for the leaf, so a link swapped in mid-walk reaches only the site's files.
+            $acl = VhostUser::execPinned($this->runtime, $appDir, [
                 $setfacl,
                 '-R',
+                '-P',
                 '-m',
                 'u:' . $user . ':rwx',
                 '-m',
                 'd:u:' . $user . ':rwx',
-                $appDir,
-            ], null, 120);
+                '.',
+            ], 120, $this->config->wwwRoot, $siteUser);
             if ($acl->ok()) {
                 return;
             }
         }
 
         // Group-writable fallback: supervised is a member of every vhost group (A49).
-        $this->runtime->exec(['/bin/chgrp', '-R', $group, $appDir], null, 60);
-        $this->runtime->exec(['/bin/chmod', '-R', 'g+rwX', $appDir], null, 60);
+        // The site is a member of its own docroot group, so it can make that change itself.
+        VhostUser::execPinned($this->runtime, $appDir, ['/bin/chgrp', '-R', '-h', $group, '.'], 60, $this->config->wwwRoot, $siteUser);
+        VhostUser::execPinned($this->runtime, $appDir, ['/bin/chmod', '-R', 'g+rwX', '.'], 60, $this->config->wwwRoot, $siteUser);
     }
 
     /**
@@ -551,14 +557,15 @@ final class OctaneManager
             }
             // Own as the FPM pool user so SQLite/session writes work after Octane
             // (azerioid-supervised) owned the tree; keep the vhost group for group share.
-            $this->runtime->exec(['/bin/chown', '-R', '-h', $phpUser . ':' . $phpGroup, $writable], null, 30);
-            $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
+            // A102: pinned to the checked directory for the length of the walk.
+            VhostUser::execPinned($this->runtime, $writable, ['/bin/chown', '-R', '-h', $phpUser . ':' . $phpGroup, '.'], 30, $this->config->wwwRoot);
+            VhostUser::execPinned($this->runtime, $writable, ['/bin/chmod', '-R', 'ug+rwX', '.'], 30, $this->config->wwwRoot, $phpUser);
             // Best-effort SELinux rw label (no-op when chcon is absent / SELinux off).
             foreach (['/usr/bin/chcon', '/bin/chcon'] as $chcon) {
                 if ($this->runtime->fileExists($chcon)) {
-                    $this->runtime->exec([
-                        $chcon, '-R', '-h', '-t', 'httpd_sys_rw_content_t', $writable,
-                    ], null, 60);
+                    VhostUser::execPinned($this->runtime, $writable, [
+                        $chcon, '-R', '-h', '-t', 'httpd_sys_rw_content_t', '.',
+                    ], 60, $this->config->wwwRoot);
                     break;
                 }
             }

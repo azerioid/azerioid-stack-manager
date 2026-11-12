@@ -473,6 +473,61 @@ final class AuditHardeningTest extends TestCase
         VhostUser::ensure($rt, new Config(), 'site.test', '/data/www/site/../../etc');
     }
 
+    /**
+     * A102: the pinned form, run by the real shell — a directory swapped for a link
+     * after the broker resolved it fails the `pwd -P` check and the link target is
+     * left alone; the unswapped directory is changed as asked.
+     */
+    public function test_a_pinned_command_refuses_a_directory_swapped_for_a_link(): void
+    {
+        $base = sys_get_temp_dir() . '/az-pin-' . bin2hex(random_bytes(4));
+        mkdir($base . '/site', 0755, true);
+        mkdir($base . '/other', 0755);
+        $site = (string) realpath($base . '/site');
+        $other = (string) realpath($base . '/other');
+        $run = static function (string $dir, string $mode): int {
+            $argv = \AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo($dir, ['/bin/chmod', $mode, '.']);
+            exec(implode(' ', array_map('escapeshellarg', $argv)) . ' 2>/dev/null', $out, $code);
+
+            return $code;
+        };
+        try {
+            $this->assertSame(0, $run($site, '0700'));
+            clearstatcache();
+            $this->assertSame(0700, fileperms($site) & 0777);
+
+            rmdir($site);
+            symlink($other, $site);
+            $this->assertNotSame(0, $run($site, '0777'), 'a swapped directory must fail the pin');
+            // execPinned pins the checked path itself: a swap made before the call
+            // must not be followed by resolving the path again.
+            $res = \AzerioidPanel\Broker\Vhost\VhostUser::execPinned(new \AzerioidPanel\Broker\PosixRuntime(), $site, ['/bin/chmod', '0777', '.'], 10);
+            $this->assertFalse($res->ok(), 'execPinned must not re-resolve a swapped directory');
+            clearstatcache();
+            $this->assertSame(0755, fileperms($other) & 0777, 'the link target must be left alone');
+        } finally {
+            @unlink($site);
+            @rmdir($site);
+            @rmdir($other);
+            @rmdir($base);
+        }
+    }
+
+    public function test_recursive_handovers_of_site_trees_are_pinned(): void
+    {
+        $sources = ['Vhost/VhostUser.php', 'Php/SitePool.php', 'Vhost/OctaneManager.php', 'Vhost/Pm2Manager.php'];
+        foreach ($sources as $file) {
+            $src = (string) file_get_contents(dirname(__DIR__, 2) . '/src/' . $file);
+            // Every recursive ownership/mode walk in these files goes through execPinned.
+            preg_match_all("/->exec\\(\\['[^']*\\/(chown|chmod|chgrp|setfacl|chcon)', '-R'/", $src, $m);
+            $this->assertSame([], $m[0], "{$file} has an unpinned recursive walk");
+            // ...and a pinned mode/ACL/group walk names the owner to run as (no root chmod
+            // over a site's tree: chmod and setfacl follow a leaf link).
+            preg_match_all("/execPinned\\([^;]*(?:chmod|chgrp|setfacl)[^;]*->wwwRoot\\);/s", $src, $m);
+            $this->assertSame([], $m[0], "{$file} runs a mode walk as root");
+        }
+    }
+
     public function test_ensure_still_hands_over_a_plain_stored_docroot(): void
     {
         $rt = new FakeRuntime();
@@ -480,7 +535,9 @@ final class AuditHardeningTest extends TestCase
 
         VhostUser::ensure($rt, new Config(), 'site.test', '/data/www/site/app/public');
 
-        $this->assertContains(['/usr/bin/chown', '-R', 'az-vh-site-test:az-vh-site-test', '/data/www/site/app/public'], array_column($rt->execLog, 'command'));
+        $this->assertContains(\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo('/data/www/site/app/public', ['/usr/bin/chown', '-R', '-h', 'az-vh-site-test:az-vh-site-test', '.']), array_column($rt->execLog, 'command'));
+        // A102: the mode walks run as the site once it owns the tree (chmod follows a leaf link).
+        $this->assertContains(['/usr/sbin/runuser', '-u', 'az-vh-site-test', '--', ...\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo('/data/www/site/app/public', ['/usr/bin/find', '.', '-type', 'f', '-execdir', '/bin/chmod', '0660', '{}', '+'])], array_column($rt->execLog, 'command'));
     }
 
     /**

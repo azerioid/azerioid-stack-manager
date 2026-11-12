@@ -901,7 +901,8 @@ final class Pm2Manager
             }
         }
         if ($this->runtime->getuid() === 0) {
-            $this->runtime->exec(['/bin/chown', '-R', $user . ':' . $group, $home], null, 30);
+            // A102: pinned; the home is the site's, and its tree is the site's to rearrange.
+            VhostUser::execPinned($this->runtime, $home, ['/bin/chown', '-R', '-h', $user . ':' . $group, '.'], 30, $base);
         }
 
         return $home;
