@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\PosixRuntime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Validator;
 use AzerioidPanel\Broker\Config;
+use AzerioidPanel\Broker\Vhost\VhostUser;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -438,6 +439,48 @@ final class AuditHardeningTest extends TestCase
             rmdir($www . '/b.test');
             rmdir($www);
         }
+    }
+
+    /**
+     * A95: a stored nested docroot is re-checked before root changes its ownership; a
+     * directory on the way that the site has since swapped for a symlink stops it.
+     */
+    public function test_ensure_refuses_a_stored_docroot_with_a_symlinked_component(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dirs['/data/www/site/app/public'] = true;
+        $rt->links['/data/www/site/app'] = true;
+
+        try {
+            VhostUser::ensure($rt, new Config(), 'site.test', '/data/www/site/app/public');
+            $this->fail('expected refusal');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('symlink', $e->getMessage());
+        }
+        $recursive = array_filter(
+            array_column($rt->execLog, 'command'),
+            static fn (array $c): bool => in_array('-R', $c, true) || str_contains(implode(' ', $c), 'find ')
+        );
+        $this->assertSame([], $recursive, 'no recursive ownership change may run on that root');
+    }
+
+    public function test_ensure_refuses_a_stored_docroot_that_climbs_out_of_the_base(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dirs['/data/www/site/../../etc'] = true;
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('not a plain path under');
+        VhostUser::ensure($rt, new Config(), 'site.test', '/data/www/site/../../etc');
+    }
+
+    public function test_ensure_still_hands_over_a_plain_stored_docroot(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dirs['/data/www/site/app/public'] = true;
+
+        VhostUser::ensure($rt, new Config(), 'site.test', '/data/www/site/app/public');
+
+        $this->assertContains(['/usr/bin/chown', '-R', 'az-vh-site-test:az-vh-site-test', '/data/www/site/app/public'], array_column($rt->execLog, 'command'));
     }
 
     public function test_write_file_is_never_world_readable_for_a_private_mode(): void
