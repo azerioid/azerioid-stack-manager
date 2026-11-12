@@ -83,6 +83,23 @@ CADDY;
         $this->assertTrue($spawned, 'expected systemd-run ttyd spawn');
     }
 
+    public function test_the_auth_subrequest_is_pinned_to_the_loopback_site(): void
+    {
+        // A92: mirror of the Adminer route (AdminerToolTest). The session check must be
+        // answered by the panel's loopback site whatever Host the browser sent.
+        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'shop.example.com'], [
+            'admin_user_id' => '1',
+            'source_ip' => '127.0.0.1',
+        ]);
+        $this->assertSame(0, $code, json_encode($json));
+
+        $routes = (string) ($this->rt->files[$this->cfg->terminalCaddyRoutesPath] ?? '');
+        $this->assertMatchesRegularExpression(
+            '~forward_auth 127\.0\.0\.1:\d+ \{\n\s+uri /internal/terminal/auth/[a-f0-9]+\n\s+header_up Host 127\.0\.0\.1\n\s+\}~',
+            $routes
+        );
+    }
+
     public function test_ttyd_binds_a_unix_socket_not_a_loopback_port(): void
     {
         // A70: ttyd must bind a per-session UNIX socket in a 2750 dir owned by

@@ -535,6 +535,11 @@ final class TerminalManager
             $lines[] = "handle /terminal/{$id}/* {";
             $lines[] = "    forward_auth {$auth} {";
             $lines[] = "        uri /internal/terminal/auth/{$id}";
+            // A92: pin the subrequest to the loopback site. Without it the request's own
+            // Host is passed on, and on a public listener that Host matches no site on
+            // the loopback listener — so the answer would come from Caddy, not from the
+            // panel's session check. AdminerTool::writeCaddyRoutes does the same.
+            $lines[] = '        header_up Host 127.0.0.1';
             $lines[] = '    }';
             $lines[] = "    reverse_proxy unix/{$socket}";
             $lines[] = '}';
