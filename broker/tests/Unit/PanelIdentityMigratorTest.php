@@ -531,7 +531,7 @@ final class PanelIdentityMigratorTest extends TestCase
         $this->rt->files[$this->config->panelRoot . '/COMMIT'] = str_repeat('b', 40) . "\n";
         $this->rt->files[$this->config->panelRoot . '/TAG'] = "v2.0.0\n";
         $this->rt->script(['/usr/bin/git', '-C', $src, 'status', '--porcelain'], 0, '');
-        $this->rt->script(['/usr/bin/git', '-C', $src, 'tag', '-l', 'v*'], 0, "v1.10.2\nv2.0.0\n");
+        $this->rt->script(['/usr/bin/git', '-C', $src, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'], 0, "v1.10.2\nv2.0.0\n");
         $this->rt->script(['/usr/bin/git', '-C', $src, 'rev-parse', 'v1.10.2^{commit}'], 0, str_repeat('a', 40) . "\n");
 
         try {

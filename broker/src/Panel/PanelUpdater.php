@@ -27,6 +27,11 @@ final class PanelUpdater
     public const LOG_SUMMARY_LIMIT = 30;
     public const TAG_LIST_LIMIT = 50;
 
+    /** A104: the release branch every applied tag must be on. */
+    private const MAIN_REF = 'refs/remotes/origin/main';
+
+    private const MAIN_REFSPEC = '+refs/heads/main:refs/remotes/origin/main';
+
     public function __construct(
         private readonly Config $config,
         private readonly Runtime $runtime,
@@ -106,8 +111,11 @@ final class PanelUpdater
     /**
      * @return array<string, mixed>
      */
-    public function apply(string $operationId, string $confirm, ?string $requestedTag = null): array
+    public function apply(string $operationId, string $confirm, ?string $requestedTag = null, ?string $expectedCommit = null): array
     {
+        if ($expectedCommit !== null && preg_match('/^[0-9a-f]{40}$/', $expectedCommit) !== 1) {
+            throw new BrokerException('Invalid expected commit.', 2);
+        }
         Validator::typedConfirm($confirm, self::CONFIRM);
         $operationId = Validator::operationId($operationId);
         $log = $this->logger($operationId);
@@ -149,6 +157,19 @@ final class PanelUpdater
 
             $targetTag = $this->resolveTargetTag($requestedTag, $tags);
             $target = $this->revParse($source, $targetTag);
+            // A104: the commit the tag resolves to now must itself be on origin/main
+            // (the list above was filtered by name), and must be the release the admin
+            // was shown when one was passed — not whatever tag appeared since.
+            if (!$this->isAncestor($source, $target, self::MAIN_REF)) {
+                throw new BrokerException('Refusing panel update: ' . $targetTag . ' is not on the release branch (origin/main).', 3);
+            }
+            if ($expectedCommit !== null && $expectedCommit !== $target) {
+                throw new BrokerException(
+                    'Refusing panel update: ' . $targetTag . ' is ' . substr($target, 0, 7) . ', not the '
+                    . substr($expectedCommit, 0, 7) . ' that was checked. Check for updates again.',
+                    3
+                );
+            }
             $log->info('Target tag: ' . $targetTag . ' (' . substr($target, 0, 7) . ')');
 
             if ($preCommit === null) {
@@ -449,10 +470,11 @@ final class PanelUpdater
 
     private function fetchTags(string $source): void
     {
-        $fetch = $this->git($source, ['fetch', '--prune', '--tags', 'origin'], 120);
+        // A104: origin/main is fetched explicitly — a release must be on it.
+        $fetch = $this->git($source, ['fetch', '--prune', '--tags', 'origin', self::MAIN_REFSPEC], 120);
         if (!$fetch->ok()) {
             // Older remotes may reject --tags with prune; retry without prune flags combo.
-            $fetch = $this->git($source, ['fetch', '--tags', 'origin'], 120);
+            $fetch = $this->git($source, ['fetch', '--tags', 'origin', self::MAIN_REFSPEC], 120);
         }
         if (!$fetch->ok()) {
             throw new BrokerException('git fetch --tags failed: ' . $this->execDetail($fetch), 1);
@@ -462,7 +484,9 @@ final class PanelUpdater
     /** @return list<string> newest-first normalized release tags */
     private function listReleaseTags(string $source): array
     {
-        $listed = $this->git($source, ['tag', '-l', 'v*'], 30);
+        // A104: only tags on the release branch count. A tag pushed on any other commit
+        // (a side branch, a commit never merged) is not a release, however high it is.
+        $listed = $this->git($source, ['tag', '-l', '--merged', self::MAIN_REF, 'v*'], 30);
         if (!$listed->ok()) {
             throw new BrokerException('git tag -l failed: ' . $this->execDetail($listed), 1);
         }

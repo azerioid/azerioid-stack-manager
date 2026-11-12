@@ -127,12 +127,12 @@ final class PanelUpdaterTest extends TestCase
         $runtime->files[$config->panelRoot . '/VERSION'] = "0.2.2\n";
 
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
             0,
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'],
             0,
             "v0.2.1\nv0.2.10\nv0.2.2\nv0.2.9\n"
         );
@@ -172,12 +172,12 @@ final class PanelUpdaterTest extends TestCase
         $runtime->files[$config->panelRoot . '/VERSION'] = "0.2.2\n";
 
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
             0,
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'],
             0,
             "v0.2.1\nv0.2.2\n"
         );
@@ -231,12 +231,12 @@ final class PanelUpdaterTest extends TestCase
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
             0,
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'],
             0,
             "v0.2.2\n"
         );
@@ -260,6 +260,72 @@ final class PanelUpdaterTest extends TestCase
         }
     }
 
+    /** A104: a tag must be on origin/main and be the release that was checked. */
+    private function releaseFixture(string $target, int $onMain): array
+    {
+        $runtime = new FakeRuntime();
+        $config = new Config();
+        $config->panelSourcePath = '/var/lib/azerioid-panel/src';
+        $config->panelRoot = '/usr/local/lib/azerioid-panel';
+        $runtime->dirs[$config->panelSourcePath] = true;
+        $runtime->dirs[$config->panelSourcePath . '/.git'] = true;
+        $runtime->files[$config->panelRoot . '/COMMIT'] = str_repeat('a', 40) . "\n";
+        $runtime->files[$config->panelRoot . '/TAG'] = "v0.2.1\n";
+        $git = static fn (string ...$a): array => ['/usr/bin/git', '-C', $config->panelSourcePath, ...$a];
+        $runtime->script($git('status', '--porcelain'), 0, '');
+        $runtime->script($git('fetch', '--prune', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'), 0, '');
+        $runtime->script($git('tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'), 0, "v0.2.1\nv0.2.2\n");
+        $runtime->script($git('rev-parse', 'v0.2.2^{commit}'), 0, $target . "\n");
+        $runtime->script($git('merge-base', '--is-ancestor', $target, str_repeat('a', 40)), 1, '');
+        $runtime->script($git('merge-base', '--is-ancestor', $target, 'refs/remotes/origin/main'), $onMain, '');
+
+        return [$runtime, $config];
+    }
+
+    /** The refused commit is never checked out (a failed apply re-deploys the old one). */
+    private static function assertNothingDeployed(FakeRuntime $runtime): void
+    {
+        foreach (array_column($runtime->execLog, 'command') as $c) {
+            if (in_array('checkout', $c, true)) {
+                self::assertNotContains(str_repeat('b', 40), $c, 'the refused commit is never checked out');
+            }
+        }
+    }
+
+    public function test_apply_refuses_a_tag_whose_commit_is_not_on_main(): void
+    {
+        [$runtime, $config] = $this->releaseFixture(str_repeat('b', 40), 1);
+        try {
+            (new PanelUpdater($config, $runtime))->apply('op-offmain', PanelUpdater::CONFIRM);
+            $this->fail('a tag off origin/main must be refused');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('not on the release branch', $e->getMessage());
+        }
+        self::assertNothingDeployed($runtime);
+    }
+
+    public function test_apply_refuses_a_release_other_than_the_one_checked(): void
+    {
+        [$runtime, $config] = $this->releaseFixture(str_repeat('b', 40), 0);
+        try {
+            (new PanelUpdater($config, $runtime))->apply('op-moved', PanelUpdater::CONFIRM, null, str_repeat('c', 40));
+            $this->fail('a release other than the checked one must be refused');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('Check for updates again', $e->getMessage());
+        }
+        self::assertNothingDeployed($runtime);
+    }
+
+    public function test_release_tags_are_listed_from_main_only(): void
+    {
+        [$runtime, $config] = $this->releaseFixture(str_repeat('b', 40), 0);
+        $runtime->script(['/usr/bin/git', '-C', $config->panelSourcePath, 'log', str_repeat('a', 40) . '..' . str_repeat('b', 40), '--oneline', '-n', '30'], 0, '');
+        (new PanelUpdater($config, $runtime))->check();
+        $cmds = array_column($runtime->execLog, 'command');
+        $this->assertContains(['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'], $cmds);
+        $this->assertNotContains(['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'], $cmds);
+    }
+
     public function test_apply_rejects_unknown_tag(): void
     {
         $runtime = new FakeRuntime();
@@ -277,12 +343,12 @@ final class PanelUpdaterTest extends TestCase
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'fetch', '--prune', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
             0,
             ''
         );
         $runtime->script(
-            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', 'v*'],
+            ['/usr/bin/git', '-C', $config->panelSourcePath, 'tag', '-l', '--merged', 'refs/remotes/origin/main', 'v*'],
             0,
             "v0.2.1\nv0.2.2\n"
         );

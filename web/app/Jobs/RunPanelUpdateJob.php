@@ -65,6 +65,10 @@ class RunPanelUpdateJob implements ShouldQueue
             ];
             if (is_string($operation->target_tag) && $operation->target_tag !== '') {
                 $stdin['tag'] = $operation->target_tag;
+            } elseif (is_string($operation->to_commit) && preg_match('/^[0-9a-f]{40}$/', $operation->to_commit) === 1) {
+                // A104: "latest" means the release the admin was shown, not whatever
+                // tag is highest when the job runs.
+                $stdin['expected_commit'] = $operation->to_commit;
             }
             $response = $broker->call(
                 'panel.update.apply',
