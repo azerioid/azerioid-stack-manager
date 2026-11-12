@@ -20,13 +20,16 @@
             </div>
             <div id="terminal-host" class="h-[min(70vh,560px)] w-full overflow-hidden rounded border border-white/10 bg-black"></div>
         </div>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
-        <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+        {{-- A106: xterm is bundled (resources/js/vhost-terminal.js), not loaded from a CDN. --}}
+        @vite('resources/js/vhost-terminal.js')
         <script>
-        (function () {
+        (function init() {
             const panel = document.getElementById('vhost-terminal-panel');
-            if (!panel || !window.Terminal || panel.dataset.initialized === '1') return;
+            if (!panel || panel.dataset.initialized === '1') return;
+            if (!window.Terminal) {
+                window.addEventListener('az-xterm-ready', init, { once: true });
+                return;
+            }
             panel.dataset.initialized = '1';
 
             const sessionId = panel.dataset.sessionId;

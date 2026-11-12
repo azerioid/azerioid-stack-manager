@@ -349,6 +349,27 @@ class AuthTest extends TestCase
         $response->assertHeader('X-Frame-Options', 'DENY');
         $response->assertHeader('X-Content-Type-Options', 'nosniff');
         $this->assertNotEmpty($response->headers->get('Content-Security-Policy'));
+        // A106: no third-party script or style host is trusted in the admin origin.
+        $this->assertStringNotContainsString('cdn.jsdelivr.net', (string) $response->headers->get('Content-Security-Policy'));
+        $this->assertMatchesRegularExpression("/script-src 'self' 'unsafe-inline' 'unsafe-eval';/", (string) $response->headers->get('Content-Security-Policy'));
+    }
+
+    /** A106: no view loads a script or stylesheet from another host (bundle it with Vite instead). */
+    public function test_no_view_loads_remote_scripts_or_styles(): void
+    {
+        $offenders = [];
+        $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(resource_path('views')));
+        foreach ($it as $file) {
+            if (!$file->isFile() || !str_ends_with($file->getFilename(), '.php')) {
+                continue;
+            }
+            $src = (string) file_get_contents($file->getPathname());
+            if (preg_match_all('#<script[^>]*\ssrc=["\']?(?:https?:)?//#i', $src, $m) > 0
+                || preg_match_all('#<link[^>]*rel=["\']?stylesheet[^>]*href=["\']?(?:https?:)?//(?!fonts\.bunny\.net)#i', $src, $m) > 0) {
+                $offenders[] = $file->getPathname();
+            }
+        }
+        $this->assertSame([], $offenders);
     }
 
     public function test_guest_cannot_hit_dashboard(): void

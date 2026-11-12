@@ -2962,3 +2962,19 @@ Tests: `NodeRuntimesTest` — the install runs `npm ci` from the shipped lockfil
 exact lockfile, links the binaries, and runs no `-g` install; the shipped lockfile pins an exact version and gives
 every package a sha512 integrity from the npm registry. Checked by hand: `npm ci` from the lockfile into a scratch
 prefix installs 45 packages and the PM2 API loads at 7.1.2.
+
+## A106 — The terminal emulator is bundled with the panel; no CDN in the admin origin
+
+Security audit run-2 (2026-11-11), finding AZ-09. The site terminal page loaded `@xterm/xterm` 5.5.0 and
+`@xterm/addon-fit` 0.10.0 (script and stylesheet) from `cdn.jsdelivr.net` without Subresource Integrity, and the CSP
+listed that host in `script-src` and `style-src` on every page. Whatever the CDN returned for those URLs ran in the
+admin session, which can drive the root broker.
+
+Decision: both packages are exact dependencies in `web/package.json` and bundled by Vite through
+`resources/js/vhost-terminal.js`, which exposes `Terminal`/`FitAddon` as before and fires `az-xterm-ready`; the
+page's inline code waits for it (Vite modules run deferred). `https://cdn.jsdelivr.net` is removed from the CSP.
+`web/public/build` is rebuilt (the shared `app.css` also picks up two classes the views already used).
+
+Tests: `AuthTest` — the CSP names no CDN script host; no view loads a script, or a stylesheet other than the
+`fonts.bunny.net` font CSS, from another host. Checked in a browser: the built module opens a terminal and the fit
+addon sizes it.
