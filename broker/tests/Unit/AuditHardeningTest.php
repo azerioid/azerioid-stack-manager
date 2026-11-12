@@ -8,6 +8,7 @@ use AzerioidPanel\Broker\FakeRuntime;
 use AzerioidPanel\Broker\PosixRuntime;
 use AzerioidPanel\Broker\Supervisor\SupervisedUser;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Config;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -325,6 +326,36 @@ final class AuditHardeningTest extends TestCase
         }
     }
 
+    /** A94: a symlink inside one site's tree must not move its docroot into another site. */
+    public function test_web_root_refuses_a_symlink_into_another_site_directory(): void
+    {
+        $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
+        mkdir($www . '/a.test', 0700, true);
+        mkdir($www . '/b.test/current', 0700, true);
+        symlink($www . '/b.test', $www . '/a.test/public');
+        symlink($www . '/b.test/current', $www . '/b.test/public');
+        try {
+            try {
+                Validator::webRoot($www . '/a.test/public', $www, new PosixRuntime());
+                $this->fail('expected refusal');
+            } catch (BrokerException $e) {
+                $this->assertStringContainsString('another directory under the base', $e->getMessage());
+            }
+            // A link that stays inside its own site directory is still fine.
+            $this->assertSame(
+                realpath($www) . '/b.test/current',
+                Validator::webRoot($www . '/b.test/public', $www, new PosixRuntime())
+            );
+        } finally {
+            unlink($www . '/a.test/public');
+            unlink($www . '/b.test/public');
+            rmdir($www . '/b.test/current');
+            rmdir($www . '/b.test');
+            rmdir($www . '/a.test');
+            rmdir($www);
+        }
+    }
+
     public function test_web_root_still_accepts_an_ordinary_nested_docroot(): void
     {
         $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
@@ -339,6 +370,73 @@ final class AuditHardeningTest extends TestCase
             foreach (['/shop.example.com/releases/v1.2_3/public', '/shop.example.com/releases/v1.2_3', '/shop.example.com/releases', '/shop.example.com', ''] as $d) {
                 rmdir($www . $d);
             }
+        }
+    }
+
+    /** A94: a dangling symlink in the requested path is refused (its future target is unknown). */
+    public function test_web_root_refuses_a_dangling_symlink_on_the_way(): void
+    {
+        $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
+        mkdir($www . '/a.test', 0700, true);
+        symlink($www . '/b.test/not-yet', $www . '/a.test/public');
+        try {
+            $this->expectException(BrokerException::class);
+            $this->expectExceptionMessage('target does not exist');
+            Validator::webRoot($www . '/a.test/public/html', $www, new PosixRuntime());
+        } finally {
+            unlink($www . '/a.test/public');
+            rmdir($www . '/a.test');
+            rmdir($www);
+        }
+    }
+
+    /** A94: the overlap check compares resolved roots, so a stored root written through a symlinked base still matches. */
+    public function test_root_overlap_check_compares_resolved_paths(): void
+    {
+        $real = sys_get_temp_dir() . '/azaudit-real-' . bin2hex(random_bytes(4));
+        $alias = $real . '-alias';
+        mkdir($real . '/b.test/public', 0700, true);
+        symlink($real, $alias);
+        $cfg = new Config();
+        $cfg->wwwRoot = $alias;
+        $rt = new FakeRuntime();
+        $rt->files['/etc/caddy/Caddyfile'] = "import /etc/caddy/conf.d/*.conf\n";
+        // b.test was stored through the alias of the base, not its real path.
+        $rt->files['/etc/caddy/conf.d/b.test.conf'] = "b.test {\n    root * {$alias}/b.test/public\n    file_server\n}\n";
+        try {
+            \AzerioidPanel\Broker\Web\WebServers::assertRootNotShared($rt, $cfg, 'a.test', realpath($real) . '/b.test/public');
+            $this->fail('expected an overlap refusal');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('overlaps the web root of b.test', $e->getMessage());
+        } finally {
+            unlink($alias);
+            rmdir($real . '/b.test/public');
+            rmdir($real . '/b.test');
+            rmdir($real);
+        }
+    }
+
+    /** A94: a site that points its own stored root at '/' must not block every other vhost's edit. */
+    public function test_root_overlap_check_does_not_follow_links_inside_other_sites(): void
+    {
+        $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
+        mkdir($www . '/b.test', 0700, true);
+        mkdir($www . '/a.test/public', 0700, true);
+        symlink('/', $www . '/b.test/public');
+        $cfg = new Config();
+        $cfg->wwwRoot = $www;
+        $rt = new FakeRuntime();
+        $rt->files['/etc/caddy/Caddyfile'] = "import /etc/caddy/conf.d/*.conf\n";
+        $rt->files['/etc/caddy/conf.d/b.test.conf'] = "b.test {\n    root * {$www}/b.test/public\n    file_server\n}\n";
+        try {
+            \AzerioidPanel\Broker\Web\WebServers::assertRootNotShared($rt, $cfg, 'a.test', realpath($www) . '/a.test/public');
+            $this->assertTrue(true);
+        } finally {
+            unlink($www . '/b.test/public');
+            rmdir($www . '/a.test/public');
+            rmdir($www . '/a.test');
+            rmdir($www . '/b.test');
+            rmdir($www);
         }
     }
 

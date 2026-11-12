@@ -176,6 +176,24 @@ final class Validator
         if (!self::isPlainPath($resolved)) {
             throw new BrokerException('Web root resolves to a path with characters a web server config cannot hold (allowed: letters, digits and . _ - + @ ~ /).', 2);
         }
+        // A94: the resolved path must stay in the site directory that was asked for.
+        // A symlink a site plants inside its own tree may point anywhere under the
+        // base, including another site's directory; storing that as the docroot
+        // later makes root hand the other site's files to this site (VhostUser).
+        // In-site links (current -> releases/x) keep the same top and still work.
+        // A link whose target does not exist yet resolves as plain text, so the top
+        // check below could not see where it will point once the target appears.
+        $cur = $baseNormalized;
+        foreach (array_filter(explode('/', substr($normalized, strlen($baseNormalized))), static fn ($s) => $s !== '') as $seg) {
+            $cur .= '/' . $seg;
+            if ($runtime->isLink($cur) && !$runtime->fileExists($cur)) {
+                throw new BrokerException('Web root passes through a symlink whose target does not exist.', 2);
+            }
+        }
+        $want = self::topUnder($normalized, $baseNormalized);
+        if ($want !== '' && self::topUnder($resolved, rtrim($runtime->realPath($baseNormalized), '/')) !== $want) {
+            throw new BrokerException('Web root resolves into another directory under the base (symlink); point it inside its own site directory.', 2);
+        }
 
         return $resolved;
     }
@@ -184,6 +202,16 @@ final class Validator
     private static function isPlainPath(string $s): bool
     {
         return preg_match('#^[A-Za-z0-9._+@~/-]+$#D', $s) === 1;
+    }
+
+    /** First path component of $path below $base ('' for the base itself or a path outside it). */
+    private static function topUnder(string $path, string $base): string
+    {
+        if (!str_starts_with($path, $base . '/')) {
+            return '';
+        }
+
+        return explode('/', substr($path, strlen($base) + 1))[0];
     }
 
     /** True if the string contains a C0/C7F control character (newline, CR, NUL, ...). */
