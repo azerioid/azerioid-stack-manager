@@ -81,6 +81,7 @@ final class VhostUser
             // Not migrated yet. Converting one identity here, inside a File Manager or
             // Terminal request, would skip the migration's verification and rollback;
             // VhostIsolationMigrator moves every identity in one journalled pass.
+            self::assertStoredRootIsReal($runtime, $config, $root);
             self::applyOwnership($runtime, $root, $username, self::LEGACY_GROUP);
             self::record($runtime, $config, $domain, $username, $root);
 
@@ -100,6 +101,12 @@ final class VhostUser
             ], null, 30);
         }
 
+        // A95: the root is a string read back from the vhost file; it was validated
+        // when it was set, not now. claimTop gives the site its top directory, so for
+        // a nested docroot the site can since have replaced a directory on the way
+        // with a symlink, and the recursive chown/chmod would follow it to whatever it
+        // names. Re-check every component immediately before root acts on the path.
+        self::assertStoredRootIsReal($runtime, $config, $root);
         self::applyOwnership($runtime, $root, $username, $group);
         self::hardenContent($runtime, $config, $root, $username);
         self::claimTop($runtime, $config, $domain, $root, $username, $group);
@@ -348,6 +355,24 @@ final class VhostUser
         }
 
         return false;
+    }
+
+    /**
+     * A95: a stored docroot must still lie under the real www root with no symlinked
+     * component, at the moment root is about to change its ownership.
+     */
+    public static function assertStoredRootIsReal(Runtime $runtime, Config $config, string $root): void
+    {
+        $www = rtrim($runtime->realPath(rtrim($config->wwwRoot, '/')), '/');
+        $root = rtrim($root, '/');
+        // The prefix test below is textual, so a '.' or '..' segment (a hand-edited
+        // or restored vhost file) could point outside $www while still matching it.
+        $segments = explode('/', substr($root, 1));
+        if (in_array('..', $segments, true) || in_array('.', $segments, true) || in_array('', $segments, true)
+            || !str_starts_with($root, $www . '/')) {
+            throw new BrokerException("Refusing to change ownership of {$root}: it is not a plain path under {$www}.", 3);
+        }
+        self::assertNoSymlinkUnder($runtime, $www, $root);
     }
 
     /**

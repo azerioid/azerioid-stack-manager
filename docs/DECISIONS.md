@@ -2670,3 +2670,30 @@ Existing vhosts are not re-checked; the guard applies the next time a root is se
 
 Tests: `AuditHardeningTest::test_web_root_refuses_a_symlink_into_another_site_directory` (real symlinks; an in-site
 link still accepted) and `VhostEditRollbackTest::test_edit_refuses_a_root_inside_another_vhost_and_changes_nothing`.
+
+## A95 — A stored docroot is re-checked before root changes its ownership
+
+Security audit run-2 (2026-11-11), finding AZ-23. A docroot is validated when it is set (`Validator::webRoot`);
+afterwards it is a string read back from the vhost file. `VhostUser::ensure` — run before every File Manager and
+Terminal request, on pool render, on Octane changes — hands that path to `applyOwnership`, whose only precondition
+was `isDir()` (which follows links), and then runs `chown -R` and two `find … -exec chmod` passes as root.
+`claimTop` (and `SitePool::ensure` for PHP sites) gives the site its own top directory. So for a docroot nested
+two or more levels below the top (`/data/www/site/app/public`), the site can later replace `app` with a symlink, and
+the next ensure changed the ownership of whatever the link names. No race is needed. The component-wise check
+`assertNoSymlinkUnder` (A61) existed but was used for the Docker and PM2 homes only; A58 had listed "reused stored
+docroots" as an open lead.
+
+Decision: `VhostUser::assertStoredRootIsReal` — the root must lie under the real www root with no symlinked
+component — runs at the top of `VhostUser::ensure`, before any ownership change, and in `SitePool::ensure` before
+the one-time recursive handover of the site top. A refusal stops that request with an error instead of acting on
+the path. The default `www_root/<domain>` layout is unaffected; so are in-site links below the docroot, which the
+recursive `chown` does not follow.
+
+This is separate from A77 (the accepted `find -exec chmod` race on the docroot's own contents): that one needs a
+race inside the docroot; this one needed none. Ceiling, same as A77: the check runs immediately before each
+`applyOwnership`, but a site that swaps a component **between** the check and the `chown` can still redirect it.
+Closing that needs an `openat`/`fchownat`-based walk the shell toolchain does not offer; the planted-in-advance
+case, which needs no timing at all, is what this closes.
+
+A path with a `.` or `..` segment is refused too, since the prefix test is textual.
+runs) and `::test_ensure_still_hands_over_a_plain_stored_docroot`.

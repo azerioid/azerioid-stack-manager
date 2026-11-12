@@ -196,6 +196,8 @@ final class SitePool
         // Files the shared pool wrote (uploads, caches) are the shared account's; the site's own
         // PHP could not change them. A new pool file is the moment to take them over.
         if ($previous === null && $this->runtime->isDir($top)) {
+            // A95: same re-check as VhostUser::ensure before a recursive handover.
+            \AzerioidPanel\Broker\Vhost\VhostUser::assertStoredRootIsReal($this->runtime, $this->config, $top);
             $this->runtime->exec(['/usr/bin/chown', '-R', '-h', $user . ':' . $group, $top], null, 600);
             $this->runtime->exec(['/usr/bin/chmod', '-R', 'g+rwX', $top], null, 600);
         }
