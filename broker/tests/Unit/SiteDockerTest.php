@@ -110,10 +110,10 @@ final class SiteDockerTest extends TestCase
         $this->assertStringContainsString('user=' . self::USER . "\n", $this->rt->files[$this->programConf()]);
         // The old daemon owner (a container's root) becomes the site; a container's uid 101
         // moves from the shared range to the same offset in the site's.
-        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-uid', '1001', '-exec', '/usr/bin/chown', '-h', '1005', '{}', '+'], $this->commands());
-        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-uid', '100101', '-exec', '/usr/bin/chown', '-h', '165637', '{}', '+'], $this->commands());
-        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-gid', '100101', '-exec', '/usr/bin/chgrp', '-h', '165637', '{}', '+'], $this->commands());
-        $this->assertNotContains(['/usr/bin/find', self::ROOT, '-xdev', '-gid', '969', '-exec', '/usr/bin/chgrp', '-h', '969', '{}', '+'], $this->commands());
+        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-uid', '1001', '-execdir', '/usr/bin/chown', '-h', '1005', '{}', '+'], $this->commands());
+        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-uid', '100101', '-execdir', '/usr/bin/chown', '-h', '165637', '{}', '+'], $this->commands());
+        $this->assertContains(['/usr/bin/find', self::ROOT, '-xdev', '-gid', '100101', '-execdir', '/usr/bin/chgrp', '-h', '165637', '{}', '+'], $this->commands());
+        $this->assertNotContains(['/usr/bin/find', self::ROOT, '-xdev', '-gid', '969', '-execdir', '/usr/bin/chgrp', '-h', '969', '{}', '+'], $this->commands());
     }
 
     public function test_every_site_program_moved_takes_the_shared_account_out_of_the_site_groups(): void
@@ -214,5 +214,15 @@ final class SiteDockerTest extends TestCase
     private function commands(): array
     {
         return array_map(static fn (array $e): array => $e['command'], $this->rt->execLog);
+    }
+
+    /** A97: no recursive ownership change in a site tree may use -exec (path re-resolution); -execdir only. */
+    public function test_find_based_ownership_changes_use_execdir(): void
+    {
+        foreach (['ProgramIdentityMigrator.php' => 'Supervisor', 'VhostIsolationMigrator.php' => 'Vhost'] as $file => $dir) {
+            $src = (string) file_get_contents(dirname(__DIR__, 2) . "/src/{$dir}/{$file}");
+            $this->assertDoesNotMatchRegularExpression("~'-exec', '/usr/bin/ch(own|grp)'~", $src, $file);
+            $this->assertMatchesRegularExpression("~'-execdir', '/usr/bin/ch(own|grp)', '-h'~", $src, $file);
+        }
     }
 }

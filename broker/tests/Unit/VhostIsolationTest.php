@@ -214,7 +214,7 @@ final class VhostIsolationTest extends TestCase
         $order = array_map(static fn (array $e): string => implode(' ', $e['command']), $this->rt->execLog);
         $lastGpasswdAdd = max(array_keys(array_filter($order, static fn (string $c): bool => str_starts_with($c, '/usr/bin/gpasswd -a'))));
         $webRestart = array_search('/usr/bin/systemctl try-restart caddy', $order, true);
-        $firstChgrp = min(array_keys(array_filter($order, static fn (string $c): bool => str_contains($c, '-exec /usr/bin/chgrp'))));
+        $firstChgrp = min(array_keys(array_filter($order, static fn (string $c): bool => str_contains($c, '-execdir /usr/bin/chgrp'))));
         $firstUsermod = min(array_keys(array_filter($order, static fn (string $c): bool => str_starts_with($c, '/usr/sbin/usermod'))));
 
         $this->assertLessThan($webRestart, $lastGpasswdAdd);
