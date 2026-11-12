@@ -125,7 +125,9 @@ Non-interactive example:
 
 ```bash
 sudo ./stack-manager.sh --non-interactive --access=public --create-admin=true --admin-email=you@example.com
-# Set ADMIN_PASSWORD in the environment — never pass passwords on argv
+# Set ADMIN_PASSWORD in the environment — never pass passwords on argv.
+# There is no default: it needs 12+ characters with upper and lower case, a number and a symbol,
+# or the install stops at the admin step (use /setup in the browser instead).
 ```
 
 Tunnel access after a default install:
@@ -136,8 +138,6 @@ ssh -L 3169:127.0.0.1:3169 user@host
 ```
 
 Optional hardening flags: `--firewall=true`, `--fail2ban=true`, `--require-totp=true`. Full list: `sudo ./stack-manager.sh --help`.
-
-On any **public** install, change the admin password immediately after first login if you used a weak or default value.
 
 ## Security model (brief)
 

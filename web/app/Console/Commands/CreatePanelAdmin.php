@@ -6,6 +6,8 @@ use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rules\Password;
 
 class CreatePanelAdmin extends Command
 {
@@ -40,6 +42,18 @@ class CreatePanelAdmin extends Command
 
         if ($password === '') {
             $this->error('Set PANEL_INSTALL_ADMIN_PASSWORD in the environment (not passed on argv).');
+
+            return self::FAILURE;
+        }
+
+        // The same policy as the /setup wizard (A87). This account is root-equivalent
+        // and every installer path creates it through this command, so the policy is
+        // enforced here rather than in each shell script that calls it.
+        $policy = Validator::make(['password' => $password], [
+            'password' => [Password::min(12)->mixedCase()->numbers()->symbols()],
+        ]);
+        if ($policy->fails()) {
+            $this->error('PANEL_INSTALL_ADMIN_PASSWORD is too weak: use at least 12 characters with upper and lower case letters, a number and a symbol.');
 
             return self::FAILURE;
         }

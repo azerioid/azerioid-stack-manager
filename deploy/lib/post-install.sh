@@ -25,9 +25,8 @@ _skip_existing_admin_message() {
     local email="$1"
     echo "==> Admin account already exists (${email}) — skipping creation."
     ADMIN_CREATE_FAILED=0
-    INSTALL_USED_DEFAULT_ADMIN_PASSWORD=0
     INSTALL_USED_DEFAULT_ADMIN_EMAIL=0
-    export ADMIN_CREATE_FAILED INSTALL_USED_DEFAULT_ADMIN_PASSWORD INSTALL_USED_DEFAULT_ADMIN_EMAIL
+    export ADMIN_CREATE_FAILED INSTALL_USED_DEFAULT_ADMIN_EMAIL
 }
 
 _invoke_create_panel_admin() {
@@ -59,11 +58,6 @@ create_install_admin() {
     local php_bin allow_opt="" admin_password="${ADMIN_PASSWORD}" attempt=1 max_attempts=1
     php_bin="$(php_bin)"
     [[ -n "${IP_ALLOWLIST:-}" ]] && allow_opt="--allowlist=${IP_ALLOWLIST}"
-    # Non-interactive path never runs interactive.sh — still flag the well-known default.
-    if [[ "${admin_password}" == "password" ]]; then
-        INSTALL_USED_DEFAULT_ADMIN_PASSWORD=1
-        export INSTALL_USED_DEFAULT_ADMIN_PASSWORD
-    fi
 
     if [[ "${NON_INTERACTIVE:-0}" -eq 0 && -t 0 ]]; then
         max_attempts=2
@@ -108,7 +102,7 @@ create_install_admin() {
         echo ""
         if [[ "${NON_INTERACTIVE:-0}" -eq 0 && -t 0 ]]; then
             ADMIN_EMAIL="$(prompt_line "Admin email" "${ADMIN_EMAIL}")"
-            admin_password="$(prompt_password "Admin password" "${ADMIN_PASSWORD}")"
+            admin_password="$(prompt_password "Admin password (12+ characters: upper, lower, number, symbol)" "")"
             ADMIN_PASSWORD="${admin_password}"
             attempt=$((attempt + 1))
         else
@@ -125,16 +119,5 @@ print_install_warnings() {
     if [[ "${ACCESS:-tunnel}" == "public" && "${REQUIRE_TOTP:-false}" != "true" ]]; then
         warn "SECURITY: Public panel with TOTP disabled — password-only login on the network."
         echo "         Reinstall with --require-totp=true or enable 2FA after changing the password."
-    fi
-
-    if [[ "${ACCESS:-tunnel}" == "public" && "${INSTALL_USED_DEFAULT_ADMIN_PASSWORD:-0}" -eq 1 && "${ADMIN_CREATE_FAILED:-0}" -eq 0 ]]; then
-        local warn_email="${ADMIN_EMAIL}"
-        local existing_email
-        existing_email="$(_panel_admin_email_if_exists)"
-        [[ -n "${existing_email}" ]] && warn_email="${existing_email}"
-        echo ""
-        echo "${C_RED}⚠ SECURITY: Default admin password is in use on a public panel.${C_RST}"
-        echo "  Change it immediately after first login (Settings → Password)."
-        echo "  Admin email: ${warn_email}"
     fi
 }

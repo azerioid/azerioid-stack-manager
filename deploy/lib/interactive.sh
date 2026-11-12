@@ -4,13 +4,12 @@ set -euo pipefail
 
 # Defaults for admin bootstrap (used by prompts and post-install warnings).
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-password}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 ADMIN_NAME="${ADMIN_NAME:-Admin}"
 CREATE_ADMIN="${CREATE_ADMIN:-1}"
 PANEL_PUBLIC_DOMAIN="${PANEL_PUBLIC_DOMAIN:-}"
 PANEL_PUBLIC_IP="${PANEL_PUBLIC_IP:-}"
 IP_ALLOWLIST="${IP_ALLOWLIST:-}"
-INSTALL_USED_DEFAULT_ADMIN_PASSWORD=0
 INSTALL_USED_DEFAULT_ADMIN_EMAIL=0
 
 prompt_line() {
@@ -105,14 +104,13 @@ run_interactive_install_prompts() {
         CREATE_ADMIN="$(prompt_yes_no "Create default admin now?" "y")"
         if [[ "${CREATE_ADMIN}" == "true" ]]; then
             local default_email="admin@example.com"
-            local default_password="password"
             local chosen_email chosen_password
             chosen_email="$(prompt_line "Admin email" "${default_email}")"
-            chosen_password="$(prompt_password "Admin password" "${default_password}")"
+            # No default: panel:create-admin refuses a password that fails the policy.
+            chosen_password="$(prompt_password "Admin password (12+ characters: upper, lower, number, symbol)" "")"
             ADMIN_EMAIL="${chosen_email}"
             ADMIN_PASSWORD="${chosen_password}"
             [[ "${ADMIN_EMAIL}" == "${default_email}" ]] && INSTALL_USED_DEFAULT_ADMIN_EMAIL=1
-            [[ "${ADMIN_PASSWORD}" == "${default_password}" ]] && INSTALL_USED_DEFAULT_ADMIN_PASSWORD=1
         else
             CREATE_ADMIN=0
         fi
@@ -126,5 +124,5 @@ run_interactive_install_prompts() {
     export ACCESS PANEL_PORT REQUIRE_TOTP DO_FIREWALL DO_FAIL2BAN
     export PANEL_PUBLIC_DOMAIN PANEL_PUBLIC_IP IP_ALLOWLIST
     export ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME CREATE_ADMIN
-    export INSTALL_USED_DEFAULT_ADMIN_PASSWORD INSTALL_USED_DEFAULT_ADMIN_EMAIL
+    export INSTALL_USED_DEFAULT_ADMIN_EMAIL
 }
