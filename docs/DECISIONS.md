@@ -2618,3 +2618,25 @@ after release, open a terminal on a public-mode host and confirm it still connec
 user-facing), and that the route file carries the header.
 
 **Validated on the Rocky staging host (2026-11-12), Caddy 2.11.4 — the finding is confirmed, no longer only plausible.** The panel's loopback listener answers a request whose Host matches no site with an empty **200**. A scratch Caddy process with the route as v2.14.5 writes it, called with a non-loopback Host, let the request through to the upstream without any session; the same route with `header_up Host 127.0.0.1` returned the panel's own answer (a redirect on that host, which has no admin yet) and did not reach the upstream. With Host `127.0.0.1` the old route was already answered by the panel, so tunnel-only installs were not exposed. Not exercised: a real terminal session on a public-mode host.
+
+## A93 — A docroot path may only contain characters every config can hold unquoted
+
+Security audit run-2 (2026-11-11), finding AZ-22. `Validator::webRoot` resolves the requested docroot with
+`realpath()` (A47), so the stored path reflects on-disk names that a site identity controls through a symlink it
+plants in its own tree. A47 rejected control characters in that resolved path, which closes newline injection.
+But `NginxDriver::render` and `CaddyDriver::render` write the path **unquoted**, and in those grammars a space,
+`;`, braces, `$` and quotes are syntax too. A site whose nested docroot passed through a link to a directory named,
+for example, `x;y` could make the next edit of that vhost write a config line that ends early and carries text the
+site chose.
+
+Decision: an allowlist instead of a denylist, applied to the input and again to the resolved path — ASCII letters,
+digits and `. _ - + @ ~ /`. A path with any other character could not have been rendered correctly by all three
+templates anyway, so nothing that worked is lost; the error message names the allowed set. Quoting the value in the
+templates was considered and left out: it would differ per grammar and still leave the supervisor config.
+
+Scope: only `webRoot` (the path a site can influence). The supervised-home fallback in
+`Validator::supervisedDirectory` takes admin input that is not resolved through site-owned links and keeps its
+existing check.
+
+Tests: `AuditHardeningTest::test_web_root_refuses_a_resolved_path_with_config_syntax` (real symlinks on a temporary
+www root, five characters) and `::test_web_root_still_accepts_an_ordinary_nested_docroot`.

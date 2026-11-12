@@ -295,6 +295,53 @@ final class AuditHardeningTest extends TestCase
         Validator::webRoot("/data/www/evil\n[program:x]", '/data/www', $rt);
     }
 
+    /** @return array<string, array{0:string}> */
+    public static function configSyntaxNames(): array
+    {
+        return ['semicolon' => ['x;y'], 'space' => ['x y'], 'brace' => ['x}y'], 'dollar' => ['x$y'], 'quote' => ["x'y"]];
+    }
+
+    /**
+     * A93: a docroot that resolves, through a symlink the site controls, to a directory
+     * whose name is web-server config syntax must be refused - the path is rendered
+     * unquoted into nginx and Caddy files.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('configSyntaxNames')]
+    public function test_web_root_refuses_a_resolved_path_with_config_syntax(string $name): void
+    {
+        $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
+        mkdir($www . '/site/' . $name, 0700, true);
+        symlink($www . '/site/' . $name, $www . '/site/public');
+        try {
+            Validator::webRoot($www . '/site/public', $www, new PosixRuntime());
+            $this->fail('expected refusal');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('cannot hold', $e->getMessage());
+        } finally {
+            unlink($www . '/site/public');
+            rmdir($www . '/site/' . $name);
+            rmdir($www . '/site');
+            rmdir($www);
+        }
+    }
+
+    public function test_web_root_still_accepts_an_ordinary_nested_docroot(): void
+    {
+        $www = sys_get_temp_dir() . '/azaudit-www-' . bin2hex(random_bytes(4));
+        mkdir($www . '/shop.example.com/releases/v1.2_3/public', 0700, true);
+        try {
+            $real = (string) realpath($www);
+            $this->assertSame(
+                $real . '/shop.example.com/releases/v1.2_3/public',
+                Validator::webRoot($www . '/shop.example.com/releases/v1.2_3/public', $www, new PosixRuntime())
+            );
+        } finally {
+            foreach (['/shop.example.com/releases/v1.2_3/public', '/shop.example.com/releases/v1.2_3', '/shop.example.com/releases', '/shop.example.com', ''] as $d) {
+                rmdir($www . $d);
+            }
+        }
+    }
+
     public function test_write_file_is_never_world_readable_for_a_private_mode(): void
     {
         $rt = new PosixRuntime();
