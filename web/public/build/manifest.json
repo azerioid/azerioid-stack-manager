@@ -1,6 +1,6 @@
 {
   "resources/css/app.css": {
-    "file": "assets/app-HvdWcRjS.css",
+    "file": "assets/app-BJfmapv-.css",
     "src": "resources/css/app.css",
     "isEntry": true
   },
@@ -15,5 +15,14 @@
     "name": "vhost-files",
     "src": "resources/js/vhost-files.js",
     "isEntry": true
+  },
+  "resources/js/vhost-terminal.js": {
+    "file": "assets/vhost-terminal-jZn09e4j.js",
+    "name": "vhost-terminal",
+    "src": "resources/js/vhost-terminal.js",
+    "isEntry": true,
+    "css": [
+      "assets/vhost-terminal-CFbL2ovg.css"
+    ]
   }
 }

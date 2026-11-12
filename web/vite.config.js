@@ -8,6 +8,7 @@ export default defineConfig({
                 'resources/css/app.css',
                 'resources/js/app.js',
                 'resources/js/vhost-files.js',
+                'resources/js/vhost-terminal.js',
             ],
             refresh: true,
         }),
