@@ -2910,3 +2910,31 @@ below a link to `/etc`) is refused before extraction and rolled back; a failed c
 retryable; tar exit 1 is success; a clone whose identity is recorded for another site is refused with nothing copied
 and no account removed. `ArchiveGuardTest` — the below-symlink rule in both modes, with denormalised names, hardlinks
 through and to a symlink, and a pax `linkpath`; a clone stream keeps an absolute symlink and refuses any hardlink.
+
+## A104 — A panel self-update deploys only a release on `main`, and only the one the admin was shown
+
+Security audit run-2 (2026-11-11), finding AZ-06. `PanelUpdater::apply` fetched tags and deployed the highest `vX.Y.Z`
+as root broker code. Nothing tied that tag to the release branch: a tag pushed on any commit — a side branch, a commit
+never merged, by any account or token that can push tags — became the next root code on every host whose admin
+pressed "update". And the job passed no commit, so the tag resolved at run time could differ from the one the admin
+was shown.
+
+Decision:
+
+- The updater fetches `origin/main` explicitly (`+refs/heads/main:refs/remotes/origin/main` alongside `--tags`) and
+  lists release tags with `git tag -l --merged refs/remotes/origin/main 'v*'`, so `check`, `apply` and an explicit
+  `--v` see only tags on the release branch. `apply` then requires the commit the chosen tag resolves to be an
+  ancestor of `origin/main` before anything is checked out.
+- An update to "latest" carries the commit the admin (or `azerioid panel update apply`) was shown as
+  `expected_commit`; `apply` refuses a different one ("check for updates again"). An explicit `--v=<tag>` is passed as
+  the tag, as before.
+- All 109 existing release tags are on `main`, so no release is lost by the filter.
+
+Open (owner's decision): signed release tags. Branch protection on `main` and a tag ruleset for `v*` on GitHub are
+what make "on `main`" mean "reviewed"; with them, a signature check (`git verify-tag` against a key shipped in the
+installed tree) would also cover a compromised maintainer token. That needs a release signing key the owner holds, so
+it is not done here.
+
+Tests: `PanelUpdaterTest` — tags are listed from `main` only; a tag whose commit is not on `main` and a release other
+than the checked commit are refused and never checked out; `RunPanelUpdateJobTest` — a "latest" update passes the
+checked commit, an explicit tag does not.

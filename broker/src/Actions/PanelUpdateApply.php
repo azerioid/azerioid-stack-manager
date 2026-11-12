@@ -31,6 +31,12 @@ final class PanelUpdateApply
             $tag = $tag !== '' ? $tag : null;
         }
 
-        return (new PanelUpdater($config, $runtime))->apply($operationId, $confirm, $tag);
+        // A104: the commit the admin was shown; apply refuses another one.
+        $expected = isset($input['expected_commit']) ? strtolower(trim((string) $input['expected_commit'])) : '';
+        if ($expected !== '' && preg_match('/^[0-9a-f]{40}$/', $expected) !== 1) {
+            throw new BrokerException('expected_commit must be a full commit hash.', 2);
+        }
+
+        return (new PanelUpdater($config, $runtime))->apply($operationId, $confirm, $tag, $expected !== '' ? $expected : null);
     }
 }
