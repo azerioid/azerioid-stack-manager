@@ -140,7 +140,7 @@ YAML;
         $rt = new FakeRuntime();
         $rt->execFn = static function (array $c, ?string $s) use ($rt, $showKeys): ?ExecResult {
             if (($c[0] ?? '') === '/usr/bin/mktemp') {
-                return new ExecResult($c, 0, "/tmp/azerioid-elastic.TESTTEST\n", '');
+                return new ExecResult($c, 0, "/tmp/azerioid-key.TESTTEST\n", '');
             }
             if (($c[0] ?? '') === '/usr/bin/gpg' && in_array('--export', $c, true)) {
                 $rt->files[$c[array_search('--output', $c, true) + 1]] = 'exported-key';
@@ -202,7 +202,7 @@ YAML;
         // The keyring is the re-exported pinned key, never the downloaded file.
         $commands = array_column($rt->execLog, 'command');
         $this->assertSame([], array_filter($commands, static fn (array $c): bool => in_array('--dearmor', $c, true)));
-        $this->assertContains(['/bin/rm', '-rf', '--one-file-system', '/tmp/azerioid-elastic.TESTTEST'], $commands);
+        $this->assertContains(['/bin/rm', '-rf', '--one-file-system', '/tmp/azerioid-key.TESTTEST'], $commands);
     }
 
     public function test_on_el_the_repo_trusts_the_pinned_local_key_not_a_url(): void
