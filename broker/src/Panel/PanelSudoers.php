@@ -33,7 +33,8 @@ final class PanelSudoers
             if (preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $u) !== 1) {
                 throw new BrokerException('Refusing to write an invalid user into sudoers: ' . $u, 2);
             }
-            $body .= "Defaults:{$u} !requiretty\n";
+            // No `!requiretty` (A86): sudo-rs rejects it as an unknown setting, and
+            // no supported distro turns requiretty on.
             $body .= "Defaults:{$u} umask=0022\n";
         }
         foreach ($users as $u) {

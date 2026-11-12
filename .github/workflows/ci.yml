@@ -74,11 +74,15 @@ jobs:
         run: ./vendor/bin/phpunit --no-coverage
 
   lint:
-    name: Lint and static checks
-    # Pinned to the Ubuntu release the installer supports (deploy/lib/detect-os.sh).
-    # ubuntu-latest moved to 26.04, whose sudo-rs visudo rejects the template's
-    # `!requiretty` — a real gap for 26.04 support, but not a regression here.
-    runs-on: ubuntu-24.04
+    name: Lint and static checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two sudoers parsers (A86): 24.04 validates the template with sudo,
+        # ubuntu-latest (26.04+) with sudo-rs. Not a statement that the
+        # installer supports 26.04 — deploy/lib/detect-os.sh still refuses it.
+        os: [ubuntu-24.04, ubuntu-latest]
     steps:
       - uses: actions/checkout@v5
 

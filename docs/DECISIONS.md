@@ -2435,6 +2435,55 @@ delivery. Ceiling: a deploy started from the panel does not take this lock.
 **Limits (A80)** — `vhost.limits.set` accepted an alias domain, stored the values under the alias and applied
 them to nothing. The alias is resolved to the site's primary domain first.
 
+## A86 — The panel's sudoers grant uses only settings sudo and sudo-rs both accept
+
+Ubuntu 26.04 ships sudo-rs as `sudo`/`visudo` (`/usr/sbin/visudo` is an alternative pointing at it). GitHub's
+`ubuntu-latest` moved to 26.04 on 2026-11-11 and the CI step that validates `deploy/sudoers.d/azerioid-panel`
+failed: `7:17: syntax error: unknown setting: 'requiretty'`. `visudo -c` fails the whole file on one unknown
+setting, so on such a host `PanelSudoers::install` would refuse to write the grant (it validates first — sudo
+itself would not break) and the panel could never reach the broker.
+
+**Facts, and where each comes from**
+
+- sudo-rs has never implemented `requiretty`: it is absent from the settings table (`src/defaults/mod.rs`) at
+  v0.2.13 — the version in 26.04 (`rust-sudo-rs 0.2.13-0ubuntu1.2`) — and on `main`. It never demands a TTY, so
+  there is nothing for `!requiretty` to switch off.
+- `umask` **is** in that table at v0.2.13 (`umask = 0o022 … {octal_mode}`, added in 0.2.7 per the changelog),
+  and the failed CI run reported line 7 only — line 8, `Defaults:caddy umask=0022`, parsed.
+- `requiretty` is off by default in sudo (sudoers(5): "This flag is off by default"), and no supported
+  distribution turns it on. Checked in the packaged `/etc/sudoers` sources: Debian 12 (`1.9.13p3-1+deb12u4`),
+  Debian 13 (`1.9.16p2-3+deb13u2`), Ubuntu 24.04 (`ubuntu/noble-updates`), CentOS Stream 9 and 10 (`c9s`, `c10s`,
+  what RHEL/Alma/Rocky/Oracle 9 and 10 are built from). None contains the word.
+
+**Decision.** `Defaults:<user> !requiretty` is removed from all three emitters — `PanelSudoers::render`,
+`deploy/lib/broker-setup.sh`, `deploy/sudoers.d/azerioid-panel` — rather than emitted conditionally. It overrode
+a restriction no supported host has, a probe-and-branch would give the privilege boundary two shapes (one of
+them validated nowhere in CI), and dropping an exemption can only narrow what the file allows. The grant is now
+the `umask=0022` default and the one `NOPASSWD` line, identical under both implementations.
+`PanelSudoersTest` pins the rendered text and fails if the template or the installer heredoc drifts from it.
+
+The installer also now follows the rule the broker already had: `broker-setup.sh` wrote the live file and
+validated afterwards, so a rejected file would have been left in `/etc/sudoers.d`. It writes to a temp file,
+runs `visudo -c -f` on it, and only then installs it.
+
+**Consequence for existing hosts.** The next self-update rewrites `/etc/sudoers.d/azerioid-panel` without the
+line. A host whose operator added a global `Defaults requiretty` themselves relied on the panel's override; there
+the panel would lose the broker ("sorry, you must have a tty to run sudo") until they add
+`Defaults:<panel_user> !requiretty` in their own drop-in. Check before releasing:
+`grep -rn requiretty /etc/sudoers /etc/sudoers.d`.
+
+**Ubuntu 26.04 stays refused by `detect-os.sh`.** This change removes one known blocker; it does not make 26.04
+supported. Nothing has run on a 26.04 system. Unverified there: the whole install (Sury does publish a
+`resolute` suite; Caddy, MariaDB/PostgreSQL, Supervisor, Fail2Ban packages and unit names are unchecked), and
+sudo-rs at runtime — `sudo -n <broker>` from php-fpm and cron with no TTY, sudo-rs's `use_pty` default, the
+environment and umask the broker actually receives, and `runuser … sudo -n` in the hardener/migrator verify
+step. Admit 26.04 only after a full install and the smoke scripts pass on a real host.
+
+**CI.** The lint job runs on `ubuntu-24.04` and `ubuntu-latest`, so the template is parsed by sudo and by
+sudo-rs on every push; the A85-era pin and its comment are gone. The 26.04 leg validates the template only in
+that sense — the rest of that job's steps had not run on the 26.04 image before this change (the failing run
+stopped at the sudoers step).
+
 ## A87 — The installer never creates the admin with a built-in password
 
 Security audit run-2 (2026-11-11), finding AZ-01. `deploy/install.sh` and `deploy/lib/interactive.sh` defaulted
