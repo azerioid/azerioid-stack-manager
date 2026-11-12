@@ -2456,6 +2456,26 @@ it is changed in Settings. Operators of such hosts must change it.
 Test: `AuthTest::test_cli_admin_creation_refuses_a_password_below_the_setup_policy`.
 
 **Validated on the Rocky staging host (2026-11-12)**, with this command run from a throwaway copy of the installed v2.14.5 app against its own empty database: the old default, a long password without a symbol or upper case, and an empty value each exit 1 and create no user; a compliant password creates the admin. The installer's interactive re-prompt was not exercised (it needs a TTY).
+## A88 — Values inside Livewire action attributes are encoded with `@js`, never `'{{ }}'`
+
+Security audit run-2 (2026-11-11), finding AZ-02. Blade's `{{ }}` escapes for HTML. Inside a `wire:click="…"`
+attribute the browser decodes those entities again before Livewire evaluates the attribute as JavaScript, so a
+value written as `'{{ $x }}'` is not escaped for the context it ends up in. The panel had 44 such sites. Most carry
+values the broker validates (domains, unit names, component ids), but some carry names a lower-trust party
+chooses — a site's own directory names in the File Manager search results, object keys from backup storage,
+image names returned by a registry search, and database and user names as the engine reports them. The admin
+session is root-equivalent, so the encoding must not depend on which of those happens to be validated today.
+
+Decision: every value placed in a `wire:` attribute goes through `@js(...)` (`Illuminate\Support\Js::from`), which
+emits a JavaScript literal with quotes, tags and ampersands hex-escaped. All 44 sites were converted in one pass
+rather than only the reachable ones, and a test fails on any new `'{{` inside a `wire:` attribute.
+
+Not changed here: the Content-Security-Policy still allows `'unsafe-inline'` and `'unsafe-eval'` (Livewire and
+Alpine evaluate attribute expressions), so it remains no second line of defence for this class.
+
+Tests: `VhostFilesChmodSearchTest::test_a_search_hit_name_is_encoded_for_javascript_not_only_for_html` and
+`::test_no_view_puts_a_blade_echo_inside_a_quoted_javascript_string`.
+
 ## A91 — A pinned repository key is rebuilt from the pin, in the broker as in the installer
 
 Security audit run-2 (2026-11-11), finding AZ-04. `ComponentRepoInstaller::installElasticRepo` (A54) downloaded

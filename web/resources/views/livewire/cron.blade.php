@@ -46,17 +46,17 @@
                                     {{ $job['enabled'] ? 'enabled' : 'disabled' }}
                                 </td>
                                 <td class="px-2 py-2 text-right whitespace-nowrap">
-                                    <button type="button" class="text-brass-400 hover:underline" wire:click="runNow('{{ $job['id'] }}')">Run now</button>
-                                    <button type="button" class="ml-2 text-brass-400 hover:underline" wire:click="showLog('{{ $job['id'] }}')">
+                                    <button type="button" class="text-brass-400 hover:underline" wire:click="runNow(@js($job['id']))">Run now</button>
+                                    <button type="button" class="ml-2 text-brass-400 hover:underline" wire:click="showLog(@js($job['id']))">
                                         {{ $openLog === $job['id'] ? 'Hide log' : 'Log' }}
                                     </button>
                                     @if ($job['enabled'])
-                                        <button type="button" class="ml-2 text-zinc-400 hover:underline" wire:click="toggle('{{ $job['id'] }}', false)">Disable</button>
+                                        <button type="button" class="ml-2 text-zinc-400 hover:underline" wire:click="toggle(@js($job['id']), false)">Disable</button>
                                     @else
-                                        <button type="button" class="ml-2 text-zinc-400 hover:underline" wire:click="toggle('{{ $job['id'] }}', true)">Enable</button>
+                                        <button type="button" class="ml-2 text-zinc-400 hover:underline" wire:click="toggle(@js($job['id']), true)">Enable</button>
                                     @endif
                                     <button type="button" class="ml-2 text-bad hover:underline"
-                                            wire:click="delete('{{ $job['id'] }}')" wire:confirm="Remove this job?">Remove</button>
+                                            wire:click="delete(@js($job['id']))" wire:confirm="Remove this job?">Remove</button>
                                 </td>
                             </tr>
                             @if ($openLog === $job['id'])

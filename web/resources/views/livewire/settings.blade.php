@@ -235,7 +235,7 @@
             @error('phpIni') <p class="mb-2 text-sm text-bad">{{ $message }}</p> @enderror
             <dl class="grid gap-3 md:grid-cols-2">
                 @foreach ($phpIni as $key => $value)
-                    <form wire:submit="saveIni('{{ $key }}', $event.target.querySelector('input').value)" class="flex items-end gap-2">
+                    <form wire:submit="saveIni(@js($key), $event.target.querySelector('input').value)" class="flex items-end gap-2">
                         <label class="flex-1 text-xs uppercase tracking-wide text-zinc-500">{{ $key }}
                             <input class="field mt-1" name="value" value="{{ $value }}">
                         </label>

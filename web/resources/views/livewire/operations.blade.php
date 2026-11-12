@@ -24,7 +24,7 @@
                 @foreach (['all' => 'All', 'active' => 'Active', 'failed' => 'Failed'] as $key => $label)
                     <button type="button"
                             class="rounded px-2 py-1 {{ $filter === $key ? 'bg-brass-400/20 text-brass-400' : 'text-zinc-400 hover:bg-ink-600' }}"
-                            wire:click="$set('filter', '{{ $key }}')">{{ $label }}</button>
+                            wire:click="$set('filter', @js($key))">{{ $label }}</button>
                 @endforeach
             </div>
         </div>

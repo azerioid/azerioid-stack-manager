@@ -112,9 +112,9 @@
                             <td class="px-4 py-3 text-right space-x-3">
                                 @if (empty($db['protected']))
                                     @php $firstUser = $db['users'][0]['user'] ?? $db['name']; @endphp
-                                    <button type="button" class="text-xs text-brass-400" wire:click="startReset('{{ $firstUser }}')" wire:confirm="Reset password for {{ $firstUser }}?">Reset pw</button>
-                                    <button type="button" class="text-xs text-brass-400" wire:click="startAccess('{{ $db['name'] }}')">Access</button>
-                                    <button type="button" class="text-xs text-bad" wire:click="$set('confirmDelete', '{{ $db['name'] }}')">Delete</button>
+                                    <button type="button" class="text-xs text-brass-400" wire:click="startReset(@js($firstUser))" wire:confirm="Reset password for {{ $firstUser }}?">Reset pw</button>
+                                    <button type="button" class="text-xs text-brass-400" wire:click="startAccess(@js($db['name']))">Access</button>
+                                    <button type="button" class="text-xs text-bad" wire:click="$set('confirmDelete', @js($db['name']))">Delete</button>
                                 @endif
                             </td>
                         </tr>

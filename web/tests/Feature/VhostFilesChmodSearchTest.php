@@ -122,6 +122,39 @@ class VhostFilesChmodSearchTest extends TestCase
         $this->page()->set('searchQuery', 'app')->call('search')->assertSee('public/app.css');
     }
 
+    public function test_a_search_hit_name_is_encoded_for_javascript_not_only_for_html(): void
+    {
+        // A88: the site owns its file names, and the Open button puts the path inside
+        // JavaScript that Livewire evaluates. HTML escaping alone turns ' into &#039;, which
+        // the browser decodes back before the script runs.
+        $this->page()
+            ->set('searchResult', [
+                'results' => [['path' => "it's a dir", 'type' => 'dir']],
+                'count' => 1, 'truncated' => false, 'limit' => 200, 'path' => '',
+            ])
+            ->assertSeeHtml('openDir(\'it\\u0027s a dir\')')
+            ->assertDontSeeHtml("openDir('it&#039;s");
+    }
+
+    public function test_no_view_puts_a_blade_echo_inside_a_quoted_javascript_string(): void
+    {
+        // The whole class, not only the reachable sites: '{{ $x }}' inside a wire: attribute
+        // is HTML-escaped but not JavaScript-escaped. Use @js($x).
+        $offenders = [];
+        $views = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(resource_path('views')));
+        foreach ($views as $file) {
+            if (! $file->isFile() || ! str_ends_with($file->getFilename(), '.blade.php')) {
+                continue;
+            }
+            foreach (file($file->getPathname()) as $n => $line) {
+                if (preg_match('/wire:[\w.:-]+="[^"]*\'\{\{/', $line) === 1) {
+                    $offenders[] = $file->getFilename().':'.($n + 1);
+                }
+            }
+        }
+        $this->assertSame([], $offenders);
+    }
+
     public function test_a_content_search_finds_the_file(): void
     {
         $this->page()

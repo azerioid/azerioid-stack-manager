@@ -19,10 +19,10 @@
                     <span class="led {{ ($svc['running'] ?? false) ? 'led-on' : 'led-bad' }}"></span>
                 </div>
                 <div class="mt-4 flex flex-wrap gap-2">
-                    <button class="btn-ghost text-xs" wire:click="ask('start', '{{ $svc['unit'] }}')">Start</button>
-                    <button class="btn-ghost text-xs" wire:click="ask('stop', '{{ $svc['unit'] }}')">Stop</button>
-                    <button class="btn-ghost text-xs" wire:click="ask('restart', '{{ $svc['unit'] }}')">Restart</button>
-                    <button class="btn-ghost text-xs" wire:click="showRaw('{{ $svc['unit'] }}')">status + journal</button>
+                    <button class="btn-ghost text-xs" wire:click="ask('start', @js($svc['unit']))">Start</button>
+                    <button class="btn-ghost text-xs" wire:click="ask('stop', @js($svc['unit']))">Stop</button>
+                    <button class="btn-ghost text-xs" wire:click="ask('restart', @js($svc['unit']))">Restart</button>
+                    <button class="btn-ghost text-xs" wire:click="showRaw(@js($svc['unit']))">status + journal</button>
                 </div>
                 @if (!empty($svc['journal']))
                     <pre class="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-bad/20 bg-ink-950/60 p-2 font-mono text-[10px] leading-4 text-zinc-400">{{ $svc['journal'] }}</pre>

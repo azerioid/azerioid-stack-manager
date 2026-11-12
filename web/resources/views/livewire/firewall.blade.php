@@ -79,7 +79,7 @@
                                         <span class="text-[11px] text-zinc-500" title="The broker refuses to close this port.">protected</span>
                                     @else
                                         <button type="button" class="text-bad hover:underline"
-                                                wire:click="remove('{{ $rule['action'] }}', {{ $rule['port'] }}, '{{ $rule['protocol'] }}', @js($rule['source']))"
+                                                wire:click="remove(@js($rule['action']), {{ $rule['port'] }}, @js($rule['protocol']), @js($rule['source']))"
                                                 wire:confirm="Remove this rule?">Remove</button>
                                     @endif
                                 </td>

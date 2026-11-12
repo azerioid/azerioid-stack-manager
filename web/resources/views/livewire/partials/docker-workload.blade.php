@@ -44,7 +44,7 @@
             @foreach ($dockerRegistries as $reg)
                 <li class="flex items-center gap-2 font-mono text-xs">
                     <span>{{ $reg['name'] }} — {{ $reg['username'] }}@{{ $reg['host'] }}</span>
-                    <button type="button" class="text-bad underline" wire:click="deleteRegistry('{{ $reg['name'] }}')">delete</button>
+                    <button type="button" class="text-bad underline" wire:click="deleteRegistry(@js($reg['name']))">delete</button>
                 </li>
             @endforeach
         </ul>

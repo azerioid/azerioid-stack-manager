@@ -67,14 +67,14 @@
                                 <td class="px-2 py-2 {{ $on ? 'text-good' : 'text-zinc-500' }}">{{ $on ? 'enabled' : 'off' }}</td>
                                 <td class="px-2 py-2 text-right whitespace-nowrap">
                                     @if ($on)
-                                        <button type="button" class="text-brass-400 hover:underline" wire:click="showKeys('{{ $domain }}')">
+                                        <button type="button" class="text-brass-400 hover:underline" wire:click="showKeys(@js($domain))">
                                             {{ $keysFor === $domain ? 'Hide keys' : 'Keys' }}
                                         </button>
                                         <button type="button" class="ml-2 text-zinc-400 hover:underline"
-                                                wire:click="toggle('{{ $domain }}', false)">Disable</button>
+                                                wire:click="toggle(@js($domain), false)">Disable</button>
                                     @else
                                         <button type="button" class="text-brass-400 hover:underline"
-                                                wire:click="toggle('{{ $domain }}', true)">Enable</button>
+                                                wire:click="toggle(@js($domain), true)">Enable</button>
                                     @endif
                                 </td>
                             </tr>
@@ -97,7 +97,7 @@
                                                             <td class="py-1 text-zinc-500">{{ $key['comment'] }}</td>
                                                             <td class="py-1 text-right">
                                                                 <button type="button" class="text-bad hover:underline"
-                                                                        wire:click="removeKey('{{ $key['fingerprint'] }}')"
+                                                                        wire:click="removeKey(@js($key['fingerprint']))"
                                                                         wire:confirm="Remove this key? Anyone using it loses access immediately.">Remove</button>
                                                             </td>
                                                         </tr>

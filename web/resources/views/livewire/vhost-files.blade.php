@@ -291,7 +291,7 @@
                             </span>
                             @if ($hit['type'] === 'dir')
                                 <button type="button" class="text-xs text-brass-400 hover:underline"
-                                        wire:click="clearSearch(); $wire.openDir('{{ $hit['path'] }}')">Open</button>
+                                        wire:click="clearSearch(); $wire.openDir(@js($hit['path']))">Open</button>
                             @else
                                 <span class="text-[11px] text-zinc-500">{{ $hit['size'] }} bytes</span>
                             @endif
