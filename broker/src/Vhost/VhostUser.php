@@ -33,11 +33,18 @@ final class VhostUser
     public const LEGACY_GROUP = 'azerioid-vhosts';
     public const PREFIX = 'az-vh-';
 
+    /**
+     * The lossy name every per-site resource is keyed by (pool, Docker and PM2 homes,
+     * deploy directory, settings files): runs of anything but [a-z0-9] become '-'.
+     */
+    public static function slug(string $domain): string
+    {
+        return trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($domain)), '-');
+    }
+
     public static function username(string $domain): string
     {
-        $slug = strtolower($domain);
-        $slug = preg_replace('/[^a-z0-9]+/', '-', $slug) ?? '';
-        $slug = trim($slug, '-');
+        $slug = self::slug($domain);
         if ($slug === '') {
             throw new BrokerException('Cannot derive vhost user name.', 2);
         }
@@ -400,13 +407,28 @@ final class VhostUser
      * Refuse to let a new domain adopt an identity recorded for a different one.
      * Two domains that collapse to the same slug would otherwise share a uid.
      */
-    private static function assertNoIdentityCollision(Runtime $runtime, Config $config, string $domain, string $username): void
+    public static function assertNoIdentityCollision(Runtime $runtime, Config $config, string $domain, string $username): void
     {
         $path = dirname($config->managedComponentsPath) . '/vhost-users.json';
         $meta = self::load($runtime, $path);
+        // A96: above 26 slug characters username() hashes the domain, so two domains
+        // with the same slug get different accounts - but the pool, Docker and PM2
+        // homes, deploy directory and settings files are all keyed by the slug and
+        // would still be shared. Compare slugs too. Only for a domain not recorded
+        // yet: an existing pair is left working rather than locked out of ensure().
+        $isNew = !isset($meta['users'][$domain]);
+        $slug = self::slug($domain);
         foreach ($meta['users'] as $recordedDomain => $info) {
             if ($recordedDomain === $domain) {
                 continue;
+            }
+            if ($isNew && self::slug((string) $recordedDomain) === $slug) {
+                throw new BrokerException(
+                    "The domain '{$domain}' and the existing vhost '{$recordedDomain}' reduce to the same name "
+                    . "('{$slug}'), which per-site files and directories are keyed by; choose a domain that differs "
+                    . 'in more than punctuation.',
+                    2
+                );
             }
             if ((string) ($info['username'] ?? '') === $username) {
                 throw new BrokerException(

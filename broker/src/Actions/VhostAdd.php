@@ -9,6 +9,7 @@ use AzerioidPanel\Broker\Network\SiteHttpFirewall;
 use AzerioidPanel\Broker\Php\SitePhpTimeouts;
 use AzerioidPanel\Broker\Runtime;
 use AzerioidPanel\Broker\Validator;
+use AzerioidPanel\Broker\Vhost\VhostUser;
 use AzerioidPanel\Broker\Web\VhostEngine;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -19,6 +20,8 @@ final class VhostAdd
         $domain = Validator::domain($args[0] ?? ($input['domain'] ?? ''));
         $root = Validator::webRoot((string) ($args[1] ?? ($input['root'] ?? '')), $config->wwwRoot, $runtime);
         WebServers::assertRootNotShared($runtime, $config, $domain, $root);
+        // A96: refuse a colliding domain before anything is provisioned for it.
+        VhostUser::assertNoIdentityCollision($runtime, $config, $domain, VhostUser::username($domain));
         $type = Validator::vhostType((string) ($args[2] ?? ($input['type'] ?? 'php')));
 
         $phpVersion = null;

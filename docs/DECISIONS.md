@@ -2697,3 +2697,24 @@ case, which needs no timing at all, is what this closes.
 
 A path with a `.` or `..` segment is refused too, since the prefix test is textual.
 runs) and `::test_ensure_still_hands_over_a_plain_stored_docroot`.
+
+## A96 — Two domains with the same slug cannot both be vhosts
+
+Security audit run-2 (2026-11-11), finding AZ-24 (and its git-deploy variant). A47 made `VhostUser::ensure` refuse
+a domain whose derived **account name** was already recorded for another domain. But `username()` hashes the
+domain once the slug is longer than 26 characters, so `a-very-long-shop-name-example.com` and
+`a.very.long.shop.name.example.com` got **different** accounts and passed — while the PHP-FPM pool, socket and
+session directory, the Docker home and settings, the PM2 home, the supervisor program names, the git-deploy
+directory (deploy key, webhook secret, mirror) and the bundle settings are all keyed by the **slug**, which is the
+same for both. Creating the second vhost rewrote the first one's pool, and the second site's deploy used the
+first one's key and secret.
+
+Decision: `VhostUser::assertNoIdentityCollision` also compares slugs (`VhostUser::slug`, the derivation every
+per-site module uses), and `vhost.add` runs it before anything is provisioned. The check applies only to a domain
+that is not recorded yet, so a pair that already exists on a host keeps working instead of being locked out of
+`ensure()`; such a host needs one of the two vhosts recreated under a different name.
+
+Not done here: binding the git-deploy directory to the domain recorded in its `state.json` (the audit's narrower
+fix for an already existing pair).
+
+Test: `AuditHardeningTest::test_a_second_domain_with_the_same_long_slug_is_refused`.
