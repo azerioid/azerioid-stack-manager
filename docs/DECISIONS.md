@@ -2803,3 +2803,24 @@ checks can only reach what the site already owns. A failed `setfacl` stays non-f
 Test: `ProgramIdentityTest::test_acl_grant_requires_a_plain_directory_inside_the_bound_site` (another site's
 directory refused, symlinked directory refused, no `setfacl` run for either; a plain in-site directory granted).
 The program-identity tests now define the bound vhost, which every real host has.
+
+## A101 — Modes of site-owned leaves are set by their owner, not by a root `chmod`
+
+Security audit run-2 (2026-11-11), finding AZ-26. A61/A64 made `DockerManager::ensureVolumeDirs` and
+`Pm2Manager::ensurePm2Home` check for symlinked components and use `chown -h`, but both still finished with
+`Runtime::chmod`, which follows links, on a leaf inside a site-owned tree. Between the checks and that `chmod` there
+are process spawns, so the site can swap the leaf for a symlink and root would set mode `02775` (a Docker volume
+directory) or `0700` (a PM2 home) on whatever it names.
+
+Decision: both changes act on the directory the checks resolved, with the cwd pinned to it —
+`VhostUser::pinnedTo($real, …)` runs `sh -c 'cd -P -- "$1" && [ "$(pwd -P)" = "$1" ] && exec …'` and the command
+operates on `.`. A leaf swapped after the checks lands `cd -P` somewhere else, the `pwd -P` comparison fails, and the
+broker refuses the volume or PM2 home instead of touching the target. `chown -h … .` runs as root; the mode is set as
+the new owner (`runuser -u <owner> -- …chmod <mode> .`), so even a slip could only reach that owner's own files —
+this matters on the shared daemon, where the owner (the supervised account) also owns other sites' volumes. The
+setgid bit on the volume directory is kept: the owner is a member of the docroot group (A49).
+
+Tests: `DockerWorkloadTest::test_data_volumes_are_bind_mounted_from_inside_the_app` and
+`NodeRuntimesTest::test_a_pm2_vhost_runs_under_the_chosen_major_and_can_move` now assert the pinned owner `chmod` and that
+no root `chmod` touched the leaf. The pinned form was checked on a real swapped directory: the command exits 1 and
+the link target keeps its mode.
