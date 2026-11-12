@@ -205,7 +205,16 @@ final class DockerWorkloadTest extends TestCase
         $this->assertSame(0, $code);
         $this->assertStringContainsString('-v ' . self::ROOT . '/data/pg:/var/lib/postgresql/data', $this->supervisorConf());
         $this->assertTrue($this->rt->isDir(self::ROOT . '/data/pg'));
-        $this->assertSame(02775, $this->rt->modes[self::ROOT . '/data/pg'] ?? null, 'readable by the container\'s non-root user');
+        // Readable by the container's non-root user; A101: the mode is set as the new owner.
+        $chmods = array_values(array_filter(
+            array_column($this->rt->execLog, 'command'),
+            static fn (array $c): bool => in_array('/bin/chmod', $c, true) && in_array(self::ROOT . '/data/pg', $c, true)
+        ));
+        $this->assertCount(1, $chmods);
+        $this->assertSame(['-u'], array_slice($chmods[0], 1, 1));
+        // Pinned to the checked directory as cwd, then `chmod .` — a swapped leaf fails the pwd check.
+        $this->assertSame(\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo(self::ROOT . '/data/pg', ['/bin/chmod', '2775', '.']), array_slice($chmods[0], 4));
+        $this->assertArrayNotHasKey(self::ROOT . '/data/pg', $this->rt->modes, 'no root chmod on the site-owned leaf');
     }
 
     /** @return iterable<string, array{0:array<string,mixed>}> */

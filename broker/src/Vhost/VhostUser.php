@@ -390,6 +390,20 @@ final class VhostUser
      * must be a root-controlled directory; every segment of $path beneath it,
      * $path included, must be a real (non-symlink) entry.
      */
+    /**
+     * Run $command with its cwd pinned to $realDir (A101): `cd -P` and then require
+     * `pwd -P` to equal the real path the broker checked, so the command acts on `.` —
+     * the inode it entered — and a path swapped after the checks makes it fail
+     * instead of reaching somewhere else. $realDir must be a resolved real path.
+     *
+     * @param  list<string>  $command  acts on `.`
+     * @return list<string>
+     */
+    public static function pinnedTo(string $realDir, array $command): array
+    {
+        return ['/bin/sh', '-c', 'cd -P -- "$1" && [ "$(pwd -P)" = "$1" ] && shift && exec "$@"', 'sh', $realDir, ...$command];
+    }
+
     public static function assertNoSymlinkUnder(Runtime $runtime, string $base, string $path): void
     {
         $base = rtrim($base, '/');

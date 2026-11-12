@@ -1087,12 +1087,23 @@ final class DockerManager
             if (!$this->runtime->isDir($path)) {
                 $this->runtime->mkdir($path, 02775);
                 VhostUser::assertNoSymlinkUnder($this->runtime, $appDir, $path);
-                if ($this->runtime->resolveUnderBase($path, $appDir) === null) {
+                $real = $this->runtime->resolveUnderBase($path, $appDir);
+                if ($real === null) {
                     throw new BrokerException("Volume {$volume['host']} resolves outside the app directory.", 3);
                 }
                 if ($this->runtime->getuid() === 0) {
-                    $this->runtime->exec(['/usr/bin/chown', '-h', ($this->onSiteDaemon($spec['domain']) ? VhostUser::username($spec['domain']) : SupervisedUser::USERNAME) . ':' . VhostUser::docrootGroup($this->runtime, $spec['domain']), $path], null, 15);
-                    $this->runtime->chmod($path, 02775);
+                    $owner = $this->onSiteDaemon($spec['domain']) ? VhostUser::username($spec['domain']) : SupervisedUser::USERNAME;
+                    // A101: both changes act on the directory the checks resolved, pinned
+                    // as cwd — the site can swap the leaf for a link after the checks, and
+                    // chmod has no no-follow mode. The mode is set as the new owner.
+                    foreach ([
+                        VhostUser::pinnedTo($real, ['/usr/bin/chown', '-h', $owner . ':' . VhostUser::docrootGroup($this->runtime, $spec['domain']), '.']),
+                        [$this->runuserBin(), '-u', $owner, '--', ...VhostUser::pinnedTo($real, ['/bin/chmod', '2775', '.'])],
+                    ] as $cmd) {
+                        if (!$this->runtime->exec($cmd, null, 15)->ok()) {
+                            throw new BrokerException("Volume {$volume['host']} changed while it was being prepared.", 1);
+                        }
+                    }
                 }
             }
         }

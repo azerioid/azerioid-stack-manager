@@ -883,8 +883,21 @@ final class Pm2Manager
                 $this->runtime->mkdir($dir, $mode);
             }
             if ($this->runtime->getuid() === 0) {
-                $this->runtime->exec(['/usr/bin/chown', '-h', $user . ':' . $group, $dir], null, 15);
-                $this->runtime->chmod($dir, $mode);
+                // A101: act on the checked directory pinned as cwd, the mode as the owner
+                // (chmod has no no-follow mode; the leaf is site-owned and swappable).
+                $real = $this->runtime->resolveUnderBase($dir, $base);
+                $fail = "The PM2 directory {$dir} changed while it was being prepared.";
+                if ($real === null) {
+                    throw new BrokerException($fail, 3);
+                }
+                foreach ([
+                    VhostUser::pinnedTo($real, ['/usr/bin/chown', '-h', $user . ':' . $group, '.']),
+                    [$this->runuserBin(), '-u', $user, '--', ...VhostUser::pinnedTo($real, ['/bin/chmod', sprintf('%04o', $mode), '.'])],
+                ] as $cmd) {
+                    if (!$this->runtime->exec($cmd, null, 15)->ok()) {
+                        throw new BrokerException($fail, 1);
+                    }
+                }
             }
         }
         if ($this->runtime->getuid() === 0) {

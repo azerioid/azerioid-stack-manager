@@ -141,7 +141,9 @@ final class NodeRuntimesTest extends TestCase
         // A56: the app runs as the site, with PM2 state of its own outside the shared account.
         $this->assertStringContainsString("user=az-vh-node-example-com\n", $conf);
         $this->assertStringContainsString('PM2_HOME=/var/lib/azerioid-pm2/node-example-com ', $conf);
-        $this->assertSame(0700, $this->rt->modes['/var/lib/azerioid-pm2/node-example-com'] ?? null);
+        // A101: the home's mode is set as the site identity, never by a root chmod.
+        $this->assertContains(['/usr/sbin/runuser', '-u', 'az-vh-node-example-com', '--', ...\AzerioidPanel\Broker\Vhost\VhostUser::pinnedTo('/var/lib/azerioid-pm2/node-example-com', ['/bin/chmod', '0700', '.'])], array_column($this->rt->execLog, 'command'));
+        $this->assertArrayNotHasKey('/var/lib/azerioid-pm2/node-example-com', $this->rt->modes);
         $this->assertSame(0711, $this->rt->modes['/var/lib/azerioid-pm2'] ?? null);
 
         [$code, $json] = $this->run_($kernel, 'vhost.pm2.node', ['node' => '24']);
