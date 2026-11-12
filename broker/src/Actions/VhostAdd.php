@@ -18,6 +18,7 @@ final class VhostAdd
     {
         $domain = Validator::domain($args[0] ?? ($input['domain'] ?? ''));
         $root = Validator::webRoot((string) ($args[1] ?? ($input['root'] ?? '')), $config->wwwRoot, $runtime);
+        WebServers::assertRootNotShared($runtime, $config, $domain, $root);
         $type = Validator::vhostType((string) ($args[2] ?? ($input['type'] ?? 'php')));
 
         $phpVersion = null;

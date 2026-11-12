@@ -2640,3 +2640,33 @@ existing check.
 
 Tests: `AuditHardeningTest::test_web_root_refuses_a_resolved_path_with_config_syntax` (real symlinks on a temporary
 www root, five characters) and `::test_web_root_still_accepts_an_ordinary_nested_docroot`.
+
+## A94 — A docroot stays inside its own site directory and overlaps no other vhost
+
+Security audit run-2 (2026-11-11), finding AZ-10. `Validator::webRoot` accepted any resolved path under the www
+root. A site identity owns its own tree, so it can plant a symlink there that points at **another site's**
+directory; asking `vhost.edit` for a docroot through that link stored the other site's path as this site's
+docroot. Every later File Manager, Terminal or pool render then ran `VhostUser::ensure`, which as root gives the
+docroot tree to this site's identity — the other site's files changed owner. Neither `vhost.add` nor `vhost.edit`
+compared the root with other vhosts; only `vhost.clone` did (v2.15.0), and ADR A63 had called the missing check a
+creation-validation gap.
+
+Decision, two checks:
+
+- `Validator::webRoot`: the first path component below the www root must be the same before and after
+  resolution. A link inside a site's own directory (`current -> releases/x`) keeps working; a link out of it into
+  another directory under the base is refused, and so is a path through a symlink whose target does not exist
+  yet (it resolves as plain text, so where it will point cannot be checked). Ceiling: a site directory that is itself a symlink to another
+  top-level directory (switching the whole top for blue/green) is now refused too; point the vhost at the target.
+- `WebServers::assertRootNotShared`, called by `vhost.add` and `vhost.edit`: the root may not equal, contain or
+  lie inside another vhost's root. Siblings under a shared top directory (A62/A63) do not overlap and stay
+  allowed. A stored root is compared with only its www-root prefix mapped to the real base (it may name the base
+  through a symlinked www root or predate A47); the rest is normalized lexically, never resolved, because
+  resolving it would follow links a site owns — a site pointing its own root at `/` could otherwise block every
+  add and edit. On a shared top, a link from one site's docroot to a sibling's is caught by this check, since the
+  target is the sibling's root; a target that is no vhost's root affects no one.
+
+Existing vhosts are not re-checked; the guard applies the next time a root is set.
+
+Tests: `AuditHardeningTest::test_web_root_refuses_a_symlink_into_another_site_directory` (real symlinks; an in-site
+link still accepted) and `VhostEditRollbackTest::test_edit_refuses_a_root_inside_another_vhost_and_changes_nothing`.

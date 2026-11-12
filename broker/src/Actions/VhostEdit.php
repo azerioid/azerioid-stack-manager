@@ -43,6 +43,7 @@ final class VhostEdit
                 $config->wwwRoot,
                 $runtime
             );
+            WebServers::assertRootNotShared($runtime, $config, $domain, $changes['root']);
         }
         if (array_key_exists('php_version', $input) || isset($args[2])) {
             $changes['php_version'] = Validator::phpVersion(

@@ -38,6 +38,31 @@ CADDY;
         $this->kernel = new Kernel($this->cfg, $this->rt);
     }
 
+    /** A94: a vhost's root may not be, contain or sit inside another vhost's root. */
+    public function test_edit_refuses_a_root_inside_another_vhost_and_changes_nothing(): void
+    {
+        $this->rt->files['/etc/caddy/conf.d/other.example.com.conf'] = str_replace(
+            ['shop.example.com', '/data/www/shop.example.com'],
+            ['other.example.com', '/data/www/other.example.com'],
+            $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf']
+        );
+        $this->rt->dirs['/data/www/other.example.com/public'] = true;
+        $before = $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf'];
+
+        foreach (['/data/www/other.example.com/public', '/data/www/other.example.com'] as $root) {
+            ob_start();
+            $code = $this->kernel->run(['broker', 'vhost.edit', 'shop.example.com'], ['root' => $root]);
+            $out = (string) ob_get_clean();
+            $this->assertNotSame(0, $code, $out);
+            $this->assertStringContainsString('overlaps the web root of other.example.com', $out);
+        }
+        $this->assertSame($before, $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf']);
+        $this->assertSame([], array_filter(
+            array_column($this->rt->execLog, 'command'),
+            static fn (array $c): bool => in_array('/usr/bin/chown', $c, true)
+        ));
+    }
+
     public function test_edits_php_version_after_validate_and_reload(): void
     {
         $this->rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
