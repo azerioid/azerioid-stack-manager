@@ -2739,3 +2739,27 @@ separate change.
 Tests: `SiteDockerTest` assertions updated to `-execdir`, `VhostIsolationTest` ordering check updated, and
 `SiteDockerTest::test_find_based_ownership_changes_use_execdir` fails on any `-exec chown|chgrp` in either migrator.
 The swap itself cannot be modelled by the fake runtime.
+
+## A98 — Root never chowns, chmods or writes inside the Adminer tool directory by path
+
+Security audit run-2 (2026-11-11), finding AZ-21. The Adminer tool directory is owned by the tool pool's account
+(`AdminerUser::HOME` is the tool directory). On install, `AdminerTool::downloadArtifact` renamed the verified
+download into it and then, as root, ran `chown` (without `-h`) and `chmod 0640` on `TOOL_DIR/adminer.php`; on a
+failed install, `restore()` wrote the previous artifact there with a direct root write. The account can replace
+that entry with a symlink, and root would then change the owner and mode of, or write to, whatever it names. A75's
+erratum had moved the pool's **temp** directory out of the tool directory for exactly this reason; the artifact
+path stayed.
+
+Decision: `moveIntoToolDir` sets owner (`chown -h`) and mode on the file while it is still in the root-owned staging
+directory and then renames it in. `rename()` replaces whatever entry is at the destination — a planted link
+included — without following it. The rollback path stages the previous artifact the same way, which also fixes it
+being left `root:root` and unreadable by the pool. The rollback copy itself is read **as the pool's account**
+(`runuser … cat`), not by root: otherwise a link at that path (to `/etc/shadow`, say) would be read by root and then
+installed readable by the account. Assumption: the staging directory and the tool directory are on
+the same filesystem (both under `/var/lib/azerioid-panel`), so the rename is atomic and not a copy.
+
+Not done here: making the tool directory itself root-owned (the audit's complete variant). It would need the pool's
+group membership settled first, because the pool runs with the web user's group.
+
+Test: `AdminerToolTest` — no `chown`/`chmod` argument inside the tool directory, and the staged download is
+chowned with `-h` before the rename.
