@@ -2454,3 +2454,5 @@ Existing hosts are not touched by this: an admin that was created with the old d
 it is changed in Settings. Operators of such hosts must change it.
 
 Test: `AuthTest::test_cli_admin_creation_refuses_a_password_below_the_setup_policy`.
+
+**Validated on the Rocky staging host (2026-11-12)**, with this command run from a throwaway copy of the installed v2.14.5 app against its own empty database: the old default, a long password without a symbol or upper case, and an empty value each exit 1 and create no user; a compliant password creates the admin. The installer's interactive re-prompt was not exercised (it needs a TTY).
