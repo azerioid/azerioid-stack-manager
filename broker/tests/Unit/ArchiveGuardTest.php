@@ -353,6 +353,134 @@ final class ArchiveGuardTest extends TestCase
         $this->assertSame(['site/current'], $out['names']);
     }
 
+    /** A103: an entry written through a symlink an earlier entry made is refused in every mode. */
+    public function test_rejects_an_entry_below_an_earlier_symlink(): void
+    {
+        foreach ([false, true] as $anyTarget) {
+            try {
+                ArchiveGuard::inspectStream(self::reader(self::archive(
+                    self::entry('site/public/storage', '', '2', 0777, '', '../storage/app/public'),
+                    self::entry('./site/public/storage/x.php', 'x'),
+                )), anySymlinkTarget: $anyTarget);
+                $this->fail('an entry below a symlink must be rejected');
+            } catch (BrokerException $e) {
+                $this->assertStringContainsString('below a symlink', $e->getMessage());
+            }
+        }
+    }
+
+    /** A103: names are compared as tar resolves them, and hardlinks may not go through a symlink. */
+    public function test_rejects_tricks_around_the_below_symlink_rule(): void
+    {
+        $cases = [
+            'denormalised name' => [
+                self::entry('.//site//public/storage', '', '2', 0777, '', '../storage'),
+                self::entry('site/./public/storage/x.php', 'x'),
+            ],
+            'hardlink through a symlink' => [
+                self::entry('site/l', '', '2', 0777, '', 'a'),
+                self::entry('site/h', '', '1', 0644, '', 'site/l/x'),
+            ],
+            'hardlink to a symlink' => [
+                self::entry('site/l', '', '2', 0777, '', 'a'),
+                self::entry('site/h', '', '1', 0644, '', './site/l'),
+            ],
+        ];
+        foreach ($cases as $label => $entries) {
+            try {
+                self::inspect(self::archive(...$entries));
+                $this->fail($label . ' must be rejected');
+            } catch (BrokerException $e) {
+                $this->assertMatchesRegularExpression('/below a symlink|through a symlink/', $e->getMessage(), $label);
+            }
+        }
+    }
+
+    /** A103: a pax linkpath overrides the header's link name, so it is the one checked. */
+    public function test_checks_a_pax_linkpath(): void
+    {
+        $record = '30 linkpath=../../../etc/shadow' . "\n";
+        $record = strlen($record) . substr($record, 2);
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('escapes the archive root');
+        self::inspect(self::archive(
+            self::entry('PaxHeader', $record, 'x'),
+            self::entry('site/x', '', '2', 0777, '', 'ok'),
+        ));
+    }
+
+    /** A103: pax records are read by length; a global path override and any pax header in a clone stream are refused. */
+    public function test_pax_handling_matches_tar(): void
+    {
+        $rec = static function (string $kv): string {
+            $body = ' ' . $kv . "\n";
+            $n = strlen($body) + 1;
+            $n = strlen((string) ($n + strlen((string) $n) - 1)) + strlen($body);
+
+            return $n . $body;
+        };
+        // Last record wins, as in tar: a benign path followed by a traversal is the traversal.
+        try {
+            self::inspect(self::archive(
+                self::entry('PaxHeader', $rec('path=site/ok') . $rec('path=../../etc/x'), 'x'),
+                self::entry('site/ok', 'x'),
+            ));
+            $this->fail('the last pax path must be the one checked');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('traversal', $e->getMessage());
+        }
+        foreach ([
+            'global path' => [self::entry('Global', $rec('path=site/x'), 'g'), 'global pax'],
+            'malformed' => [self::entry('PaxHeader', "99 path=x\n", 'x'), 'malformed pax'],
+        ] as $label => [$header, $expect]) {
+            try {
+                self::inspect(self::archive($header, self::entry('site/a', 'x')));
+                $this->fail($label);
+            } catch (BrokerException $e) {
+                $this->assertStringContainsString($expect, $e->getMessage(), $label);
+            }
+        }
+        try {
+            self::inspect(self::archive(self::entry('PaxHeader', $rec('size=99999'), 'x'), self::entry('site/a', 'x')));
+            $this->fail('a pax size override must be refused');
+        } catch (BrokerException $e) {
+            $this->assertStringContainsString('"size" is not accepted', $e->getMessage());
+        }
+        $this->expectExceptionMessage('pax header in a site copy');
+        ArchiveGuard::inspectStream(self::reader(self::archive(
+            self::entry('PaxHeader', $rec('mtime=1'), 'x'),
+            self::entry('./a', 'x'),
+        )), anySymlinkTarget: true);
+    }
+
+    /** A103: GNU-format headers keep other data at the ustar prefix offset; tar does not join it. */
+    public function test_gnu_magic_has_no_prefix(): void
+    {
+        $h = self::header('a.txt', 0, '0', 0644, '../../etc');
+        $h = substr_replace($h, "ustar  \0", 257, 8);
+        $h = substr_replace($h, str_repeat(' ', 8), 148, 8);
+        $h = substr_replace($h, sprintf('%06o', array_sum(array_map('ord', str_split($h)))) . "\0 ", 148, 8);
+        $out = self::inspect(self::archive($h));
+        $this->assertSame(['a.txt'], $out['names']);
+    }
+
+    /** A103: a site clone keeps any symlink as it is; hardlinks stay confined. */
+    public function test_a_clone_stream_keeps_absolute_symlinks_but_no_hardlinks(): void
+    {
+        $out = ArchiveGuard::inspectStream(self::reader(self::archive(
+            self::entry('./public/storage', '', '2', 0777, '', '/data/www/src.test/storage/app/public'),
+        )), anySymlinkTarget: true);
+        $this->assertSame(['./public/storage'], $out['names']);
+
+        // A clone stream is made with --hard-dereference: any hardlink in it is crafted.
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('hardlink in a site copy');
+        ArchiveGuard::inspectStream(self::reader(self::archive(
+            self::entry('./a', 'x'),
+            self::entry('./b', '', '1', 0644, '', './a'),
+        )), anySymlinkTarget: true);
+    }
+
     public function test_accepts_hardlink_to_an_in_archive_path(): void
     {
         $out = self::inspect(self::archive(

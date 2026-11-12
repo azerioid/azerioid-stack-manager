@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
+use AzerioidPanel\Broker\Backup\ArchiveGuard;
 use AzerioidPanel\Broker\BrokerException;
 use AzerioidPanel\Broker\Config;
 use AzerioidPanel\Broker\Database\DatabaseManager;
@@ -98,83 +99,88 @@ final class VhostClone
             }
         }
 
-        // Provision the clone as its own isolated vhost (new az-vh-<dst> identity).
-        $servers->addVhost($runtime, $config, [
-            'domain' => $dst,
-            'root' => $dstRoot,
-            'type' => (string) ($source['type'] ?? 'php'),
-            'php_version' => $source['php_version'] ?? null,
-            'upstream' => $source['reverse_proxy'] ?? null,
-            'engine' => (string) ($source['engine'] ?? 'caddy'),
-        ]);
-        // addVhost seeds a welcome index into the empty docroot. It is not part of
-        // the source: left in place it survives the copy whenever the source has no
-        // file of that name. $dstTop did not exist before addVhost, so anything in
-        // the docroot now is that seed.
-        foreach (['index.php', 'index.html'] as $seeded) {
-            if ($runtime->fileExists($dstRoot . '/' . $seeded)) {
-                $runtime->deleteFile($dstRoot . '/' . $seeded);
+        // A103: copy first, provision after. The clone's directory is created root
+        // 0700 and filled before any identity, pool or route for the clone exists, so
+        // nothing runs as the clone — and no source code copied into it — while root
+        // is still writing the tree (AZ-18). The source is read as the SOURCE identity
+        // (AZ-32): root never walks the live, site-owned tree by path, so a component
+        // the site swaps mid-copy reaches only what that site could already read.
+        // The clone's identity must be new as well: refuse before anything is made, so a
+        // rollback can never remove an account that belongs to another site (A96).
+        VhostUser::assertNoIdentityCollision($runtime, $config, $dst, VhostUser::username($dst));
+        $ownIdentity = !VhostUser::userExists($runtime, VhostUser::username($dst));
+        $runtime->mkdir($dstTop, 0700);
+        $runtime->chmod($dstTop, 0700);
+        try {
+            $this->copyAsSource($runtime, $config, $src, $srcTop, $dst, $dstTop);
+        } catch (\Throwable $e) {
+            $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
+            throw str_contains($e->getMessage(), 'the clone was removed')
+                ? $e
+                : new BrokerException('Copying the site files failed; the clone was removed. ' . $e->getMessage(), $e instanceof BrokerException ? $e->getCode() : 1);
+        }
+        try {
+            // The tree came from the source's stream: a docroot path through one of its
+            // symlinks is refused, never created or followed by root.
+            VhostUser::assertNoSymlinkUnder($runtime, $dstTop, $dstRoot);
+            if (!$runtime->isDir($dstRoot)) {
+                $runtime->mkdir($dstRoot, 0755);
             }
+        } catch (\Throwable $e) {
+            $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
+            throw new BrokerException('The copied site has no plain docroot; the clone was removed. ' . $e->getMessage(), 3);
         }
 
-        // Copy the whole source site tree into the clone. Deliberately NOT rsync -a:
-        //  -rlt      — recurse, keep symlinks as links (not followed), keep mtimes;
-        //  no -p     — do not preserve source modes. A tenant can set the setuid/setgid
-        //              bit on a file they own; with --no-o the copy becomes root-owned,
-        //              and a root-owned setuid file is a local-root primitive. Dropping
-        //              -p (and --chmod=ug-s as a belt-and-braces) means no such bit
-        //              survives; applyOwnership below then sets the final 2770/0660.
-        //  --no-D    — do not recreate device or special files as root from a
-        //              tenant-controlled tree.
-        //  --no-o --no-g — root-owned copy (not az-vh-<src>): the clone must not inherit
-        //              the SOURCE tenant's ownership, and a root-owned tree means no
-        //              tenant can reach $dstTop to race the handover below.
-        //  --one-file-system stays on the site's own filesystem. No --delete: $dstTop
-        //  is freshly created, nothing to prune, and --delete into a tree is a foot-gun.
-        $copy = $runtime->exec([
-            '/usr/bin/rsync', '-rlt', '--no-D', '--no-o', '--no-g', '--one-file-system',
-            '--chmod=ug-s', '--exclude', '.git/',
-            rtrim($srcTop, '/') . '/', rtrim($dstTop, '/') . '/',
-        ], null, 1800);
-        // Exit 24 is "some source files vanished during the transfer" — routine on a
-        // live site (sessions, cache files) and the copy is otherwise complete. Any
-        // other failure leaves a half-copied tree behind a vhost that already routes:
-        // remove both, so nothing half-built is served and a retry is not refused.
-        if (!$copy->ok() && $copy->exitCode !== 24) {
-            $this->rollback($runtime, $config, $dst, $dstTop);
-            throw new BrokerException('Copying the site files failed; the clone was removed. ' . trim($copy->stderr), 1);
-        }
+        try {
+            // Create the clone's identity and hand it the docroot + top directory; the
+            // A72 sweep (bounded to the site top) quarantines any symlink that escapes
+            // the clone's tree.
+            VhostUser::ensure($runtime, $config, $dst, $dstRoot);
 
-        // Create the clone's identity and hand it the docroot + top directory; the
-        // A72 sweep (bounded to the site top) quarantines any symlink that escapes
-        // the clone's tree.
-        VhostUser::ensure($runtime, $config, $dst, $dstRoot);
+            // ensure() only owns the docroot and the top directory. The copy also holds
+            // the app code above the docroot (vendor, .env, storage), root's from the
+            // extraction — hand the WHOLE tree to the clone's identity (A49). The group is
+            // whatever ensure settled the docroot on (az-vh-<dst> once migrated, the
+            // legacy group before), read back so this stays correct either way.
+            $grp = trim($runtime->exec(['/usr/bin/stat', '-c', '%G', $dstRoot], null, 10)->stdout);
+            if ($grp === '') {
+                throw new BrokerException('Could not hand the clone over to its identity; the clone was removed.', 1);
+            }
+            // keepExec: the code above the docroot (vendor/bin, node_modules/.bin targets,
+            // artisan, deploy scripts) must stay runnable, as it is on the source.
+            VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp, true, $config->wwwRoot);
+            // The handover reset every file's mode, undoing the .env 0600 that ensure()'s
+            // A72 pass had set — and that pass ran while everything above the docroot was
+            // still root's. Run it again now that the clone owns its tree. (ensure() skips
+            // it for a not-yet-migrated identity, whose pool does not run as the site user.)
+            if ($grp !== VhostUser::LEGACY_GROUP) {
+                VhostUser::hardenContent($runtime, $config, $dstRoot, VhostUser::username($dst));
+            }
 
-        // ensure() only owns the docroot and the top directory. The copy also holds
-        // the app code above the docroot (vendor, .env, storage) still owned by root
-        // from the copy — hand the WHOLE copied tree to the clone's identity so the
-        // clone, and only the clone, owns its files (A49 isolation). The group is
-        // whatever ensure settled the docroot on (az-vh-<dst> once migrated, the
-        // legacy group before), read back so this stays correct either way. Safe to
-        // chown -R as root here: the tree is root-owned throughout, so no tenant can
-        // race it (unlike applyOwnership's general case — A77).
-        $grp = trim($runtime->exec(['/usr/bin/stat', '-c', '%G', $dstRoot], null, 10)->stdout);
-        if ($grp === '') {
-            // Fail closed: a clone the identity does not own is both useless and a
-            // root-owned tree we must not leave behind. Roll back the copy and vhost.
-            $this->rollback($runtime, $config, $dst, $dstTop);
-            throw new BrokerException('Could not hand the clone over to its identity; the clone was removed.', 1);
-        }
-        // keepExec: the code above the docroot (vendor/bin, node_modules/.bin targets,
-        // artisan, deploy scripts) must stay runnable, as it is on the source.
-        VhostUser::applyOwnership($runtime, $dstTop, VhostUser::username($dst), $grp, true, $config->wwwRoot);
-        // The handover above reset every file's mode, undoing the .env 0600 that
-        // ensure()'s A72 pass had set — and that pass ran while everything above the
-        // docroot was still root's, so it could not remove an escaping symlink there.
-        // Run it again now that the clone owns its tree. (ensure() skips it for a
-        // not-yet-migrated identity, whose pool does not run as the site user.)
-        if ($grp !== VhostUser::LEGACY_GROUP) {
-            VhostUser::hardenContent($runtime, $config, $dstRoot, VhostUser::username($dst));
+            // Only now: the clone's pool and route.
+            $before = array_filter(['index.php', 'index.html'], static fn (string $f): bool => $runtime->fileExists($dstRoot . '/' . $f));
+            $servers->addVhost($runtime, $config, [
+                'domain' => $dst,
+                'root' => $dstRoot,
+                'type' => (string) ($source['type'] ?? 'php'),
+                'php_version' => $source['php_version'] ?? null,
+                'upstream' => $source['reverse_proxy'] ?? null,
+                'engine' => (string) ($source['engine'] ?? 'caddy'),
+            ]);
+            // addVhost seeds a welcome index into an empty docroot; it is not part of the
+            // source (whose docroot was empty, then), so it does not stay.
+            // The tree is the clone's by now: remove it as the clone, not as root.
+            foreach (['index.php', 'index.html'] as $seeded) {
+                if (!in_array($seeded, $before, true) && $runtime->fileExists($dstRoot . '/' . $seeded)) {
+                    $runtime->exec([$this->runuserBin($runtime), '-u', VhostUser::username($dst), '--', '/bin/rm', '-f', '--', $dstRoot . '/' . $seeded], null, 15);
+                    if ($runtime->fileExists($dstRoot . '/' . $seeded)) {
+                        $runtime->deleteFile($dstRoot . '/' . $seeded); // FakeRuntime / non-root runs
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->rollback($runtime, $config, $dst, $dstTop, $ownIdentity);
+            throw $e instanceof BrokerException ? $e : new BrokerException('Provisioning the clone failed; the clone was removed. ' . $e->getMessage(), 1);
         }
 
         // A79 increment 2: optionally clone named databases alongside the files.
@@ -302,14 +308,101 @@ final class VhostClone
      * inverse of addVhost (pool, identity, routing); the copied tree goes too —
      * it is a copy, and $dstTop was verified not to exist before we created it.
      */
-    private function rollback(Runtime $runtime, Config $config, string $dst, string $dstTop): void
+    private function rollback(Runtime $runtime, Config $config, string $dst, string $dstTop, bool $ownIdentity = true): void
     {
         try {
             (new VhostDel())->handle('vhost.del', [$dst], [], $runtime, $config);
         } catch (\Throwable) {
-            WebServers::for($config)->removeVhost($runtime, $config, $dst);
+            // The vhost may not exist yet (A103: the identity comes first); still drop
+            // what this clone made — the identity only if this run created it.
+            try {
+                WebServers::for($config)->removeVhost($runtime, $config, $dst);
+            } catch (\Throwable) {
+            }
+            if ($ownIdentity) {
+                VhostUser::deprovision($runtime, $config, $dst);
+            }
         }
         $runtime->exec(['/bin/rm', '-rf', '--one-file-system', $dstTop], null, 300);
+    }
+
+    /**
+     * A103 (AZ-32): the source tree, archived by the source identity and extracted by
+     * root into the empty, root-only $dstTop. The stream is the site's to shape (it can
+     * reach that tar process), so it is inspected first like a backup archive: no
+     * devices, FIFOs, setuid/setgid files, absolute or `..` names, hardlinks (it is
+     * made with --hard-dereference, so a hardlink is crafted), or entries below a symlink. Symlinks are kept as they are (`storage:link` makes an
+     * absolute one); the clone's A72 sweep quarantines one that escapes its tree.
+     */
+    private function copyAsSource(Runtime $runtime, Config $config, string $src, string $srcTop, string $dst, string $dstTop): void
+    {
+        $srcUser = VhostUser::username($src);
+        if (!VhostUser::userExists($runtime, $srcUser)) {
+            throw new BrokerException("The source site has no identity of its own ({$srcUser}); it can't be cloned.", 3);
+        }
+        $runuser = $this->runuserBin($runtime);
+        $runtime->mkdir($config->stagingDir, 0750);
+        $stem = rtrim($config->stagingDir, '/') . '/clone-' . VhostUser::slug($dst) . '-' . bin2hex(random_bytes(8));
+        $archive = $stem . '.tar';
+        $checked = $stem . '.checked.tar';
+        try {
+            // Root's shell owns the redirect (umask 077, in root's staging dir); tar runs
+            // as the source. --ignore-failed-read: a file the source cannot read is not
+            // the clone's either. Exit 1 is "a file changed while being read" — routine
+            // on a live site (sessions, caches), the archive is otherwise complete.
+            $pack = $runtime->exec([
+                '/bin/sh', '-c', 'umask 077 && exec "$@" > "$0"', $archive,
+                $runuser, '-u', $srcUser, '--',
+                '/usr/bin/tar', '-C', $srcTop, '--one-file-system', '--ignore-failed-read', '--hard-dereference',
+                '--warning=no-file-changed', '--exclude=.git', '-cf', '-', '.',
+            ], null, 1800);
+            if (!$pack->ok() && $pack->exitCode !== 1) {
+                throw new BrokerException('Copying the site files failed; the clone was removed. ' . trim($pack->stderr), 1);
+            }
+            // The source's tar held the archive open, and its uid can reopen that fd
+            // through /proc and keep writing after the inspection. Inspect and extract
+            // a copy root made after tar exited, which no source process ever held.
+            $copy = $runtime->exec(['/bin/cp', '--', $archive, $checked], null, 600);
+            $runtime->deleteFile($archive);
+            if (!$copy->ok()) {
+                throw new BrokerException('Copying the site files failed; the clone was removed. ' . trim($copy->stderr), 1);
+            }
+            // tar -x detects compression by magic, the inspection reads through gzopen:
+            // a plain tar is all the source's tar makes, so anything that starts like a
+            // compressed stream is crafted — refuse it, and both read the same bytes.
+            $head = (string) $runtime->exec(['/usr/bin/head', '-c', '6', '--', $checked], null, 10)->stdout;
+            foreach (["\x1f\x8b", "\x1f\x9d", 'BZh', "\xfd7zXZ", "\x28\xb5\x2f\xfd", 'LZIP', "\x5d\x00\x00"] as $magic) {
+                if (str_starts_with($head, $magic)) {
+                    throw new BrokerException('Copying the site files failed; the clone was removed. The copy stream is compressed.', 3);
+                }
+            }
+            ArchiveGuard::inspectStream($runtime->gzReader($checked), anySymlinkTarget: true);
+            $unpack = $runtime->exec(
+                array_merge(['/usr/bin/tar', '-C', $dstTop], ArchiveGuard::safeExtractFlags(), ['-xf', $checked]),
+                null,
+                1800
+            );
+            if (!$unpack->ok()) {
+                throw new BrokerException('Copying the site files failed; the clone was removed. ' . trim($unpack->stderr), 1);
+            }
+        } finally {
+            foreach ([$archive, $checked] as $f) {
+                if ($runtime->fileExists($f)) {
+                    $runtime->deleteFile($f);
+                }
+            }
+        }
+    }
+
+    private function runuserBin(Runtime $runtime): string
+    {
+        foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+            if ($runtime->fileExists($bin)) {
+                return $bin;
+            }
+        }
+
+        return '/usr/sbin/runuser';
     }
 
     private function siteTop(Config $config, string $root): string

@@ -35,6 +35,9 @@ final class ArchiveGuard
     /** Hard ceiling on total uncompressed bytes (tar-bomb guard). */
     public const MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024;
 
+    /** pax keywords accepted (A103); everything else is refused. */
+    private const PAX_ALLOWED = ['path', 'linkpath', 'mtime', 'atime', 'ctime', 'uid', 'gid', 'uname', 'gname', 'comment', 'charset'];
+
     /** typeflag values we accept. */
     private const TYPE_FILE = ['0', "\0", ''];
 
@@ -90,14 +93,20 @@ final class ArchiveGuard
 
     /**
      * @param  callable(int):string  $read  returns exactly n bytes, or fewer at EOF
+     * @param  bool  $anySymlinkTarget  a site clone (A103) keeps symlinks as they are —
+     *         `artisan storage:link` writes an absolute one — and the clone's A72 sweep
+     *         quarantines a link that escapes its tree. A clone stream carries no
+     *         hardlinks at all (it is made with --hard-dereference), so one is refused.
      * @return array{entries:int, bytes:int, names:list<string>}
      */
     public static function inspectStream(
         callable $read,
         int $maxTotalBytes = self::MAX_TOTAL_BYTES,
         int $maxEntries = self::MAX_ENTRIES,
+        bool $anySymlinkTarget = false,
     ): array {
         $names = [];
+        $symlinks = [];
         $entries = 0;
         $bytes = 0;
         $emptyRun = 0;
@@ -141,9 +150,35 @@ final class ArchiveGuard
             // any path override we ignore would only ever be *more* specific, so
             // refuse rather than risk validating the wrong string.
             if ($typeflag === 'x' || $typeflag === 'X' || $typeflag === 'g') {
+                // A103: a site copy is made in GNU format, which never writes pax
+                // headers; one in the stream is crafted.
+                if ($anySymlinkTarget) {
+                    throw new BrokerException('Archive rejected: pax header in a site copy.', 3);
+                }
                 $payload = $read($dataBlocks * self::BLOCK);
-                if (preg_match('/\d+ path=([^\n]*)\n/', substr($payload, 0, $size), $m) === 1) {
-                    $pendingLongName = $m[1];
+                $pax = self::paxRecords(substr($payload, 0, $size));
+                // Only keywords that change nothing this parser reads. tar also takes
+                // the member's size (data layout), sparse maps and names from pax
+                // (`size`, `GNU.sparse.*`) — any of those would make tar read a
+                // different archive than the one inspected.
+                foreach (array_keys($pax) as $key) {
+                    if (!in_array($key, self::PAX_ALLOWED, true)) {
+                        throw new BrokerException('Archive rejected: pax keyword "' . addcslashes($key, "\0..\37") . '" is not accepted.', 3);
+                    }
+                }
+                // A global header's path/linkpath would apply to every later entry;
+                // no backup this panel writes has one.
+                if ($typeflag === 'g' && (isset($pax['path']) || isset($pax['linkpath']))) {
+                    throw new BrokerException('Archive rejected: global pax path override.', 3);
+                }
+                if ($typeflag !== 'g') {
+                    if (isset($pax['path'])) {
+                        $pendingLongName = $pax['path'];
+                    }
+                    // tar uses a pax linkpath over the header's link name; check that one.
+                    if (isset($pax['linkpath'])) {
+                        $pendingLinkName = $pax['linkpath'];
+                    }
                 }
                 continue;
             }
@@ -178,11 +213,39 @@ final class ArchiveGuard
             // make most Laravel sites unrestorable. A link escaping the root is
             // a different matter: extracted as root it can expose or clobber
             // host files through the docroot.
+            $clean = self::normalised($name);
             if ($isLink) {
                 $target = $pendingLinkName ?? self::parseLinkName($header);
-                self::assertSafeLinkTarget($name, $target, $typeflag);
+                if ($anySymlinkTarget && $typeflag === self::TYPE_HARDLINK) {
+                    throw new BrokerException('Archive rejected: hardlink in a site copy (' . $name . ').', 3);
+                }
+                if (!$anySymlinkTarget) {
+                    self::assertSafeLinkTarget($name, $target, $typeflag);
+                } elseif ($target === '' || str_contains($target, "\0")) {
+                    throw new BrokerException('Archive rejected: symlink with an empty target (' . $name . ').', 3);
+                }
+                // A hardlink resolves its target path at extraction time: one through (or
+                // to) a symlink would link a file outside the tree into it.
+                if ($typeflag === self::TYPE_HARDLINK) {
+                    $t = self::normalised($target);
+                    if (isset($symlinks[$t]) || self::belowSymlink($t, $symlinks)) {
+                        throw new BrokerException('Archive rejected: hardlink through a symlink (' . $name . ' -> ' . $target . ').', 3);
+                    }
+                }
             }
             $pendingLinkName = null;
+
+            // A103: no entry may be extracted through a symlink an earlier entry made —
+            // tar writing `link/file` after `link -> /elsewhere` would write elsewhere.
+            // tar never archives a path below a symlink, so only a crafted stream has one.
+            if (self::belowSymlink($clean, $symlinks)) {
+                throw new BrokerException('Archive rejected: entry below a symlink (' . $name . ').', 3);
+            }
+            // Once a symlink, always: a later entry of the same name does not make the
+            // path safe to write through (tar may keep an existing directory link).
+            if ($typeflag === self::TYPE_SYMLINK) {
+                $symlinks[$clean] = true;
+            }
 
             $mode = self::parseMode($header);
             if (($mode & 04000) !== 0) {
@@ -220,6 +283,58 @@ final class ArchiveGuard
         }
 
         return ['entries' => $entries, 'bytes' => $bytes, 'names' => $names];
+    }
+
+    /**
+     * pax records ("<len> <key>=<value>\n"), read by their length prefix as tar
+     * does; a later record for the same key wins.
+     *
+     * @return array<string, string>
+     */
+    private static function paxRecords(string $data): array
+    {
+        $out = [];
+        $pos = 0;
+        $end = strlen($data);
+        while ($pos < $end && preg_match('/\G(\d+) /', $data, $m, 0, $pos) === 1) {
+            $len = (int) $m[1];
+            $record = substr($data, $pos, $len);
+            if ($len <= strlen($m[0]) || strlen($record) !== $len || !str_ends_with($record, "\n")) {
+                throw new BrokerException('Archive rejected: malformed pax header.', 3);
+            }
+            $kv = substr($record, strlen($m[0]), -1);
+            $eq = strpos($kv, '=');
+            if ($eq === false) {
+                throw new BrokerException('Archive rejected: malformed pax header.', 3);
+            }
+            $out[substr($kv, 0, $eq)] = substr($kv, $eq + 1);
+            $pos += $len;
+        }
+        if (trim(substr($data, $pos), "\0") !== '') {
+            throw new BrokerException('Archive rejected: malformed pax header.', 3);
+        }
+
+        return $out;
+    }
+
+    /** A member name as tar resolves it: separators collapsed, `.` segments dropped. */
+    private static function normalised(string $name): string
+    {
+        $parts = array_filter(explode('/', str_replace('\\', '/', $name)), static fn (string $s): bool => $s !== '' && $s !== '.');
+
+        return implode('/', $parts);
+    }
+
+    /** @param array<string, true> $symlinks */
+    private static function belowSymlink(string $clean, array $symlinks): bool
+    {
+        for ($p = strrpos($clean, '/'); $p !== false; $p = strrpos(substr($clean, 0, $p), '/')) {
+            if (isset($symlinks[substr($clean, 0, $p)])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function assertSafeName(string $name): void
@@ -300,8 +415,10 @@ final class ArchiveGuard
     public static function parseName(string $header): string
     {
         $name = rtrim(substr($header, 0, 100), "\0");
-        $magic = substr($header, 257, 5);
-        if ($magic === 'ustar') {
+        // Only POSIX ustar ("ustar\0") has a prefix field; GNU tar's own format
+        // ("ustar  \0") keeps other data there and tar does not join it (A103).
+        $magic = substr($header, 257, 6);
+        if ($magic === "ustar\0") {
             $prefix = rtrim(substr($header, 345, 155), "\0");
             if ($prefix !== '') {
                 $name = $prefix . '/' . $name;
