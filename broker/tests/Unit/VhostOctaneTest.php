@@ -303,6 +303,27 @@ CADDY;
         $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-octane-app-example-com.conf', $this->rt->files);
     }
 
+    /** A99: a Laravel directory the site turned into a symlink gets no recursive root chown/chmod/chcon. */
+    public function test_disable_skips_a_writable_dir_reached_through_a_symlink(): void
+    {
+        $this->assertSame(0, $this->capture(['broker', 'vhost.octane.enable', self::DOMAIN])[0]);
+        $this->rt->dirs[self::APP_DIR . '/storage'] = true;
+        $this->rt->dirs[self::APP_DIR . '/bootstrap/cache'] = true;
+        $this->rt->links[self::APP_DIR . '/bootstrap'] = true;
+        $this->rt->execLog = [];
+
+        [$code, $json] = $this->capture(['broker', 'vhost.octane.disable', self::DOMAIN]);
+        $this->assertSame(0, $code, json_encode($json));
+
+        $on = static fn (array $c, string $p): bool => in_array($c[0] ?? '', ['/bin/chown', '/bin/chmod', '/usr/bin/chcon', '/bin/chcon'], true) && end($c) === $p;
+        $cmds = array_column($this->rt->execLog, 'command');
+        $this->assertSame([], array_values(array_filter($cmds, static fn ($c) => $on($c, self::APP_DIR . '/bootstrap/cache'))));
+        $this->assertNotSame([], array_values(array_filter($cmds, static fn ($c) => $on($c, self::APP_DIR . '/storage'))), 'a plain directory is still made writable');
+        foreach (array_filter($cmds, static fn ($c) => ($c[0] ?? '') === '/bin/chown') as $c) {
+            $this->assertContains('-h', $c);
+        }
+    }
+
     public function test_disable_requires_octane_to_be_enabled(): void
     {
         [$code, $json] = $this->capture(['broker', 'vhost.octane.disable', self::DOMAIN]);

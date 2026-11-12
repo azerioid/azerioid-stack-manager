@@ -467,6 +467,9 @@ final class OctaneManager
         if ($this->runtime->getuid() !== 0) {
             return;
         }
+        if (!$this->isPlainSitePath($appDir)) {
+            throw new BrokerException("Refusing to change ownership of {$appDir}: a directory on the way is a symlink.", 3);
+        }
         if (ProgramIdentity::isSiteIdentity($runAs)) {
             // The site's own files: whatever another account left in them becomes the site's,
             // group write kept (A55 does the same when a site gets its PHP pool).
@@ -507,6 +510,22 @@ final class OctaneManager
     }
 
     /**
+     * A99: these paths are built inside the site's own tree, so any directory on the way
+     * may be a symlink the site planted; a recursive root chown/chmod/chcon would then
+     * act on whatever it names. True only for a plain path under the real www root.
+     */
+    private function isPlainSitePath(string $path): bool
+    {
+        try {
+            VhostUser::assertStoredRootIsReal($this->runtime, $this->config, $path);
+
+            return true;
+        } catch (BrokerException) {
+            return false;
+        }
+    }
+
+    /**
      * After Octane disable, ensure Laravel writable dirs remain usable by the site FPM pool
      * (group bits + SELinux httpd_sys_rw_content_t when enforcing).
      */
@@ -527,18 +546,18 @@ final class OctaneManager
             ? VhostUser::username($domain)
             : ($this->config->phpUser !== '' ? $this->config->phpUser : 'caddy');
         foreach ($dirs as $writable) {
-            if (!$this->runtime->isDir($writable)) {
+            if (!$this->runtime->isDir($writable) || !$this->isPlainSitePath($writable)) {
                 continue;
             }
             // Own as the FPM pool user so SQLite/session writes work after Octane
             // (azerioid-supervised) owned the tree; keep the vhost group for group share.
-            $this->runtime->exec(['/bin/chown', '-R', $phpUser . ':' . $phpGroup, $writable], null, 30);
+            $this->runtime->exec(['/bin/chown', '-R', '-h', $phpUser . ':' . $phpGroup, $writable], null, 30);
             $this->runtime->exec(['/bin/chmod', '-R', 'ug+rwX', $writable], null, 30);
             // Best-effort SELinux rw label (no-op when chcon is absent / SELinux off).
             foreach (['/usr/bin/chcon', '/bin/chcon'] as $chcon) {
                 if ($this->runtime->fileExists($chcon)) {
                     $this->runtime->exec([
-                        $chcon, '-R', '-t', 'httpd_sys_rw_content_t', $writable,
+                        $chcon, '-R', '-h', '-t', 'httpd_sys_rw_content_t', $writable,
                     ], null, 60);
                     break;
                 }

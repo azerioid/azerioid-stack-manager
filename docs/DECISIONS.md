@@ -2763,3 +2763,21 @@ group membership settled first, because the pool runs with the web user's group.
 
 Test: `AdminerToolTest` — no `chown`/`chmod` argument inside the tool directory, and the staged download is
 chowned with `-h` before the rename.
+
+## A99 — Octane's recursive root operations skip paths reached through a symlink
+
+Security audit run-2 (2026-11-11), finding AZ-17. Disabling Octane hands the site's Laravel writable directories
+(`storage`, `bootstrap/cache`, `database`) back to the PHP-FPM pool user with a root `chown -R`, `chmod -R` and
+`chcon -R` (`ensureFpmWritableLaravelDirs`); enabling it runs a recursive `chown`/`chmod`/`setfacl` on the app
+directory (`ensureAppWritable`). The paths are built inside the site's own tree, so the site can replace
+`bootstrap` (or the app directory on the way) with a symlink, and root would then change owner, mode and SELinux
+label of whatever it names. No `-h`, no component check.
+
+Decision: before each of these operations the path must pass `VhostUser::assertStoredRootIsReal` (A95: under the
+real www root, no `.`/`..`, no symlinked component). On disable a directory that fails is **skipped** — Octane is
+already off and traffic is back on PHP-FPM, so only the site's own writability is affected; on enable the app
+directory failing the check refuses the enable. `chown` and `chcon` also get `-h`. The check-to-command window is
+the same accepted ceiling as A95.
+
+Test: `VhostOctaneTest::test_disable_skips_a_writable_dir_reached_through_a_symlink` — no root command on the
+symlinked `bootstrap/cache`, `storage` still handled, every `chown` carries `-h`.
