@@ -146,8 +146,8 @@ final class Validator
         $path = trim($path);
         $base = rtrim($base, '/');
 
-        if ($path === '' || self::hasControlChar($path)) {
-            throw new BrokerException('Invalid web root path.', 2);
+        if ($path === '' || !self::isPlainPath($path)) {
+            throw new BrokerException('Invalid web root path (allowed: letters, digits and . _ - + @ ~ /).', 2);
         }
         if (!str_starts_with($path, '/')) {
             throw new BrokerException('Web root must be an absolute path.', 2);
@@ -167,15 +167,23 @@ final class Validator
         if ($resolved === null) {
             throw new BrokerException('Web root escapes the allowlisted base (symlink or missing parent).', 2);
         }
-        // A47: resolveUnderBase returns realpath(), which reflects on-disk names a
-        // site identity controls (via a symlink target). A newline or other control
-        // char there would break out of a line in a rendered Caddy/Apache/nginx or
-        // supervisor config. Reject it after resolution, not only on input.
-        if (self::hasControlChar($resolved)) {
-            throw new BrokerException('Web root resolves to a path with control characters.', 2);
+        // A47/A93: resolveUnderBase returns realpath(), which reflects on-disk names
+        // a site identity controls (via a symlink target). The path is written
+        // unquoted into Caddy, nginx and Apache vhost files and supervisor configs,
+        // where space, ';', braces, '$' and quotes are syntax - not only newlines.
+        // Allow the characters a path can have in all of them, after resolution as
+        // well as on input.
+        if (!self::isPlainPath($resolved)) {
+            throw new BrokerException('Web root resolves to a path with characters a web server config cannot hold (allowed: letters, digits and . _ - + @ ~ /).', 2);
         }
 
         return $resolved;
+    }
+
+    /** Only characters that need no quoting in any web-server or supervisor config (A93). */
+    private static function isPlainPath(string $s): bool
+    {
+        return preg_match('#^[A-Za-z0-9._+@~/-]+$#D', $s) === 1;
     }
 
     /** True if the string contains a C0/C7F control character (newline, CR, NUL, ...). */
