@@ -71,7 +71,7 @@ final class VhostCloneTest extends TestCase
                 $rsynced = true;
             }
             // The WHOLE copied tree (not just the docroot) must be handed to the clone.
-            if (($cmd[0] ?? '') === '/usr/bin/chown'
+            if (in_array('/usr/bin/chown', $cmd, true)
                 && in_array('-R', $cmd, true)
                 && in_array('/data/www/dst.test', $cmd, true)) {
                 $ownedByClone = true;
@@ -110,7 +110,7 @@ final class VhostCloneTest extends TestCase
         $lastHarden = null;
         foreach ($this->rt->execLog as $i => $e) {
             $line = implode(' ', $e['command']);
-            if (str_contains($line, "find '/data/www/dst.test' -type f -exec chmod")) {
+            if (str_contains($line, "/data/www/dst.test /usr/bin/find . -type f -execdir /bin/chmod")) {
                 $handover = $i;
                 $this->assertStringContainsString('u=rwX,g=rwX,o=', $line, 'the handover must keep execute bits');
             }

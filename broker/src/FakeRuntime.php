@@ -92,6 +92,13 @@ final class FakeRuntime implements Runtime
     public function exec(array $command, ?string $stdin = null, int $timeoutSeconds = 30, ?array $env = null): ExecResult
     {
         $this->execLog[] = ['command' => $command, 'stdin' => $stdin, 'env' => $env];
+        $logged = $command;
+        // A pinned command (VhostUser::pinnedTo) runs its inner command on the pinned
+        // directory; simulations see that inner command with `.` resolved.
+        if (($command[0] ?? '') === '/bin/sh' && ($command[2] ?? '') === Vhost\VhostUser::PIN_SCRIPT) {
+            $dir = (string) $command[4];
+            $command = array_map(static fn (string $a): string => $a === '.' ? $dir : $a, array_slice($command, 5));
+        }
         if ($this->execHook !== null) {
             ($this->execHook)($command, $stdin);
         }
@@ -110,8 +117,7 @@ final class FakeRuntime implements Runtime
                 return $answer;
             }
         }
-        $key = implode("\0", $command);
-        return $this->execResponses[$key] ?? $this->defaultExec;
+        return $this->execResponses[implode("\0", $logged)] ?? $this->execResponses[implode("\0", $command)] ?? $this->defaultExec;
     }
 
     public function script(array $command, int $exit, string $stdout = '', string $stderr = ''): void

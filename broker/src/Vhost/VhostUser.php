@@ -89,7 +89,7 @@ final class VhostUser
             // Terminal request, would skip the migration's verification and rollback;
             // VhostIsolationMigrator moves every identity in one journalled pass.
             self::assertStoredRootIsReal($runtime, $config, $root);
-            self::applyOwnership($runtime, $root, $username, self::LEGACY_GROUP);
+            self::applyOwnership($runtime, $root, $username, self::LEGACY_GROUP, false, $config->wwwRoot);
             self::record($runtime, $config, $domain, $username, $root);
 
             return ['username' => $username, 'root' => $root, 'domain' => $domain];
@@ -114,7 +114,7 @@ final class VhostUser
         // with a symlink, and the recursive chown/chmod would follow it to whatever it
         // names. Re-check every component immediately before root acts on the path.
         self::assertStoredRootIsReal($runtime, $config, $root);
-        self::applyOwnership($runtime, $root, $username, $group);
+        self::applyOwnership($runtime, $root, $username, $group, false, $config->wwwRoot);
         self::hardenContent($runtime, $config, $root, $username);
         self::claimTop($runtime, $config, $domain, $root, $username, $group);
         self::reclaimCronLogs($runtime, $username, $group);
@@ -251,20 +251,21 @@ final class VhostUser
      * $keepExec keeps a file's execute bit (0770 instead of 0660) — for a tree that
      * holds code above the docroot, where 0660 would break vendor/bin and scripts.
      */
-    public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group, bool $keepExec = false): void
+    public static function applyOwnership(Runtime $runtime, string $root, string $username, string $group, bool $keepExec = false, string $trustedBase = ''): void
     {
         if ($runtime->getuid() !== 0 || !$runtime->isDir($root)) {
             return;
         }
-        $runtime->exec(['/usr/bin/chown', '-R', $username . ':' . $group, $root], null, 120);
-        $runtime->exec([
-            '/bin/sh', '-c',
-            'find ' . escapeshellarg($root) . ' -type d -exec chmod 2770 {} +',
-        ], null, 120);
-        $runtime->exec([
-            '/bin/sh', '-c',
-            'find ' . escapeshellarg($root) . ' -type f -exec chmod ' . ($keepExec ? 'u=rwX,g=rwX,o=' : '0660') . ' {} +',
-        ], null, 120);
+        // A102: the root is checked (A95) before this, but the walks below take
+        // seconds and the site can swap a component in between. Pin the cwd to the
+        // checked directory and walk `.`: a swapped root fails the `pwd -P` check and
+        // nothing is changed. Inside the walk `chown -R` does not follow links (-P is
+        // the default; -h for the entries themselves) and `-execdir` acts from each
+        // entry's own directory.
+        self::execPinned($runtime, $root, ['/usr/bin/chown', '-R', '-h', $username . ':' . $group, '.'], 120, $trustedBase);
+        // The tree is the site's now; set modes as the site (chmod follows a leaf link).
+        self::execPinned($runtime, $root, ['/usr/bin/find', '.', '-type', 'd', '-execdir', '/bin/chmod', '2770', '{}', '+'], 120, $trustedBase, $username);
+        self::execPinned($runtime, $root, ['/usr/bin/find', '.', '-type', 'f', '-execdir', '/bin/chmod', $keepExec ? 'u=rwX,g=rwX,o=' : '0660', '{}', '+'], 120, $trustedBase, $username);
     }
 
     /**
@@ -401,7 +402,51 @@ final class VhostUser
      */
     public static function pinnedTo(string $realDir, array $command): array
     {
-        return ['/bin/sh', '-c', 'cd -P -- "$1" && [ "$(pwd -P)" = "$1" ] && shift && exec "$@"', 'sh', $realDir, ...$command];
+        return ['/bin/sh', '-c', self::PIN_SCRIPT, 'sh', $realDir, ...$command];
+    }
+
+    public const PIN_SCRIPT = 'cd -P -- "$1" && [ "$(pwd -P)" = "$1" ] && shift && exec "$@"';
+
+    /**
+     * Run $command (which acts on `.`) pinned to the checked $dir (A102). A recursive
+     * walk over a site-owned tree takes seconds after the A95 check, and the site can
+     * swap a component in between; pinned, a swapped root fails and nothing changes.
+     *
+     * The pin is the checked path itself, not a realpath taken now (that would follow
+     * a swap made before it). Only $trustedBase — a root-owned prefix such as the www
+     * root, which may itself be a link on some hosts — is mapped to its real path.
+     *
+     * @param  list<string>  $command
+     */
+    public static function execPinned(Runtime $runtime, string $dir, array $command, int $timeoutSeconds, string $trustedBase = '', string $asUser = ''): \AzerioidPanel\Broker\ExecResult
+    {
+        $dir = rtrim($dir, '/');
+        $pin = $dir;
+        $base = rtrim($trustedBase, '/');
+        if ($base !== '' && str_starts_with($dir, $base . '/')) {
+            $realBase = $runtime->resolveUnderBase($base, $base);
+            if ($realBase === null) {
+                return new \AzerioidPanel\Broker\ExecResult($command, 1, '', "{$base} is gone.");
+            }
+            $pin = rtrim($realBase, '/') . substr($dir, strlen($base));
+        }
+
+        $argv = self::pinnedTo($pin, $command);
+        if ($asUser !== '') {
+            // A mode walk as the tree's owner: chmod has no no-follow mode, and a leaf
+            // swapped for a link between find's stat and the chmod then reaches only
+            // what that owner already owns.
+            $runuser = '/usr/sbin/runuser';
+            foreach (['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'] as $bin) {
+                if ($runtime->fileExists($bin)) {
+                    $runuser = $bin;
+                    break;
+                }
+            }
+            $argv = [$runuser, '-u', $asUser, '--', ...$argv];
+        }
+
+        return $runtime->exec($argv, null, $timeoutSeconds);
     }
 
     public static function assertNoSymlinkUnder(Runtime $runtime, string $base, string $path): void

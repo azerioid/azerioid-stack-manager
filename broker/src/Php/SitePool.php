@@ -198,8 +198,9 @@ final class SitePool
         if ($previous === null && $this->runtime->isDir($top)) {
             // A95: same re-check as VhostUser::ensure before a recursive handover.
             \AzerioidPanel\Broker\Vhost\VhostUser::assertStoredRootIsReal($this->runtime, $this->config, $top);
-            $this->runtime->exec(['/usr/bin/chown', '-R', '-h', $user . ':' . $group, $top], null, 600);
-            $this->runtime->exec(['/usr/bin/chmod', '-R', 'g+rwX', $top], null, 600);
+            // A102: pinned to the checked directory for the length of the walk.
+            \AzerioidPanel\Broker\Vhost\VhostUser::execPinned($this->runtime, $top, ['/usr/bin/chown', '-R', '-h', $user . ':' . $group, '.'], 600, $this->config->wwwRoot);
+            \AzerioidPanel\Broker\Vhost\VhostUser::execPinned($this->runtime, $top, ['/usr/bin/chmod', '-R', 'g+rwX', '.'], 600, $this->config->wwwRoot, $user);
         }
         $this->ensureSessionDir($domain, $user, $group);
         $this->reload($version);

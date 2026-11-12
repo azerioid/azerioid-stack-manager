@@ -315,8 +315,10 @@ CADDY;
         [$code, $json] = $this->capture(['broker', 'vhost.octane.disable', self::DOMAIN]);
         $this->assertSame(0, $code, json_encode($json));
 
+        // A102: the walks are pinned (sh -c '<pin>' sh <dir> <cmd> .); unwrap for the checks.
+        $cmds = array_map(static fn (array $c): array => ($c[2] ?? '') === \AzerioidPanel\Broker\Vhost\VhostUser::PIN_SCRIPT
+            ? [...array_slice($c, 5, -1), $c[4]] : $c, array_column($this->rt->execLog, 'command'));
         $on = static fn (array $c, string $p): bool => in_array($c[0] ?? '', ['/bin/chown', '/bin/chmod', '/usr/bin/chcon', '/bin/chcon'], true) && end($c) === $p;
-        $cmds = array_column($this->rt->execLog, 'command');
         $this->assertSame([], array_values(array_filter($cmds, static fn ($c) => $on($c, self::APP_DIR . '/bootstrap/cache'))));
         $this->assertNotSame([], array_values(array_filter($cmds, static fn ($c) => $on($c, self::APP_DIR . '/storage'))), 'a plain directory is still made writable');
         foreach (array_filter($cmds, static fn ($c) => ($c[0] ?? '') === '/bin/chown') as $c) {
