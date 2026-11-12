@@ -38,70 +38,149 @@ final class VhostCloneTest extends TestCase
         return [$code, json_decode(trim($out), true) ?: []];
     }
 
-    public function test_clone_replicates_the_vhost_and_copies_the_files(): void
+    /** One ustar entry: header plus data blocks. */
+    private static function tarEntry(string $name, string $type = '0', string $data = '', string $link = '', int $mode = 0644): string
     {
-        [$c] = $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
-        $this->assertSame(0, $c);
-        // The ownership handover reads the settled group off the docroot, then
-        // chowns the copied top. Model rsync creating the target directory so the
-        // handover's isDir() check sees it (and the pre-copy existence guard does not).
-        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
-        $this->rt->execFn = function (array $cmd): mixed {
-            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
-                $this->rt->dirs['/data/www/dst.test'] = true;
+        $h = str_pad($name, 100, "\0")
+            . sprintf("%07o\0", $mode) . sprintf("%07o\0", 0) . sprintf("%07o\0", 0)
+            . sprintf("%011o\0", strlen($data)) . sprintf("%011o\0", 0)
+            . '        ' . $type . str_pad($link, 100, "\0") . "ustar\0" . '00';
+        $h = str_pad($h, 512, "\0");
+        $sum = array_sum(array_map('ord', str_split($h)));
+        $h = substr_replace($h, sprintf("%06o\0 ", $sum), 148, 8);
+
+        return $h . ($data === '' ? '' : str_pad($data, (int) ceil(strlen($data) / 512) * 512, "\0"));
+    }
+
+    /** @param list<string> $entries */
+    private static function tarOf(array $entries): string
+    {
+        return implode('', $entries) . str_repeat("\0", 1024);
+    }
+
+    private static function plainSiteTar(): string
+    {
+        return self::tarOf([
+            self::tarEntry('./', '5', mode: 0755),
+            self::tarEntry('./public/', '5', mode: 0755),
+            self::tarEntry('./public/index.php', '0', '<?php echo 1;'),
+            // `artisan storage:link` writes an absolute link; a clone keeps it (A72 sweeps it).
+            self::tarEntry('./public/storage', '2', link: '/data/www/src.test/storage/app/public'),
+        ]);
+    }
+
+    /**
+     * Model the A103 copy: the source-identity tar writes $archive bytes (exit
+     * $packExit) to the staging file its root shell redirects to; extraction makes
+     * the clone's directory.
+     */
+    private function modelCopy(string $dstTop, int $packExit = 0, ?string $archive = null): void
+    {
+        $archive ??= self::plainSiteTar();
+        $this->rt->execFn = function (array $cmd) use ($dstTop, $packExit, $archive): mixed {
+            if (($cmd[0] ?? '') === '/bin/sh' && ($cmd[2] ?? '') === 'umask 077 && exec "$@" > "$0"') {
+                $this->rt->files[$cmd[3]] = $packExit >= 2 ? '' : $archive;
+
+                return new \AzerioidPanel\Broker\ExecResult($cmd, $packExit, '', $packExit === 0 ? '' : 'tar: error');
+            }
+            if (($cmd[0] ?? '') === '/bin/cp') {
+                $this->rt->files[$cmd[3]] = $this->rt->files[$cmd[2]] ?? '';
+            }
+            if (($cmd[0] ?? '') === '/usr/bin/tar' && in_array('-xf', $cmd, true)) {
+                $this->rt->dirs[$dstTop] = true;
             }
 
             return null;
         };
+    }
+
+    /** Index of the first logged command matching $match, or null. */
+    private function firstIndex(callable $match): ?int
+    {
+        foreach ($this->rt->execLog as $i => $e) {
+            if ($match($e['command'])) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    public function test_clone_replicates_the_vhost_and_copies_the_files(): void
+    {
+        [$c] = $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->assertSame(0, $c);
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
+        $this->modelCopy('/data/www/dst.test');
+        $this->rt->execLog = [];
 
         [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
         $this->assertSame(0, $code, json_encode($json));
         $this->assertArrayHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
 
-        $rsynced = false;
-        $ownedByClone = false;
-        foreach ($this->rt->execLog as $e) {
-            $cmd = $e['command'];
-            // The copy must not preserve the source's uid/gid (--no-o --no-g).
-            if (($cmd[0] ?? '') === '/usr/bin/rsync'
-                && in_array('/data/www/src.test/', $cmd, true)
-                && in_array('/data/www/dst.test/', $cmd, true)
-                && in_array('--no-o', $cmd, true)
-                && in_array('--no-g', $cmd, true)) {
-                $rsynced = true;
-            }
-            // The WHOLE copied tree (not just the docroot) must be handed to the clone.
-            if (in_array('/usr/bin/chown', $cmd, true)
-                && in_array('-R', $cmd, true)
-                && in_array('/data/www/dst.test', $cmd, true)) {
-                $ownedByClone = true;
-            }
-        }
-        $this->assertTrue($rsynced, 'the source site tree must be copied without preserving source ownership');
-        $this->assertTrue($ownedByClone, 'the whole copied tree must be chowned to the clone identity');
+        $cmds = array_column($this->rt->execLog, 'command');
+        // A103 (AZ-32): the source is read as the SOURCE identity, never by a root walk.
+        $pack = $this->firstIndex(static fn (array $c): bool => in_array('/usr/bin/tar', $c, true) && in_array('-cf', $c, true));
+        $this->assertNotNull($pack);
+        $this->assertSame(['/usr/sbin/runuser', '-u', 'az-vh-src-test', '--', '/usr/bin/tar', '-C', '/data/www/src.test'], array_slice($cmds[$pack], 4, 7));
+        $this->assertSame([], array_filter($cmds, static fn (array $c): bool => in_array('/usr/bin/rsync', $c, true)), 'no root rsync over the live source');
+        // Extracted by root into the clone's directory without archive owners or modes —
+        // from a copy root made after the source's tar exited, never the file tar wrote.
+        $extract = $this->firstIndex(static fn (array $c): bool => array_slice($c, 0, 6) === ['/usr/bin/tar', '-C', '/data/www/dst.test', '--no-same-owner', '--no-same-permissions', '--no-overwrite-dir']);
+        $this->assertNotNull($extract);
+        $written = $cmds[$pack][3];
+        $this->assertStringEndsWith('.checked.tar', end($cmds[$extract]));
+        $this->assertNotSame($written, end($cmds[$extract]));
+        $this->assertContains(['/bin/cp', '--', $written, end($cmds[$extract])], $cmds);
+        // The staging archive does not stay.
+        $this->assertSame([], array_filter(array_keys($this->rt->files), static fn (string $f): bool => str_contains($f, '/clone-dst-test-')));
+        // The WHOLE copied tree (not just the docroot) is handed to the clone.
+        $this->assertNotNull($this->firstIndex(static fn (array $c): bool => in_array('/usr/bin/chown', $c, true) && in_array('-R', $c, true) && in_array('/data/www/dst.test', $c, true)));
     }
 
-    /** Clone src.test → dst.test with rsync answering $rsyncExit; returns [code, json]. */
-    private function cloneWithRsyncExit(int $rsyncExit): array
+    /** A103 (AZ-18): nothing for the clone — identity, pool, route — exists while root writes its tree. */
+    public function test_clone_copies_before_the_clone_identity_or_route_exists(): void
     {
         $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
         $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
-        $this->rt->execFn = function (array $cmd) use ($rsyncExit): mixed {
-            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
-                $this->rt->dirs['/data/www/dst.test'] = true;
-
-                return new \AzerioidPanel\Broker\ExecResult($cmd, $rsyncExit, '', $rsyncExit === 0 ? '' : 'rsync error');
+        $this->modelCopy('/data/www/dst.test');
+        $routed = null;
+        $inner = $this->rt->execFn;
+        $this->rt->execFn = function (array $cmd, ?string $stdin) use ($inner, &$routed): mixed {
+            if ($routed === null && isset($this->rt->files['/etc/caddy/conf.d/dst.test.conf'])) {
+                $routed = count($this->rt->execLog) - 1;
             }
 
-            return null;
+            return $inner($cmd, $stdin);
         };
+        $this->rt->execLog = [];
+
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+        $this->assertSame(0, $code, json_encode($json));
+
+        $extract = $this->firstIndex(static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/tar' && in_array('-xf', $c, true));
+        // The first command that acts for the clone identity at all (useradd, a chown to it).
+        $useradd = $this->firstIndex(static fn (array $c): bool => ($c[0] ?? '') !== '/usr/bin/id' && str_contains(implode(' ', $c), 'az-vh-dst-test'));
+        $this->assertNotNull($extract);
+        $this->assertNotNull($useradd);
+        $this->assertNotNull($routed);
+        $this->assertLessThan($useradd, $extract, 'the copy is done before the clone identity exists');
+        $this->assertLessThan($routed, $extract, 'the copy is done before the clone is routed');
+    }
+
+    /** Clone src.test → dst.test with the source tar answering $packExit; returns [code, json]. */
+    private function cloneWithPackExit(int $packExit, ?string $archive = null): array
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/dst.test/public'], 0, 'az-vh-dst-test');
+        $this->modelCopy('/data/www/dst.test', $packExit, $archive);
 
         return $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
     }
 
     public function test_clone_rehardens_after_the_whole_tree_handover_and_keeps_execute_bits(): void
     {
-        [$code, $json] = $this->cloneWithRsyncExit(0);
+        [$code, $json] = $this->cloneWithPackExit(0);
         $this->assertSame(0, $code, json_encode($json));
 
         // Order matters: the whole-tree chmod resets .env to group-readable, so the
@@ -125,9 +204,9 @@ final class VhostCloneTest extends TestCase
         $this->assertArrayNotHasKey('/data/www/dst.test/public/index.php', $this->rt->files);
     }
 
-    public function test_clone_rolls_back_when_the_copy_fails_but_tolerates_vanished_files(): void
+    public function test_clone_rolls_back_when_the_copy_fails_but_tolerates_changed_files(): void
     {
-        [$code, $json] = $this->cloneWithRsyncExit(23);
+        [$code, $json] = $this->cloneWithPackExit(2);
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('clone was removed', (string) ($json['error'] ?? ''));
         $this->assertArrayNotHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files, 'a failed copy must not leave the vhost routing');
@@ -135,12 +214,83 @@ final class VhostCloneTest extends TestCase
             ['/bin/rm', '-rf', '--one-file-system', '/data/www/dst.test'],
             array_column($this->rt->execLog, 'command')
         );
+        $this->assertNull($this->firstIndex(static fn (array $c): bool => ($c[0] ?? '') !== '/usr/bin/id' && str_contains(implode(' ', $c), 'az-vh-dst-test') && !in_array('/usr/bin/pkill', $c, true) && !in_array('/usr/sbin/userdel', $c, true)), 'nothing is done for the clone identity after a failed copy');
 
-        // Retry is not refused, and rsync 24 (files vanished on a live site) is success.
+        // Retry is not refused, and tar exit 1 (a file changed while read on a live site) is success.
         unset($this->rt->dirs['/data/www/dst.test']);
-        [$code, $json] = $this->cloneWithRsyncExit(24);
+        [$code, $json] = $this->cloneWithPackExit(1);
         $this->assertSame(0, $code, json_encode($json));
         $this->assertArrayHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
+    }
+
+    /** A103: a docroot path through a symlink in the copied tree is refused, never created or followed. */
+    public function test_clone_refuses_a_docroot_reached_through_a_copied_symlink(): void
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->modelCopy('/data/www/dst.test');
+        $inner = $this->rt->execFn;
+        $this->rt->execFn = function (array $cmd, ?string $stdin) use ($inner): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/tar' && in_array('-xf', $cmd, true)) {
+                $this->rt->links['/data/www/dst.test/public'] = true;
+            }
+
+            return $inner($cmd, $stdin);
+        };
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('no plain docroot', (string) ($json['error'] ?? ''));
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
+    }
+
+    /** A103: the copy stream must be a plain tar — tar -x would decompress what the inspection read raw. */
+    public function test_clone_refuses_a_compressed_copy_stream(): void
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        $this->modelCopy('/data/www/dst.test');
+        $inner = $this->rt->execFn;
+        $this->rt->execFn = function (array $cmd, ?string $stdin) use ($inner): mixed {
+            if (($cmd[0] ?? '') === '/usr/bin/head') {
+                return new \AzerioidPanel\Broker\ExecResult($cmd, 0, "\xfd7zXZ\x00", '');
+            }
+
+            return $inner($cmd, $stdin);
+        };
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('compressed', (string) ($json['error'] ?? ''));
+        $this->assertNull($this->firstIndex(static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/tar' && in_array('-xf', $c, true)));
+    }
+
+    /** A103: a clone whose identity is another site's is refused before anything is made — and nothing of that site is removed. */
+    public function test_clone_refuses_an_identity_of_another_site_and_leaves_it_alone(): void
+    {
+        $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
+        // dst.test and dst-test share the slug, so the identity az-vh-dst-test.
+        $this->rt->files['/var/lib/azerioid-panel/vhost-users.json'] = json_encode(['users' => ['dst-test' => ['username' => 'az-vh-dst-test', 'root' => '/data/www/dst-test/public']]]);
+        $this->modelCopy('/data/www/dst.test');
+        $this->rt->execLog = [];
+
+        [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
+        $this->assertNotSame(0, $code);
+        $cmds = array_column($this->rt->execLog, 'command');
+        $this->assertSame([], array_filter($cmds, static fn (array $c): bool => in_array($c[0] ?? '', ['/usr/sbin/userdel', '/usr/bin/pkill'], true)), 'another site\'s identity is never removed');
+        $this->assertSame([], array_filter($cmds, static fn (array $c): bool => in_array('/usr/bin/tar', $c, true)), 'nothing is copied');
+    }
+
+    /** A103 (AZ-32): the source-made stream is inspected like a backup archive before root extracts it. */
+    public function test_clone_refuses_a_crafted_copy_stream(): void
+    {
+        $crafted = self::tarOf([
+            self::tarEntry('./', '5', mode: 0755),
+            self::tarEntry('./public', '2', link: '/etc'),
+            self::tarEntry('./public/passwd', '0', 'x'),
+        ]);
+        [$code, $json] = $this->cloneWithPackExit(0, $crafted);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('below a symlink', (string) ($json['error'] ?? ''));
+        $this->assertNull($this->firstIndex(static fn (array $c): bool => ($c[0] ?? '') === '/usr/bin/tar' && in_array('-xf', $c, true)), 'nothing is extracted');
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/dst.test.conf', $this->rt->files);
+        $this->assertContains(['/bin/rm', '-rf', '--one-file-system', '/data/www/dst.test'], array_column($this->rt->execLog, 'command'));
     }
 
     public function test_clone_refuses_same_domain_and_an_existing_target(): void
@@ -176,13 +326,7 @@ final class VhostCloneTest extends TestCase
     public function test_clone_fails_closed_and_rolls_back_when_the_identity_handover_cannot_resolve(): void
     {
         $this->kernelRun(['broker', 'vhost.add', 'src.test', '/data/www/src.test/public', 'php', '8.4']);
-        $this->rt->execFn = function (array $cmd): mixed {
-            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
-                $this->rt->dirs['/data/www/dst.test'] = true;
-            }
-
-            return null;
-        };
+        $this->modelCopy('/data/www/dst.test');
         // No stat script → the settled group reads empty → the handover must fail
         // closed: remove the partial copy and the just-created vhost, then error.
         [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'src.test', 'dst.test']);
@@ -221,13 +365,8 @@ final class VhostCloneTest extends TestCase
             "# azerioid-managed engine=caddy type=php root=/data/www/app.test/public runtime=octane octane_port=34000 octane_max_requests=500 php_version=8.4\n"
             . "app.test {\n    reverse_proxy 127.0.0.1:34000\n}\n";
         $this->rt->script(['/usr/bin/stat', '-c', '%G', '/data/www/appclone.test/public'], 0, 'az-vh-appclone-test');
-        $this->rt->execFn = function (array $cmd): mixed {
-            if (($cmd[0] ?? '') === '/usr/bin/rsync') {
-                $this->rt->dirs['/data/www/appclone.test'] = true;
-            }
-
-            return null;
-        };
+        $this->rt->script(['/usr/bin/id', '-u', 'az-vh-app-test'], 0, '1001');
+        $this->modelCopy('/data/www/appclone.test');
 
         [$code, $json] = $this->kernelRun(['broker', 'vhost.clone', 'app.test', 'appclone.test']);
         $this->assertSame(0, $code, json_encode($json));

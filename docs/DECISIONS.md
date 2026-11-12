@@ -2857,3 +2857,56 @@ the real shell on a temporary directory swapped for a link, both as the raw pinn
 `PosixRuntime` (the command fails, the target keeps its mode);
 `test_recursive_handovers_of_site_trees_are_pinned` refuses an unpinned recursive walk in those files; the
 VhostClone, VhostIsolation, SitePool and Octane tests assert the pinned form.
+
+## A103 — A clone is copied first, as the source site, and provisioned after
+
+Security audit run-2 (2026-11-11), findings AZ-18 and AZ-32. A79's clone said the copied tree stayed root's until the
+handover and that the clone's identity was created after the copy. The code did the opposite: `addVhost` ran first —
+its PHP render asks for the clone's own pool, which creates `az-vh-<dst>`, hands it the docroot and top directory and
+starts a pool as that identity — and only then did root `rsync` the source into a tree the clone already owned and
+served, with the source's own PHP among the files (AZ-18). And root read the live, site-owned source tree by path, so
+a directory the source site swapped for a link during the copy was followed with root's rights (AZ-32).
+
+Decision:
+
+- **Copy first.** `$dstTop` is created root `0700` and filled before any identity, pool or route for the clone exists.
+  Then `VhostUser::ensure`, the whole-tree handover (`applyOwnership`, pinned, A102), the A72 re-hardening, and only
+  then `addVhost`. A welcome index `addVhost` seeds into a docroot that was empty in the source is removed, as before.
+  Any failure after the copy rolls back the vhost (if made), `$dstTop`, and the identity — only when this run created
+  it. The A96 identity-collision check runs before anything is made, so a clone whose `az-vh-` name belongs to another
+  site is refused up front and a rollback can never remove that site's account.
+- **Read as the source.** The source is archived by `runuser -u az-vh-<src> -- tar -C <srcTop> --one-file-system
+  --ignore-failed-read --hard-dereference --exclude=.git -cf - .` into a root-only staging file (root's shell owns the redirect, umask
+  077). The source's uid can reopen tar's output fd through `/proc` and keep writing after tar exits, so root copies
+  the file once tar is done and inspects and extracts only that copy, which no source process ever held. A path the
+  site redirects mid-copy reaches only what that site could already read; a file it cannot read is
+  not the clone's either. Exit 1 (a file changed while read) is accepted as rsync's exit 24 was.
+- **The stream is the site's to shape**, so it is inspected with `ArchiveGuard::inspectStream` before root extracts
+  it with `safeExtractFlags()`: no devices, FIFOs, setuid/setgid files, absolute or `..` names, and no hardlinks at
+  all (`--hard-dereference` archives linked files as plain copies, so a hardlink in the stream is crafted — and one
+  to an outside inode would be handed to the clone by the chown). Symlinks are kept as they are (`anySymlinkTarget`:
+  `artisan storage:link` writes an absolute link, and the clone's A72 sweep quarantines one that escapes its tree).
+  New for every caller: names are compared as tar resolves them (`//` and `.` segments dropped); no entry may lie
+  below a name an earlier entry made a symlink, and no hardlink target may be or go through one — `tar` never
+  archives such a path, and extracting it would write or link through the symlink; a pax `linkpath`, which tar uses
+  over the header's link name, is the one checked. pax records are read by their length prefix with the last one
+  winning, as tar does; a global pax `path`/`linkpath` is refused, and a clone stream (GNU format, which never writes
+  pax) may carry no pax header at all; in a backup, a pax keyword outside a short allowlist (names, times, owners) is
+  refused — `size` and `GNU.sparse.*` change how tar lays out or names the data. The clone archive must not start
+  with a compression magic (gzip, compress, bzip2, xz, zstd, lzip, lzma): `tar -x` detects those and the inspection
+  would have read different bytes. The ustar prefix field is joined only for POSIX magic `ustar\0` — GNU tar's
+  own format keeps other data there.
+- The docroot path in the copied tree must not pass through one of its symlinks (refused, never created or followed),
+  and the welcome index `addVhost` may seed is removed as the clone identity, which owns the tree by then.
+
+This supersedes A79's description of the copy (rsync as root, root-owned tree during the handover). Costs: the copy
+needs staging space for one uncompressed archive of the site, and a site over `ArchiveGuard::MAX_TOTAL_BYTES` (20 GB)
+or 200,000 entries is refused like a backup of that size; a setuid/setgid file in the source makes the clone fail
+with the name instead of silently losing the bit.
+
+Tests: `VhostCloneTest` — the source is read by a `tar` run as `az-vh-src-test` and no `rsync` runs; the copy is
+extracted before the first command for the clone identity and before the clone is routed; a crafted stream (an entry
+below a link to `/etc`) is refused before extraction and rolled back; a failed copy leaves no identity and is
+retryable; tar exit 1 is success; a clone whose identity is recorded for another site is refused with nothing copied
+and no account removed. `ArchiveGuardTest` — the below-symlink rule in both modes, with denormalised names, hardlinks
+through and to a symlink, and a pax `linkpath`; a clone stream keeps an absolute symlink and refuses any hardlink.
