@@ -2503,3 +2503,5 @@ Not done here: a fail-closed answer for unknown Hosts on the loopback listener (
 Test: `TerminalSessionTest::test_the_auth_subrequest_is_pinned_to_the_loopback_site`. Not validated on a host:
 after release, open a terminal on a public-mode host and confirm it still connects (the route change is
 user-facing), and that the route file carries the header.
+
+**Validated on the Rocky staging host (2026-11-12), Caddy 2.11.4 — the finding is confirmed, no longer only plausible.** The panel's loopback listener answers a request whose Host matches no site with an empty **200**. A scratch Caddy process with the route as v2.14.5 writes it, called with a non-loopback Host, let the request through to the upstream without any session; the same route with `header_up Host 127.0.0.1` returned the panel's own answer (a redirect on that host, which has no admin yet) and did not reach the upstream. With Host `127.0.0.1` the old route was already answered by the panel, so tunnel-only installs were not exposed. Not exercised: a real terminal session on a public-mode host.
