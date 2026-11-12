@@ -36,6 +36,9 @@ final class ProgramIdentityTest extends TestCase
         $this->cfg->managedComponentsPath = '/var/lib/azerioid-panel/managed-components.json';
         $this->rt->dirs['/data/www'] = true;
         $this->rt->dirs['/data/www/shop.example.com'] = true;
+        // The site the programs are bound to (A100 checks a program directory against it).
+        $this->rt->files['/etc/caddy/Caddyfile'] = "import /etc/caddy/conf.d/*.conf\n";
+        $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf'] = "shop.example.com {\n    root * /data/www/shop.example.com\n    file_server\n}\n";
         $this->rt->dirs['/var/lib/azerioid-supervised/apps'] = true;
         $this->rt->dirs['/etc/supervisor/conf.d'] = true;
         $this->rt->files[$this->cfg->managedComponentsPath] = json_encode(['components' => ['supervisor' => ['unit' => 'supervisor']]]);
@@ -167,5 +170,41 @@ final class ProgramIdentityTest extends TestCase
     private function commands(): array
     {
         return array_map(static fn (array $e): array => $e['command'], $this->rt->execLog);
+    }
+
+    /** A100: the ACL grant is refused for a directory outside the bound site, or reached through a symlink. */
+    public function test_acl_grant_requires_a_plain_directory_inside_the_bound_site(): void
+    {
+        $this->rt->dirs['/data/www/other.example.com/app'] = true;
+        $this->rt->dirs['/data/www/shop.example.com/worker'] = true;
+        $m = new \ReflectionMethod(\AzerioidPanel\Broker\Supervisor\SupervisorManager::class, 'grantDirectoryAccess');
+        $mgr = new \AzerioidPanel\Broker\Supervisor\SupervisorManager($this->cfg, $this->rt);
+
+        foreach (['/data/www/other.example.com/app' => 'not inside the site directory', '/data/www/shop.example.com/worker' => 'symlink'] as $dir => $why) {
+            if ($why === 'symlink') {
+                $this->rt->links['/data/www/shop.example.com/worker'] = true;
+            }
+            try {
+                $m->invoke($mgr, $dir, 'shop.example.com');
+                $this->fail("expected refusal for {$dir}");
+            } catch (\AzerioidPanel\Broker\BrokerException $e) {
+                $this->assertStringContainsString($why, $e->getMessage());
+            }
+        }
+        $setfacl = static fn (array $c): bool => in_array('/usr/bin/setfacl', $c, true);
+        $this->assertSame([], array_filter(array_column($this->rt->execLog, 'command'), $setfacl));
+
+        unset($this->rt->links['/data/www/shop.example.com/worker']);
+        $m->invoke($mgr, '/data/www/shop.example.com/worker', 'shop.example.com');
+        $granted = array_values(array_filter(array_column($this->rt->execLog, 'command'), $setfacl));
+        $this->assertCount(1, $granted);
+        $this->assertSame(['/usr/sbin/runuser', '-u', 'az-vh-shop-example-com', '--', '/usr/bin/setfacl'], array_slice($granted[0], 0, 5), 'the ACL is set as the site, not as root');
+
+        // A sibling site's docroot under the same top is not this site's.
+        $this->rt->files['/etc/caddy/conf.d/blog.example.com.conf'] = "blog.example.com {\n    root * /data/www/shop.example.com/blog\n    file_server\n}\n";
+        $this->rt->dirs['/data/www/shop.example.com/blog/jobs'] = true;
+        $this->expectException(\AzerioidPanel\Broker\BrokerException::class);
+        $this->expectExceptionMessage("inside another site's web root");
+        $m->invoke($mgr, '/data/www/shop.example.com/blog/jobs', 'shop.example.com');
     }
 }

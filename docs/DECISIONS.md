@@ -2781,3 +2781,25 @@ the same accepted ceiling as A95.
 
 Test: `VhostOctaneTest::test_disable_skips_a_writable_dir_reached_through_a_symlink` — no root command on the
 symlinked `bootstrap/cache`, `storage` still handled, every `chown` carries `-h`.
+
+## A100 — A supervisor program's ACL grant is bound to its own site and re-checked
+
+Security audit run-2 (2026-11-11), finding AZ-20 (plausible; it rests on `setfacl` following a symlink argument).
+When a site-bound program runs as the shared supervised account, `SupervisorManager::grantDirectoryAccess` gives
+that account `rwx` (and a default ACL) on the program's directory with a root `setfacl`. The directory was
+validated once, at input, and only as "somewhere under the www root" — not as part of the bound site, and not
+re-checked when the stored program is updated later (including by the identity migrator, A56). The site owns that
+tree, so it could replace the directory with a symlink, or a program could name another site's directory, and root
+would put the supervised account's ACL on whatever it names. ADR A58 had listed this as open.
+
+Decision: before `setfacl` the directory must pass `VhostUser::assertStoredRootIsReal` (A95: plain path under the
+real www root, no symlinked component), lie inside the top directory of the site the program is bound to, and not
+lie inside another vhost's web root (on a top shared by several sites, A62/A63, the top alone does not say whose
+files they are); otherwise the create or update is refused. `setfacl` then runs **as the site's identity**
+(`runuser`), not as root: the site owns its tree and may set ACLs on its own files, so a path redirected after the
+checks can only reach what the site already owns. A failed `setfacl` stays non-fatal, because hosts without the
+`acl` package fall back to group access (A49).
+
+Test: `ProgramIdentityTest::test_acl_grant_requires_a_plain_directory_inside_the_bound_site` (another site's
+directory refused, symlinked directory refused, no `setfacl` run for either; a plain in-site directory granted).
+The program-identity tests now define the bound vhost, which every real host has.
