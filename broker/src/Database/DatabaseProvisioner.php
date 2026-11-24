@@ -206,15 +206,16 @@ final class DatabaseProvisioner
             "GRANT ALL PRIVILEGES ON *.* TO '" . self::ADMIN_USER . "'@'127.0.0.1' WITH GRANT OPTION;",
             'FLUSH PRIVILEGES;',
         ];
-        foreach ($statements as $sql) {
-            $log->info('MariaDB admin setup');
-            $result = $this->runtime->exec(['/usr/bin/mariadb', '-e', $sql], null, 60);
-            if (!$result->ok()) {
-                $result = $this->runtime->exec(['/usr/bin/mysql', '-e', $sql], null, 60);
-            }
-            if (!$result->ok()) {
-                throw new BrokerException('Failed to create MariaDB panel admin user.', 1);
-            }
+        // A109: the statements (and the password in them) go in on stdin. On argv they
+        // were readable by every local account through /proc/<pid>/cmdline.
+        $log->info('MariaDB admin setup');
+        $sql = implode("\n", $statements) . "\n";
+        $result = $this->runtime->exec(['/usr/bin/mariadb'], $sql, 60);
+        if (!$result->ok()) {
+            $result = $this->runtime->exec(['/usr/bin/mysql'], $sql, 60);
+        }
+        if (!$result->ok()) {
+            throw new BrokerException('Failed to create MariaDB panel admin user.', 1);
         }
     }
 
@@ -246,14 +247,15 @@ final class DatabaseProvisioner
             . "ELSE ALTER ROLE " . self::ADMIN_USER
             . " WITH LOGIN SUPERUSER PASSWORD '{$escaped}' CREATEDB CREATEROLE; END IF; END \$\$;";
         $log->info('PostgreSQL admin setup');
+        // A109: on stdin (`-f -`), never on argv.
         $result = $this->runtime->exec([
             ...$wrapper,
             '/usr/bin/psql',
             '-v',
             'ON_ERROR_STOP=1',
-            '-c',
-            $sql,
-        ], null, 60);
+            '-f',
+            '-',
+        ], $sql . "\n", 60);
         if (!$result->ok()) {
             throw new BrokerException('Failed to create PostgreSQL panel admin user.', 1);
         }
