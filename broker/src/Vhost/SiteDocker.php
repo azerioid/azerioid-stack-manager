@@ -26,7 +26,9 @@ final class SiteDocker
 {
     public const HOME_BASE = '/var/lib/azerioid-docker-home';
 
-    private const READY = '.azerioid-ready';
+
+    /** A118: where root records that a site's own daemon is set up (root 0700). */
+    public const RECORD_DIR = '/var/lib/azerioid-panel/site-docker';
 
     private const DROPIN = 'azerioid-docker.conf';
 
@@ -46,11 +48,45 @@ final class SiteDocker
         return self::HOME_BASE . '/' . $slug;
     }
 
-    /** The site's daemon is set up and the site has not been put back on the shared one. */
+    /**
+     * The site's daemon is set up and the site has not been put back on the shared one.
+     *
+     * A118: read from a root-owned record, never from the site-owned home: a marker the site can
+     * delete let it move its own containers back onto the shared daemon at the next re-render.
+     * A host set up before this has no record yet; it is adopted from the systemd drop-in root
+     * wrote for the site's daemon (root-owned, outside anything the site controls).
+     */
     public static function ready(Runtime $runtime, string $domain): bool
     {
-        return $runtime->fileExists(self::home($domain) . '/' . self::READY)
-            && ProgramIdentity::sharedReason($runtime, $domain) === null;
+        if (ProgramIdentity::sharedReason($runtime, $domain) !== null) {
+            return false;
+        }
+        if ($runtime->fileExists(self::recordPath($domain))) {
+            return true;
+        }
+        $uid = $runtime->exec(['/usr/bin/id', '-u', VhostUser::username($domain)], null, 10);
+        $dropin = '/etc/systemd/system/user@' . trim($uid->stdout) . '.service.d/' . self::DROPIN;
+        if ($uid->ok() && ctype_digit(trim($uid->stdout)) && $runtime->fileExists($dropin)) {
+            if ($runtime->getuid() === 0) {
+                self::writeRecord($runtime, $domain);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    public static function recordPath(string $domain): string
+    {
+        return self::RECORD_DIR . '/' . basename(self::home($domain)) . '.ready';
+    }
+
+    private static function writeRecord(Runtime $runtime, string $domain): void
+    {
+        $runtime->mkdir(self::RECORD_DIR, 0700);
+        $runtime->chmod(self::RECORD_DIR, 0700);
+        $runtime->writeFile(self::recordPath($domain), $runtime->now() . "\n", 0600);
     }
 
     public function user(string $domain): string
@@ -163,10 +199,8 @@ final class SiteDocker
             return $info->ok() && str_contains($info->stdout, 'rootless');
         }, 60, "the rootless Docker daemon of {$domain}");
 
-        // A61: the ready marker lives in the site-owned home; refuse a symlink in
-        // its place so root does not truncate/overwrite an arbitrary file.
-        VhostUser::assertNoSymlinkUnder($this->runtime, self::HOME_BASE, $home . '/' . self::READY);
-        $this->runtime->writeFile($home . '/' . self::READY, $this->runtime->now() . "\n", 0600);
+        // A118: the record is root's, outside the site's home.
+        self::writeRecord($this->runtime, $domain);
     }
 
     /** Stop and remove the site's daemon, its data and its subordinate ids. */
@@ -187,6 +221,9 @@ final class SiteDocker
                 $this->runtime->exec(['/bin/rmdir', dirname($dropin)], null, 10);
                 $this->runtime->exec(['/usr/bin/systemctl', 'daemon-reload'], null, 60);
             }
+        }
+        if ($this->runtime->fileExists(self::recordPath($domain))) {
+            $this->runtime->deleteFile(self::recordPath($domain));
         }
         if ($this->runtime->isDir($home)) {
             // Image layers owned by subordinate ids: only root can remove them.

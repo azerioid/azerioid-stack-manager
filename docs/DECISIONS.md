@@ -3312,3 +3312,19 @@ this are re-owned by `DockerSettings::convergeAll`, which the scheduled render c
 
 Tests: `SiteDockerTest` — a new Docker site's settings directory and `env` are `root:az-dk-…`, the group is created
 and only the site's account joins it; the converge re-owns a site still on its docroot group.
+
+## A118 — "This site has its own Docker daemon" is root's record, not a file the site can delete
+
+Security audit run-2 (2026-11-11), finding AZ-30. `SiteDocker::ready()` decided whether a site's containers run on
+its own rootless daemon (A56) by the marker `.azerioid-ready` in the site's Docker home, which the site's account
+owns. Deleting it made the next re-render (enable, settings change, migration) put the site's program back on the
+shared daemon as `azerioid-supervised` — the shared account and daemon A56 moved sites away from.
+
+Decision: the record is `/var/lib/azerioid-panel/site-docker/<slug>.ready` (directory root 0700), written by
+`ensure()` and deleted by `remove()`; nothing in the site's home is read. A site set up before this has no record:
+it is adopted once from the systemd drop-in root wrote for the site's daemon
+(`/etc/systemd/system/user@<uid>.service.d/azerioid-docker.conf`, root-owned, outside anything the site controls).
+A put-back reason (A56) still wins.
+
+Tests: `SiteDockerTest` — the record is in root's directory and the site deleting its home files changes nothing;
+an older site is adopted from the drop-in and recorded; without record or drop-in the site is not ready.

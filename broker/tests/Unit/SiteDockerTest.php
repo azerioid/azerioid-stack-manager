@@ -131,6 +131,34 @@ final class SiteDockerTest extends TestCase
         $this->assertSame(['root', \AzerioidPanel\Broker\Vhost\DockerSettings::configGroup(self::DOMAIN)], $this->rt->owners[$dir]);
     }
 
+    /** A118: "has its own daemon" is root's record; the site deleting anything in its home changes nothing. */
+    public function test_the_own_daemon_record_is_roots_and_survives_the_site_deleting_its_files(): void
+    {
+        [$code] = $this->broker(['vhost.docker.enable', self::DOMAIN], ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+        $this->assertSame(0, $code);
+        $record = SiteDocker::recordPath(self::DOMAIN);
+        $this->assertStringStartsWith(SiteDocker::RECORD_DIR . '/', $record);
+        $this->assertArrayHasKey($record, $this->rt->files);
+        $this->assertSame(0700, $this->rt->modes[SiteDocker::RECORD_DIR] ?? null);
+        foreach (array_keys($this->rt->files) as $f) {
+            if (str_starts_with($f, self::HOME . '/')) {
+                unset($this->rt->files[$f]);
+            }
+        }
+        $this->assertTrue(SiteDocker::ready($this->rt, self::DOMAIN), 'nothing in the site-owned home decides it');
+    }
+
+    public function test_a_site_set_up_before_is_adopted_from_roots_systemd_dropin_and_removal_clears_it(): void
+    {
+        [$code] = $this->broker(['vhost.docker.enable', self::DOMAIN], ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+        $this->assertSame(0, $code);
+        unset($this->rt->files[SiteDocker::recordPath(self::DOMAIN)]);
+        $this->assertTrue(SiteDocker::ready($this->rt, self::DOMAIN), 'adopted from the drop-in');
+        $this->assertArrayHasKey(SiteDocker::recordPath(self::DOMAIN), $this->rt->files, 'and recorded');
+        unset($this->rt->files['/etc/systemd/system/user@1005.service.d/azerioid-docker.conf'], $this->rt->files[SiteDocker::recordPath(self::DOMAIN)]);
+        $this->assertFalse(SiteDocker::ready($this->rt, self::DOMAIN));
+    }
+
     public function test_the_migration_moves_a_shared_daemon_site_and_renumbers_its_files(): void
     {
         $this->legacyDockerSite();
