@@ -81,6 +81,11 @@ final class VhostDel
             (new SiteDocker($config, $runtime))->remove($domain);
         }
         VhostUser::deprovision($runtime, $config, $domain);
+        // Its Redis user goes with it (A111); the next site with this name gets a new one.
+        try {
+            (new \AzerioidPanel\Broker\Redis\RedisAcl($runtime, $config))->disableSite($domain);
+        } catch (\Throwable) {
+        }
 
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);
         if ($mailDropped !== null) {

@@ -2,7 +2,7 @@
   "id": "redis",
   "display_name": "Redis",
   "category": "cache",
-  "description": "In-memory data store and cache",
+  "description": "In-memory data store and cache. Each site gets its own user, limited to keys under its own prefix (Redis page).",
   "managed": true,
   "system": false,
   "installable": true,

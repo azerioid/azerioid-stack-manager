@@ -130,6 +130,11 @@ final class ComponentInstaller
             if ($componentId === 'elasticsearch') {
                 (new ElasticsearchSetup($this->config, $this->runtime))->configure($log);
             }
+            if ($componentId === 'redis') {
+                // A111: a new instance starts with per-site users only (`default` off).
+                (new \AzerioidPanel\Broker\Redis\RedisAcl($this->runtime, $this->config))->setup(true);
+                $log->info('Redis: per-site users only; enable Redis for a site on the Redis page.');
+            }
             if (NodeRuntimes::isComponent($componentId)) {
                 (new NodeRuntimes($this->config, $this->runtime))->install($definition, $log);
             }
@@ -224,6 +229,9 @@ final class ComponentInstaller
                 if ($this->runtime->fileExists(ElasticsearchSetup::CREDENTIALS)) {
                     $this->runtime->deleteFile(ElasticsearchSetup::CREDENTIALS);
                 }
+            }
+            if ($componentId === 'redis') {
+                (new \AzerioidPanel\Broker\Redis\RedisAcl($this->runtime, $this->config))->forget();
             }
             if (($major = NodeRuntimes::majorOfComponent($componentId)) !== null) {
                 (new NodeRuntimes($this->config, $this->runtime))->uninstall($major, $log);

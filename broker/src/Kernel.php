@@ -27,6 +27,7 @@ use AzerioidPanel\Broker\Actions\DbAccessSet;
 use AzerioidPanel\Broker\Actions\DbAccessShow;
 use AzerioidPanel\Broker\Actions\DbAdd;
 use AzerioidPanel\Broker\Actions\DbGrantsConverge;
+use AzerioidPanel\Broker\Actions\RedisManage;
 use AzerioidPanel\Broker\Actions\DbDel;
 use AzerioidPanel\Broker\Actions\DbClone;
 use AzerioidPanel\Broker\Actions\DbDump;
@@ -268,6 +269,11 @@ final class Kernel
         'spaces.test' => SpacesTest::class,
         'auth.audit' => AuthAudit::class,
         // A48: per-vhost SFTP. Drop-in only, sshd -t before every reload, reload never restart.
+        'redis.status' => RedisManage::class,
+        'redis.site.enable' => RedisManage::class,
+        'redis.site.show' => RedisManage::class,
+        'redis.site.disable' => RedisManage::class,
+        'redis.enforce' => RedisManage::class,
         'sftp.status' => SftpManage::class,
         'sftp.configure' => SftpManage::class,
         'sftp.unconfigure' => SftpManage::class,
