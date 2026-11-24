@@ -415,7 +415,8 @@ final class Pm2Manager
 
         if ($runtime->fileExists($appDir . '/package.json')) {
             try {
-                $decoded = json_decode($runtime->readFile($appDir . '/package.json'), true);
+                // A119: the site's own file, read by root: bounded, regular files only.
+                $decoded = json_decode($runtime->readFileBounded($appDir . '/package.json', 1 << 20), true);
             } catch (\Throwable) {
                 $decoded = null;
             }

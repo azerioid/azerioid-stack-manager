@@ -38,6 +38,15 @@ interface Runtime
      */
     public function appendWriter(string $path, int $mode = 0600): callable;
 
+    /**
+     * A119: read a file that a lower-privileged account controls — a regular file, not a link,
+     * at most $maxBytes (larger is refused). Throws BrokerException otherwise.
+     */
+    public function readFileBounded(string $path, int $maxBytes): string;
+
+    /** A120: the last $bytes of such a file (all of it when smaller). */
+    public function readTail(string $path, int $bytes): string;
+
     public function writeFile(string $path, string $contents, int $mode = 0644): void;
 
     /**
