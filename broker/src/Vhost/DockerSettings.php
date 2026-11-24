@@ -21,10 +21,11 @@ use AzerioidPanel\Broker\Supervisor\SupervisedUser;
  *       env                                   root:<reader> 0640   docker --env-file
  *       ports.yml                             root:<reader> 0640   compose override
  *
- * <reader> is the group of the account the docker CLI runs as: the site's own group once the
- * site has a daemon of its own (A56), azerioid-supervised before. Readable by it, not writable,
- * so a container with a bind mount cannot rewrite its own configuration; and no other site can
- * read a site's container environment.
+ * <reader> is a group only the account the docker CLI runs as belongs to (A117): `az-dk-<hash>`,
+ * whose one member is the site's own account, once the site has a daemon of its own (A56);
+ * azerioid-supervised's own group before. Not the site's docroot group: the web server is a
+ * member of that one (A49) and must not read a site's container environment. Readable by the
+ * reader, not writable, so a container with a bind mount cannot rewrite its own configuration.
  */
 final class DockerSettings
 {
@@ -136,10 +137,55 @@ final class DockerSettings
         }
     }
 
-    /** The group of the account the site's docker CLI runs as. */
+    /** A group whose only member is the account the site's docker CLI runs as. */
     public static function readerGroup(Runtime $runtime, string $domain): string
     {
-        return SiteDocker::ready($runtime, $domain) ? VhostUser::docrootGroup($runtime, $domain) : SupervisedUser::USERNAME;
+        if (!SiteDocker::ready($runtime, $domain)) {
+            return SupervisedUser::USERNAME;
+        }
+        $group = self::configGroup($domain);
+        if ($runtime->getuid() === 0) {
+            if (!VhostUser::groupExists($runtime, $group)) {
+                $runtime->exec(['/usr/sbin/groupadd', '--system', $group], null, 30);
+            }
+            $user = VhostUser::username($domain);
+            if (!VhostUser::userInGroup($runtime, $user, $group)) {
+                $runtime->exec(['/usr/bin/gpasswd', '-a', $user, $group], null, 30);
+            }
+        }
+
+        return $group;
+    }
+
+    /** A117: the per-site group for its Docker configuration (short and fixed-length). */
+    public static function configGroup(string $domain): string
+    {
+        return 'az-dk-' . substr(hash('sha256', strtolower($domain)), 0, 12);
+    }
+
+    /**
+     * A117: move every Docker site that has its own daemon onto its own config group. Sites
+     * set up before this keep the docroot group (which the web server is in) until they are
+     * next changed otherwise; the scheduled converge calls this. Idempotent.
+     *
+     * @return list<string> domains whose configuration was re-owned
+     */
+    public static function convergeAll(Runtime $runtime, \AzerioidPanel\Broker\Config $config): array
+    {
+        $done = [];
+        foreach (\AzerioidPanel\Broker\Web\WebServers::for($config)->listVhosts($runtime, $config) as $v) {
+            $domain = (string) ($v['domain'] ?? '');
+            if ($domain === '' || !$runtime->isDir(self::dir($domain)) || !SiteDocker::ready($runtime, $domain)) {
+                continue;
+            }
+            $group = trim($runtime->exec(['/usr/bin/stat', '-c', '%G', self::dir($domain)], null, 10)->stdout);
+            if ($group !== self::configGroup($domain)) {
+                self::ensureDir($runtime, $domain);
+                $done[] = $domain;
+            }
+        }
+
+        return $done;
     }
 
     public static function ensureBase(Runtime $runtime): void
@@ -183,6 +229,9 @@ final class DockerSettings
         $dir = self::dir($domain);
         if ($runtime->isDir($dir)) {
             $runtime->exec(['/bin/rmdir', $dir], null, 10);
+        }
+        if ($runtime->getuid() === 0 && VhostUser::groupExists($runtime, self::configGroup($domain))) {
+            $runtime->exec(['/usr/sbin/groupdel', self::configGroup($domain)], null, 30);
         }
     }
 

@@ -3294,3 +3294,21 @@ read `.htaccess`). Existing Apache vhosts are re-rendered by the A115 converge.
 Tests: `ApacheVhostTest` — the override list, `FallbackResource` and no `AllowOverride All`; the converge patches
 an old backend vhost in place once (its per-site socket kept, nothing enabled), leaves files that are not the
 panel's alone, and puts the files back when `apachectl -t` fails.
+
+## A117 — A Docker site's configuration is readable only by its own account
+
+Security audit run-2 (2026-11-11), finding AZ-27. A Docker site's container environment (`env`, which holds its
+secrets) and compose override sit in `/var/lib/azerioid-docker/<slug>/`, `root:<reader> 0750/0640`, where the
+reader was the site's docroot group once the site has its own daemon (A56). The web server is a member of every
+docroot group (A49), so it could read every site's container environment; the A72 escaping-symlink sweep is a
+ceiling, so a site's link pointing there could have it served.
+
+Decision: the reader is a group of its own, `az-dk-<first 12 hex of sha256(domain)>`, created when needed, whose
+only member is the site's account (`gpasswd -a`); the docker CLI reads the files as that account, and each start
+picks the membership up (supervisor and `runuser` initialise groups). Before a site has its own daemon the reader
+stays `azerioid-supervised`'s own group. `setfacl` was not used: the `acl` package is missing on stock Ubuntu (the
+fleet host has none). Deleting the site removes the group with the rest of its Docker settings. Sites set up before
+this are re-owned by `DockerSettings::convergeAll`, which the scheduled render converge (A115) runs.
+
+Tests: `SiteDockerTest` — a new Docker site's settings directory and `env` are `root:az-dk-…`, the group is created
+and only the site's account joins it; the converge re-owns a site still on its docroot group.
