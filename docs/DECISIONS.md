@@ -3057,3 +3057,30 @@ A warning that echoes mongosh output strips the password.
 Tests: `DatabaseProvisionerArgvTest` — adopting MariaDB and PostgreSQL and provisioning MongoDB put the generated
 password (read back from broker.json) on no argv while it still reaches the client on stdin or in its environment;
 for MongoDB it is not in any script either.
+
+## A110 — MongoDB is provisioned and adopted without switching authorization off
+
+Security audit run-2 (2026-11-11), finding AZ-12. `MongoProvisioner::provision` — used by both `component.install`
+and `component.adopt` — wrote `authorization: disabled`, restarted `mongod` on loopback TCP, created the panel admin,
+then turned authorization back on. Between the two restarts any local account (a site's PHP, its terminal, cron)
+could connect without credentials, read whatever an adopted instance held and create a privileged user of its own
+that outlived the window. Adopting an instance that already enforced authorization switched it off too.
+
+Decision: authorization is never switched off.
+- The first restart already writes `bindIp: 127.0.0.1` and `authorization: enabled`. The panel admin is created
+  through MongoDB's localhost exception: with authorization on and no users yet, a localhost client may create the
+  first user in `admin` and do nothing else. The script, run as in A109, reaches `mongod` over loopback.
+- An instance that already enforces authorization is not opened up for the panel: when the exception is closed
+  (it has users), adoption stops with a message telling the operator to create the `azerioid_panel_admin` root
+  user and put its credentials in broker.json.
+- An instance that had users and *no* authorization was open to every local account before the panel touched it;
+  only there the old short window is used to create the admin (the exception is closed), and it ends enforced.
+- At the end the admin database must hold exactly the users it had before plus the panel's; anything else (someone
+  used the way in) fails the operation and nothing is written to broker.json.
+
+Not run against a real `mongod` here (none available locally); the localhost exception is MongoDB's documented
+first-user bootstrap.
+
+Tests: `MongoProvisionerTest` — a fresh instance is never restarted with authorization off; an enforcing instance is
+not opened and adoption is refused; an unexpected user fails provisioning; an already-open instance with users ends
+enforced and keeps them.

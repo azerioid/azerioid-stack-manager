@@ -29,8 +29,12 @@ final class DatabaseProvisionerArgvTest extends TestCase
             if (($c[0] ?? '') === '/usr/bin/mongosh') {
                 // Authenticated scripts and the admin create succeed; the anonymous
                 // listDatabases probe is refused, as with authorization on.
-                return in_array('--eval', $c, true)
-                    ? new ExecResult($c, 1, '', 'MongoServerError: requires authentication')
+                if (in_array('--eval', $c, true)) {
+                    return new ExecResult($c, 1, '', 'MongoServerError: requires authentication');
+                }
+
+                return str_contains((string) $stdin, 'system.users')
+                    ? new ExecResult($c, 0, (str_contains((string) $stdin, '.auth(') ? '["azerioid_panel_admin"]' : '[]') . "\n", '')
                     : new ExecResult($c, 0, "{ ok: 1 }\n", '');
             }
 

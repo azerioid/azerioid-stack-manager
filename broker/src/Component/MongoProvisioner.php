@@ -30,25 +30,50 @@ final class MongoProvisioner
             throw new BrokerException('mongod.conf not found.', 1);
         }
 
-        $log->info("Securing MongoDB bind address in {$confPath}");
-        $content = $this->setBindLocalhost($this->runtime->readFile($confPath));
-        $content = $this->setAuthorization($content, false);
-        $this->runtime->writeFile($confPath, $content, 0644);
-        $this->restartMongod($log);
+        // A110: authorization is never switched off. An instance that already enforces it
+        // is not opened up for the panel's sake; one that does not is closed first, and the
+        // panel admin is created through MongoDB's localhost exception (with authorization
+        // on and no users yet, only a localhost client can create the first user, and it can
+        // do nothing else). The old way opened loopback TCP with authorization disabled
+        // between two restarts, for any local account to use.
+        $original = $this->runtime->readFile($confPath);
+        $wasEnforced = $this->authorizationEnabled($original);
+        $before = $wasEnforced ? [] : $this->userNames(null);
 
+        $log->info("Securing MongoDB in {$confPath} (localhost only, authorization on).");
+        $this->runtime->writeFile($confPath, $this->setAuthorization($this->setBindLocalhost($original), true), 0644);
+        $this->restartMongod($log);
         if (!$this->waitForMongo(false)) {
             throw new BrokerException('MongoDB did not become ready before user provisioning.', 1);
         }
 
         $log->info('Creating MongoDB panel admin user.');
         if (!$this->ensureAdminUser($password, $log)) {
-            throw new BrokerException('Failed to create MongoDB admin user.', 1);
+            if ($wasEnforced) {
+                throw new BrokerException(
+                    'MongoDB already enforces authorization and has users of its own; the panel does not switch '
+                    . 'authorization off to take it over. Create a root user named ' . self::ADMIN_USER
+                    . ' yourself and add its credentials to broker.json, or adopt an instance without users.',
+                    3
+                );
+            }
+            if ($before === []) {
+                throw new BrokerException('Failed to create MongoDB admin user.', 1);
+            }
+            // Users exist but authorization was off: the instance was open to every local
+            // account before the panel touched it, so the localhost exception is closed and
+            // a short window like the one it already had is the only way in.
+            $log->warn('MongoDB had users and no authorization; creating the panel admin in a short open window.');
+            $this->runtime->writeFile($confPath, $this->setAuthorization($this->readConf($confPath), false), 0644);
+            $this->restartMongod($log);
+            if (!$this->waitForMongo(false) || !$this->ensureAdminUser($password, $log)) {
+                $this->runtime->writeFile($confPath, $this->setAuthorization($this->readConf($confPath), true), 0644);
+                $this->restartMongod($log);
+                throw new BrokerException('Failed to create MongoDB admin user.', 1);
+            }
+            $this->runtime->writeFile($confPath, $this->setAuthorization($this->readConf($confPath), true), 0644);
+            $this->restartMongod($log);
         }
-
-        $log->info('Enabling MongoDB authorization.');
-        $content = $this->setAuthorization($this->runtime->readFile($confPath), true);
-        $this->runtime->writeFile($confPath, $content, 0644);
-        $this->restartMongod($log);
 
         if (!$this->waitForMongo(true, $password, 60)) {
             throw new BrokerException('MongoDB did not accept admin credentials after enabling auth.', 1);
@@ -56,6 +81,18 @@ final class MongoProvisioner
 
         if ($this->anonymousPingOk()) {
             throw new BrokerException('MongoDB still allows unauthenticated access after enabling auth.', 1);
+        }
+
+        // Nobody else may have used the way in: the admin database holds the users it had
+        // before, plus the panel's, and nothing more.
+        $after = $this->userNames($password);
+        $unexpected = array_values(array_diff($after, $before, [self::ADMIN_USER]));
+        if ($after === [] || $unexpected !== []) {
+            throw new BrokerException(
+                'MongoDB has user(s) the panel did not create while it was being secured: '
+                . ($unexpected !== [] ? implode(', ', $unexpected) : '(none listed)') . '. Remove them and adopt again.',
+                1
+            );
         }
 
         BrokerConfigWriter::merge($this->runtime, $configPath, [
@@ -67,6 +104,35 @@ final class MongoProvisioner
             ],
         ]);
         $log->info('MongoDB secured (localhost + auth). SSPL license applies to mongodb-org packages.');
+    }
+
+    private function readConf(string $confPath): string
+    {
+        return $this->runtime->readFile($confPath);
+    }
+
+    private function authorizationEnabled(string $content): bool
+    {
+        return preg_match('/^\s*authorization\s*:\s*["\']?enabled["\']?\s*$/m', $content) === 1;
+    }
+
+    /**
+     * User names in the admin database (`user@db` for users of other databases), read
+     * without credentials while authorization is off or as the panel admin after.
+     *
+     * @return list<string>
+     */
+    private function userNames(?string $password): array
+    {
+        $script = 'const u = db.getSiblingDB("admin").system.users.find({}, {user: 1, db: 1}).toArray();'
+            . ' print(JSON.stringify(u.map(x => x.db === "admin" ? x.user : x.user + "@" + x.db)));';
+        $result = $password === null ? $this->mongoshScript($script, 30) : $this->mongoshScript($script, 30, $password);
+        if (!$result->ok()) {
+            return [];
+        }
+        $decoded = json_decode(trim((string) (preg_match('/\[.*\]/s', $result->stdout, $m) === 1 ? $m[0] : '')), true);
+
+        return is_array($decoded) ? array_values(array_map('strval', $decoded)) : [];
     }
 
     private function setBindLocalhost(string $content): string
