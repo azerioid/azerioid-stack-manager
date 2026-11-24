@@ -329,11 +329,23 @@ final class AlertEvaluator
             if ($program === '') {
                 continue;
             }
+            $domain = (string) ($v['domain'] ?? '');
+            // A126: another account listening on the site's upstream port receives its traffic.
+            if (($v['upstream_foreign_uid'] ?? null) !== null) {
+                $out[] = [
+                    'rule_key' => 'app.down',
+                    'subject' => $domain,
+                    'message' => $domain.' ('.$runtime.') upstream port is held by uid '.(int) $v['upstream_foreign_uid']
+                        .', not by the site — its traffic is going to another account\'s process.',
+                    'severity' => 'high',
+                ];
+
+                continue;
+            }
             $s = $state[$program] ?? 'unknown';
             if (! in_array($s, $down, true)) {
                 continue;
             }
-            $domain = (string) ($v['domain'] ?? '');
             $out[] = [
                 'rule_key' => 'app.down',
                 'subject' => $domain,

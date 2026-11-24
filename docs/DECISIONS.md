@@ -3475,3 +3475,31 @@ Tests: `MailBoundariesTest` — the sender map (mailboxes, aliases, disabled box
 submission services carry the sender check and the only milter, port 25 neither; the EL variant is unchrooted with
 the /run socket; converge on an old host writes the socket config, empties the global milters and sets the sender
 map; a failed socket probe restores all three files; no-op without mail and once converged.
+
+## A126 — A site's upstream port counts only when the site is the one listening
+
+Security audit run-2 (2026-11-11), finding AZ-25. Octane, PM2 and Docker upstreams are loopback TCP ports
+(34000–37999) that Caddy proxies to, and the broker's only check was "something listens" (`ss -tln`). Any local
+account — another site's identity included — could bind the port while the site's worker was down (a restart, a
+crash loop, a slow container) and receive that site's visitors: cookies, credentials, request bodies. The start
+checks passed, and `app.down` looked only at the Supervisor state.
+
+Decision (`UpstreamListener`):
+- The listener's owner is read from `ss -H -tlne` (`uid:N`; ss omits it for root). A port is the site's only when
+  every listener on it is the site's identity or root (shared Docker's proxy). An identity that cannot be resolved
+  matches no non-root listener.
+- `waitForPort` in all three managers returns "not up" for a foreign listener, so every start path takes its existing
+  rollback (program removed, containers cleaned up, vhost unchanged) instead of routing the site to it.
+- `vhost.list` reports `upstream_foreign_uid` for runtime vhosts, and the `app.down` alert fires on it even while
+  the worker is RUNNING.
+- Checked on the fleet host: the Octane (uid 992), PM2 (985) and rootless Docker (995) listeners are each their
+  site's own identity, so existing sites pass.
+
+Not done: binding the upstreams to per-site unix sockets (the A70 pattern for ttyd) would remove the window entirely,
+but the port is the application's own — a Node app listens on `PORT`, a container publishes a TCP port — so it cannot
+be done generally. The window between a worker stopping and the next check remains; it is now detected and alerted,
+and a start never completes onto a port someone else holds.
+
+Tests: `VhostOctaneTest` — enable refuses a port held by another uid and leaves the vhost on PHP-FPM; the site's own
+listener is accepted; `vhost.list` names the foreign uid. `AlertEvaluatorTest` — `app.down` opens for a foreign
+listener while the worker is running.
