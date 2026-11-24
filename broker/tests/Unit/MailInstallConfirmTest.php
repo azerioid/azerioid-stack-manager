@@ -39,7 +39,7 @@ final class MailInstallConfirmTest extends TestCase
         $rt->dirs['/etc/postfix'] = true;
         $rt->dirs['/etc/dovecot'] = true;
         $rt->dirs['/etc/dovecot/conf.d'] = true;
-        $rt->script(['/bin/hostname', '-f'], 0, "mail.raww.az\n");
+        $rt->script(['/bin/hostname', '-f'], 0, "mail.site2.example.com\n");
 
         return $rt;
     }

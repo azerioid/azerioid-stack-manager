@@ -105,7 +105,7 @@ final class ApacheVhostTest extends TestCase
     public function test_lists_each_vhost_once_despite_available_and_enabled(): void
     {
         $rt = $this->runtime();
-        $panel = "<VirtualHost *:443>\n    ServerName 157.245.84.199\n    SSLEngine on\n    DocumentRoot /usr/local/lib/azerioid-panel/web/public\n</VirtualHost>\n";
+        $panel = "<VirtualHost *:443>\n    ServerName 203.0.113.20\n    SSLEngine on\n    DocumentRoot /usr/local/lib/azerioid-panel/web/public\n</VirtualHost>\n";
         $ssl = "<VirtualHost *:443>\n    ServerName localhost\n    SSLEngine on\n    DocumentRoot /var/www/html\n</VirtualHost>\n";
         $user = "<VirtualHost 127.0.0.1:8081>\n    ServerName shop.example.com\n    DocumentRoot /data/www/shop.example.com\n</VirtualHost>\n";
         $disabled = "<VirtualHost 127.0.0.1:8081>\n    ServerName idle.example.com\n    DocumentRoot /data/www/idle.example.com\n</VirtualHost>\n";
@@ -124,7 +124,7 @@ final class ApacheVhostTest extends TestCase
         foreach ($vhosts as $row) {
             $byDomain[$row['domain']] = $row;
         }
-        $this->assertTrue($byDomain['157.245.84.199']['readonly']);
+        $this->assertTrue($byDomain['203.0.113.20']['readonly']);
         $this->assertTrue($byDomain['localhost']['readonly']);
         $this->assertFalse($byDomain['shop.example.com']['readonly']);
         $this->assertTrue($byDomain['shop.example.com']['enabled']);

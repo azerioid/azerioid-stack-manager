@@ -248,7 +248,7 @@ final class MailDns
      * Normalize dig answers for comparison.
      *
      * TXT: strip quotes and join 255-byte chunks. MX: drop trailing dots on the
-     * exchange hostname (`10 mail.let.az.` → `10 mail.let.az`).
+     * exchange hostname (`10 mail.site3.example.com.` → `10 mail.site3.example.com`).
      */
     private function comparable(string $type, string $value): string
     {

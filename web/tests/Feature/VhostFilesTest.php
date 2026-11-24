@@ -31,7 +31,7 @@ class VhostFilesTest extends TestCase
         $this->actingAs($this->admin());
         $html = $this->get('/vhosts')->assertOk()->getContent();
         $this->assertStringContainsString('/vhosts/shop.example.com/files', $html);
-        $this->assertStringNotContainsString('/vhosts/projob.az/files', $html);
+        $this->assertStringNotContainsString('/vhosts/site1.example.com/files', $html);
         $this->assertStringNotContainsString('/vhosts/default/files', $html);
     }
 
@@ -44,7 +44,7 @@ class VhostFilesTest extends TestCase
             ->assertSee('az-vh-shop-example-com')
             ->assertSee('/data/www/shop.example.com');
 
-        Livewire::test(\App\Livewire\VhostFilesPage::class, ['domain' => 'projob.az'])
+        Livewire::test(\App\Livewire\VhostFilesPage::class, ['domain' => 'site1.example.com'])
             ->assertSet('error', 'File manager is not available for read-only or system vhosts.');
     }
 
@@ -142,7 +142,7 @@ class VhostFilesTest extends TestCase
             ->assertStreamedContent("hello\n");
         $this->get('/vhosts/shop.example.com/files/download?path=../../../etc/passwd')
             ->assertForbidden();
-        $this->get('/vhosts/projob.az/files/download?path=index.php')
+        $this->get('/vhosts/site1.example.com/files/download?path=index.php')
             ->assertForbidden();
     }
 
@@ -192,7 +192,7 @@ class VhostFilesTest extends TestCase
         $this->artisan('azerioid:vhost', [
             'action' => 'files',
             'filesOp' => 'list',
-            '--domain' => 'projob.az',
+            '--domain' => 'site1.example.com',
         ])->expectsOutputToContain('read-only')->assertExitCode(2);
     }
 
@@ -322,7 +322,7 @@ class VhostFilesTest extends TestCase
             'paths' => ['../../../etc/passwd'],
         ])->assertStatus(422);
 
-        $this->post('/vhosts/projob.az/files/zip', [
+        $this->post('/vhosts/site1.example.com/files/zip', [
             'paths' => ['index.php'],
         ])->assertForbidden();
     }

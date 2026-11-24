@@ -379,13 +379,13 @@ final class KernelPhase2Test extends TestCase
         [$code, $json] = $this->capture(
             $this->kernel($rt),
             ['broker', 'backup.restore.db', 'azerioid/db/all/fixture.bin'],
-            $this->stdin() + ['target' => 'projob_restore_1']
+            $this->stdin() + ['target' => 'site1db_restore_1']
         );
         $this->assertSame(0, $code);
-        $this->assertSame('projob_restore_1', $json['data']['target']);
+        $this->assertSame('site1db_restore_1', $json['data']['target']);
         $this->assertFalse($json['data']['overwrite']);
         $sql = implode("\n", $rt->dbExecLog);
-        $this->assertStringContainsString('CREATE DATABASE IF NOT EXISTS `projob_restore_1`', $sql);
+        $this->assertStringContainsString('CREATE DATABASE IF NOT EXISTS `site1db_restore_1`', $sql);
     }
 
     public function test_restore_db_refuses_unauthenticated_legacy_archive(): void
@@ -416,26 +416,26 @@ final class KernelPhase2Test extends TestCase
     {
         $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob('-- dump --', 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
-        $rt->dbRows = [['Database' => 'projob']];
+        $rt->dbRows = [['Database' => 'site1db']];
         [$code, $json] = $this->capture(
             $this->kernel($rt),
             ['broker', 'backup.restore.db', 'azerioid/db/all/fixture.bin'],
-            $this->stdin() + ['target' => 'projob']
+            $this->stdin() + ['target' => 'site1db']
         );
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('OVERWRITE', $json['error']);
     }
 
-    public function test_restore_files_refuses_projob_without_force(): void
+    public function test_restore_files_refuses_site1db_without_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
         $cfg = new Config();
-        $cfg->readonlyVhosts = ['projob.az', 'www.projob.az'];
+        $cfg->readonlyVhosts = ['site1.example.com', 'www.site1.example.com'];
         [$code, $json] = $this->capture(
             $this->kernel($rt, $cfg),
-            ['broker', 'backup.restore.files', 'azerioid/files/projob.az/fixture.bin'],
-            $this->stdin() + ['site' => 'projob.az', 'apply' => true]
+            ['broker', 'backup.restore.files', 'azerioid/files/site1.example.com/fixture.bin'],
+            $this->stdin() + ['site' => 'site1.example.com', 'apply' => true]
         );
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('read-only vhost', $json['error']);
@@ -443,24 +443,24 @@ final class KernelPhase2Test extends TestCase
         $this->assertSame([], $moved);
     }
 
-    public function test_restore_files_projob_requires_typed_force(): void
+    public function test_restore_files_site1db_requires_typed_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/projob.az/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
         $rt = new FakeRuntime();
-        $rt->dirs['/data/www/projob.az'] = true;
-        $rt->dirs['/var/lib/azerioid-panel/staging/restore-projob.az/projob.az'] = true;
+        $rt->dirs['/data/www/site1.example.com'] = true;
+        $rt->dirs['/var/lib/azerioid-panel/staging/restore-site1.example.com/site1.example.com'] = true;
         $cfg = new Config();
-        $cfg->readonlyVhosts = ['projob.az', 'www.projob.az'];
+        $cfg->readonlyVhosts = ['site1.example.com', 'www.site1.example.com'];
         [$code] = $this->capture(
             $this->kernel($rt, $cfg),
-            ['broker', 'backup.restore.files', 'azerioid/files/projob.az/fixture.bin'],
-            $this->stdin() + ['site' => 'projob.az', 'apply' => true, 'force' => true, 'confirm' => 'PROJOB.AZ']
+            ['broker', 'backup.restore.files', 'azerioid/files/site1.example.com/fixture.bin'],
+            $this->stdin() + ['site' => 'site1.example.com', 'apply' => true, 'force' => true, 'confirm' => 'SITE1.EXAMPLE.COM']
         );
         $this->assertSame(0, $code);
     }
 
     /** A real gzipped ustar archive, so restore's archive inspection is exercised. */
-    private static function tgzFixture(string $site = 'projob.az'): string
+    private static function tgzFixture(string $site = 'site1.example.com'): string
     {
         $put = static fn (string $b, int $o, string $v): string => substr_replace($b, $v, $o, strlen($v));
         $entry = static function (string $name, string $body, string $type = '0', int $mode = 0644) use ($put): string {

@@ -11,7 +11,7 @@ final class CaddyParserTest extends TestCase
     public function test_parses_lacmp_php_vhost(): void
     {
         $contents = file_get_contents(__DIR__ . '/../fixtures/vhost-php.conf');
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/example.com.conf', $contents, ['projob.az']);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/example.com.conf', $contents, ['site1.example.com']);
 
         $this->assertSame(['example.com'], $parsed['domains']);
         $this->assertSame('/data/www/example.com', $parsed['root']);
@@ -86,10 +86,10 @@ CADDY;
 
     public function test_marks_reverse_proxy_readonly(): void
     {
-        $contents = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/projob.az.conf', $contents, ['projob.az']);
+        $contents = file_get_contents(__DIR__ . '/../fixtures/vhost-site1.conf');
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/site1.example.com.conf', $contents, ['site1.example.com']);
 
-        $this->assertSame('projob.az', $parsed['domain']);
+        $this->assertSame('site1.example.com', $parsed['domain']);
         $this->assertSame('proxy', $parsed['type']);
         $this->assertTrue($parsed['readonly']);
         $this->assertSame('127.0.0.1:8000', $parsed['reverse_proxy']);
@@ -98,7 +98,7 @@ CADDY;
     public function test_marks_default_site_readonly(): void
     {
         $contents = file_get_contents(__DIR__ . '/../fixtures/vhost-default.conf');
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/default.conf', $contents, ['projob.az']);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/default.conf', $contents, ['site1.example.com']);
         $this->assertTrue($parsed['readonly']);
         $this->assertFalse($parsed['tls']);
     }
@@ -112,7 +112,7 @@ http://127.0.0.1:3169 {
     php_fastcgi unix//run/php/azerioid-panel.sock
 }
 CADDY;
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/azerioid-panel.conf', $contents, ['projob.az']);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/azerioid-panel.conf', $contents, ['site1.example.com']);
         $this->assertTrue($parsed['readonly']);
         $this->assertSame('php', $parsed['type']);
     }
@@ -128,15 +128,15 @@ http://127.0.0.1:3169 {
         index index.html
     }
 }
-https://201.79.10.81:3169 {
+https://203.0.113.30:3169 {
     tls internal
     root * /usr/local/lib/azerioid-panel/web/public
     php_fastcgi unix//run/php/azerioid-panel.sock
 }
 CADDY;
         $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/azerioid-panel.conf', $contents, []);
-        $this->assertSame(['201.79.10.81:3169', '127.0.0.1:3169'], $parsed['domains']);
-        $this->assertSame('201.79.10.81:3169', $parsed['domain']);
+        $this->assertSame(['203.0.113.30:3169', '127.0.0.1:3169'], $parsed['domains']);
+        $this->assertSame('203.0.113.30:3169', $parsed['domain']);
         $this->assertSame('internal', $parsed['tls_mode']);
         $this->assertTrue($parsed['readonly']);
     }
@@ -144,18 +144,18 @@ CADDY;
     public function test_internal_engine_reverse_proxy_is_not_user_proxy_type(): void
     {
         $contents = <<<'CADDY'
-# azerioid-managed engine=apache type=php php=8.4 root=/data/www/abc.az
-abc.az {
+# azerioid-managed engine=apache type=php php=8.4 root=/data/www/site4.example.com
+site4.example.com {
     reverse_proxy 127.0.0.1:8081 {
         header_up Host {host}
     }
 }
 CADDY;
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/abc.az.conf', $contents, []);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/site4.example.com.conf', $contents, []);
         $this->assertSame('apache', $parsed['engine']);
         $this->assertSame('php', $parsed['type']);
         $this->assertSame('8.4', $parsed['php_version']);
-        $this->assertSame('/data/www/abc.az', $parsed['root']);
+        $this->assertSame('/data/www/site4.example.com', $parsed['root']);
         $this->assertSame('127.0.0.1:8081', $parsed['reverse_proxy']);
     }
 }

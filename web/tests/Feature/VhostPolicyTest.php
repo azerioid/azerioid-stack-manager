@@ -21,12 +21,12 @@ class VhostPolicyTest extends TestCase
         $fake = $this->app->make(FakeBroker::class);
 
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('confirmDelete', 'projob.az')
+            ->set('confirmDelete', 'site1.example.com')
             ->call('delete')
             ->assertSet('error', 'This vhost is managed externally and cannot be deleted by the panel.');
 
         $domains = array_column($fake->vhosts, 'domain');
-        $this->assertContains('projob.az', $domains);
+        $this->assertContains('site1.example.com', $domains);
     }
 
     public function test_delete_rejects_direct_domain_arg_without_confirm_state(): void
@@ -132,26 +132,26 @@ class VhostPolicyTest extends TestCase
             ->set('php_version', '8.4')
             ->call('create');
         $this->assertNotContains('bad.example.com', array_column($fake->vhosts, 'domain'));
-        $this->assertContains('projob.az', array_column($fake->vhosts, 'domain'));
+        $this->assertContains('site1.example.com', array_column($fake->vhosts, 'domain'));
     }
 
     public function test_mutations_are_not_get_routes(): void
     {
         $this->actingAs($this->admin());
         $this->get('/vhosts')->assertOk();
-        $this->get('/vhosts/delete/projob.az')->assertNotFound();
+        $this->get('/vhosts/delete/site1.example.com')->assertNotFound();
     }
 
     public function test_duplicate_create_is_a_clean_already_exists_error(): void
     {
         $this->actingAs($this->admin());
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('domain', 'projob.az')
-            ->set('root', '/data/www/projob.az')
+            ->set('domain', 'site1.example.com')
+            ->set('root', '/data/www/site1.example.com')
             ->set('type', 'php')
             ->set('php_version', '8.4')
             ->call('create')
-            ->assertSet('error', 'projob.az is managed externally and can\'t be edited.');
+            ->assertSet('error', 'site1.example.com is managed externally and can\'t be edited.');
     }
 
     public function test_non_loopback_proxy_upstream_is_rejected(): void
@@ -214,26 +214,26 @@ class VhostPolicyTest extends TestCase
     {
         $this->actingAs($this->admin());
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->call('startEdit', 'projob.az')
+            ->call('startEdit', 'site1.example.com')
             ->assertSet('editingDomain', null)
-            ->assertSet('error', "projob.az is managed externally and can't be edited.");
+            ->assertSet('error', "site1.example.com is managed externally and can't be edited.");
     }
 
     public function test_save_edit_rejects_tampered_readonly_editing_domain(): void
     {
         $this->actingAs($this->admin());
         $fake = $this->app->make(FakeBroker::class);
-        $before = collect($fake->vhosts)->firstWhere('domain', 'projob.az');
+        $before = collect($fake->vhosts)->firstWhere('domain', 'site1.example.com');
 
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('editingDomain', 'projob.az')
+            ->set('editingDomain', 'site1.example.com')
             ->set('editRoot', '/data/www/evil.example.com')
             ->set('editType', 'php')
             ->set('editPhpVersion', '8.4')
             ->call('saveEdit')
-            ->assertSet('error', "projob.az is managed externally and can't be edited.");
+            ->assertSet('error', "site1.example.com is managed externally and can't be edited.");
 
-        $after = collect($fake->vhosts)->firstWhere('domain', 'projob.az');
+        $after = collect($fake->vhosts)->firstWhere('domain', 'site1.example.com');
         $this->assertSame($before['root'] ?? null, $after['root'] ?? null);
     }
 
@@ -302,32 +302,32 @@ class VhostPolicyTest extends TestCase
         $fake = $this->app->make(FakeBroker::class);
 
         Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->set('accessMode', 'specific')
             ->set('accessIpsText', '1.2.3.4; DROP TABLE x')
             ->call('requestAccessSave')
             ->assertSet('error', 'Invalid IP or CIDR.');
-        $this->assertArrayNotHasKey('projob', $fake->dbAccess['mariadb'] ?? []);
+        $this->assertArrayNotHasKey('site1db', $fake->dbAccess['mariadb'] ?? []);
 
         Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->set('accessMode', 'global')
             ->call('requestAccessSave')
             ->assertSet('accessShowGlobalModal', true)
             ->call('confirmGlobalAccess')
             ->assertSet('error', 'Type the database name and confirm you understand the risk before enabling Global access.');
-        $this->assertArrayNotHasKey('projob', $fake->dbAccess['mariadb'] ?? []);
+        $this->assertArrayNotHasKey('site1db', $fake->dbAccess['mariadb'] ?? []);
 
         Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->set('accessMode', 'global')
             ->call('requestAccessSave')
             ->set('accessUnderstand', true)
-            ->set('accessConfirmName', 'projob')
+            ->set('accessConfirmName', 'site1db')
             ->call('confirmGlobalAccess')
             ->assertSet('error', null)
             ->assertSet('accessName', null);
-        $this->assertSame('global', $fake->dbAccess['mariadb']['projob']['mode'] ?? null);
+        $this->assertSame('global', $fake->dbAccess['mariadb']['site1db']['mode'] ?? null);
     }
 
     public function test_database_access_specific_ip_and_mongo_caveat(): void
@@ -336,12 +336,12 @@ class VhostPolicyTest extends TestCase
         $fake = $this->app->make(FakeBroker::class);
 
         Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->set('accessMode', 'specific')
             ->set('accessIpsText', '203.0.113.5')
             ->call('requestAccessSave')
             ->assertSet('error', null);
-        $this->assertSame(['203.0.113.5'], $fake->dbAccess['mariadb']['projob']['ips'] ?? null);
+        $this->assertSame(['203.0.113.5'], $fake->dbAccess['mariadb']['site1db']['ips'] ?? null);
 
         $fake->mongodbConfigured = true;
         Livewire::test(\App\Livewire\DatabasesPage::class)
@@ -362,7 +362,7 @@ class VhostPolicyTest extends TestCase
         $fake = $this->app->make(FakeBroker::class);
 
         Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->assertDontSee('Allowed IPs or CIDRs')
             ->set('accessMode', 'specific')
             ->assertSee('Allowed IPs or CIDRs')
@@ -370,16 +370,16 @@ class VhostPolicyTest extends TestCase
             ->set('accessIpsText', '203.0.113.5')
             ->call('requestAccessSave')
             ->assertSet('error', null)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->assertSet('accessMode', 'specific')
             ->assertSet('accessIpsText', '203.0.113.5')
             ->assertSee('Allowed IPs or CIDRs');
-        $this->assertSame(['203.0.113.5'], $fake->dbAccess['mariadb']['projob']['ips'] ?? null);
+        $this->assertSame(['203.0.113.5'], $fake->dbAccess['mariadb']['site1db']['ips'] ?? null);
 
         $fake->postgresqlConfigured = true;
         Livewire::test(\App\Livewire\DatabasesPage::class)
             ->set('selectedEngine', 'postgresql')
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->set('accessMode', 'specific')
             ->assertSee('Allowed IPs or CIDRs')
             ->set('accessMode', 'global')
@@ -393,7 +393,7 @@ class VhostPolicyTest extends TestCase
         $fake->postgresqlConfigured = true;
         $fake->mongodbConfigured = true;
 
-        foreach (['mariadb' => 'projob', 'postgresql' => 'projob', 'mongodb' => 'shop'] as $engine => $name) {
+        foreach (['mariadb' => 'site1db', 'postgresql' => 'site1db', 'mongodb' => 'shop'] as $engine => $name) {
             $fake->dbAccess[$engine][$name] = ['mode' => 'specific', 'ips' => ['198.51.100.10', '203.0.113.5']];
             $html = Livewire::test(\App\Livewire\DatabasesPage::class)
                 ->set('selectedEngine', $engine)
@@ -433,9 +433,9 @@ class VhostPolicyTest extends TestCase
                 ->assertDontSee('Allowed IPs or CIDRs');
         }
 
-        unset($fake->dbAccess['mariadb']['projob']);
+        unset($fake->dbAccess['mariadb']['site1db']);
         $html = Livewire::test(\App\Livewire\DatabasesPage::class)
-            ->call('startAccess', 'projob')
+            ->call('startAccess', 'site1db')
             ->assertSet('accessMode', 'localhost')
             ->assertSet('accessIpsText', '')
             ->set('accessMode', 'specific')

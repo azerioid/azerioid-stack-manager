@@ -80,7 +80,7 @@ class MailPageTest extends TestCase
         $this->installedMailBroker();
 
         Livewire::test(MailPage::class)
-            ->set('enableDomain', 'raww.az')
+            ->set('enableDomain', 'site2.example.com')
             ->call('enableDomainMail')
             ->assertSet('flash', null)
             ->assertSet('error', 'Set the mail hostname before enabling mail for a domain.');
@@ -92,16 +92,16 @@ class MailPageTest extends TestCase
         $this->installedMailBroker();
 
         $page = Livewire::test(MailPage::class)
-            ->set('hostname', 'mail.raww.az')
+            ->set('hostname', 'mail.site2.example.com')
             ->call('saveHostname')
             ->assertSet('error', null)
-            ->set('enableDomain', 'raww.az')
+            ->set('enableDomain', 'site2.example.com')
             ->call('enableDomainMail')
             ->assertSet('error', null)
-            ->set('newMailboxAddress', 'zaur@raww.az')
+            ->set('newMailboxAddress', 'zaur@site2.example.com')
             ->call('addMailbox')
             ->assertSet('error', null)
-            ->assertSet('revealedFor', 'zaur@raww.az');
+            ->assertSet('revealedFor', 'zaur@site2.example.com');
 
         // The password is generated panel-side and shown exactly once.
         $this->assertNotEmpty($page->get('revealedPassword'));
@@ -187,7 +187,7 @@ class MailPageTest extends TestCase
     {
         $this->actingAs($this->admin());
         $broker = $this->installedMailBroker();
-        $broker->mail['hostname'] = 'mail.raww.az';
+        $broker->mail['hostname'] = 'mail.site2.example.com';
         $broker->mail['domains']['shop.example.com'] = ['enabled' => true, 'dkim_selector' => 'azerioid'];
         $broker->mail['mailboxes']['zaur@shop.example.com'] = [
             'domain' => 'shop.example.com',

@@ -11,25 +11,25 @@ final class MailDnsTest extends TestCase
 {
     public function test_direct_mode_spf_authorizes_this_host(): void
     {
-        $spf = MailDns::spf('mail.raww.az', '64.226.78.176', null);
+        $spf = MailDns::spf('mail.site2.example.com', '203.0.113.10', null);
 
-        $this->assertSame('v=spf1 a:mail.raww.az ip4:64.226.78.176 ~all', $spf);
+        $this->assertSame('v=spf1 a:mail.site2.example.com ip4:203.0.113.10 ~all', $spf);
     }
 
     public function test_smarthost_mode_spf_authorizes_the_relay_not_this_host(): void
     {
-        $spf = MailDns::spf('mail.raww.az', '64.226.78.176', ['host' => 'smtp.sendgrid.net', 'port' => 587]);
+        $spf = MailDns::spf('mail.site2.example.com', '203.0.113.10', ['host' => 'smtp.sendgrid.net', 'port' => 587]);
 
         $this->assertSame('v=spf1 include:sendgrid.net ~all', $spf);
-        $this->assertStringNotContainsString('64.226.78.176', $spf, 'Relayed mail leaves from the provider, not this IP.');
-        $this->assertStringNotContainsString('a:mail.raww.az', $spf);
+        $this->assertStringNotContainsString('203.0.113.10', $spf, 'Relayed mail leaves from the provider, not this IP.');
+        $this->assertStringNotContainsString('a:mail.site2.example.com', $spf);
     }
 
     public function test_unknown_relay_falls_back_to_including_the_relay_host(): void
     {
         $this->assertSame(
             'v=spf1 include:smtp.corp.example.net ~all',
-            MailDns::spf('mail.raww.az', '64.226.78.176', ['host' => 'smtp.corp.example.net'])
+            MailDns::spf('mail.site2.example.com', '203.0.113.10', ['host' => 'smtp.corp.example.net'])
         );
     }
 
@@ -43,17 +43,17 @@ final class MailDnsTest extends TestCase
     public function test_empty_smarthost_host_is_treated_as_direct(): void
     {
         $this->assertSame(
-            'v=spf1 a:mail.raww.az ip4:64.226.78.176 ~all',
-            MailDns::spf('mail.raww.az', '64.226.78.176', ['host' => '  '])
+            'v=spf1 a:mail.site2.example.com ip4:203.0.113.10 ~all',
+            MailDns::spf('mail.site2.example.com', '203.0.113.10', ['host' => '  '])
         );
     }
 
     public function test_record_set_covers_mx_a_spf_dmarc_dkim_and_ptr(): void
     {
         $records = MailDns::records(
-            'raww.az',
-            'mail.raww.az',
-            '64.226.78.176',
+            'site2.example.com',
+            'mail.site2.example.com',
+            '203.0.113.10',
             null,
             'azerioid',
             'v=DKIM1; k=rsa; p=MIIB'
@@ -63,17 +63,17 @@ final class MailDnsTest extends TestCase
             $index[$record['type'] . ' ' . $record['name']] = $record['value'];
         }
 
-        $this->assertSame('10 mail.raww.az', $index['MX raww.az']);
-        $this->assertSame('64.226.78.176', $index['A mail.raww.az']);
-        $this->assertSame('v=spf1 a:mail.raww.az ip4:64.226.78.176 ~all', $index['TXT raww.az']);
-        $this->assertStringStartsWith('v=DMARC1; p=none;', $index['TXT _dmarc.raww.az']);
-        $this->assertSame('v=DKIM1; k=rsa; p=MIIB', $index['TXT azerioid._domainkey.raww.az']);
-        $this->assertSame('mail.raww.az', $index['PTR 64.226.78.176']);
+        $this->assertSame('10 mail.site2.example.com', $index['MX site2.example.com']);
+        $this->assertSame('203.0.113.10', $index['A mail.site2.example.com']);
+        $this->assertSame('v=spf1 a:mail.site2.example.com ip4:203.0.113.10 ~all', $index['TXT site2.example.com']);
+        $this->assertStringStartsWith('v=DMARC1; p=none;', $index['TXT _dmarc.site2.example.com']);
+        $this->assertSame('v=DKIM1; k=rsa; p=MIIB', $index['TXT azerioid._domainkey.site2.example.com']);
+        $this->assertSame('mail.site2.example.com', $index['PTR 203.0.113.10']);
     }
 
     public function test_dkim_record_is_omitted_until_a_key_exists(): void
     {
-        $records = MailDns::records('raww.az', 'mail.raww.az', '64.226.78.176', null, 'azerioid', '');
+        $records = MailDns::records('site2.example.com', 'mail.site2.example.com', '203.0.113.10', null, 'azerioid', '');
         foreach ($records as $record) {
             $this->assertStringNotContainsString('_domainkey', $record['name']);
         }
@@ -82,11 +82,11 @@ final class MailDnsTest extends TestCase
     public function test_verify_flags_an_spf_record_left_over_from_the_other_mode(): void
     {
         $rt = new FakeRuntime();
-        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'raww.az'], 0, "\"v=spf1 a:mail.raww.az ip4:64.226.78.176 ~all\"\n");
+        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'site2.example.com'], 0, "\"v=spf1 a:mail.site2.example.com ip4:203.0.113.10 ~all\"\n");
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'TXT',
-            'name' => 'raww.az',
+            'name' => 'site2.example.com',
             'value' => 'v=spf1 include:sendgrid.net ~all',
             'purpose' => 'SPF',
             'required' => true,
@@ -99,12 +99,12 @@ final class MailDnsTest extends TestCase
     public function test_verify_matches_quoted_and_chunked_txt_answers(): void
     {
         $rt = new FakeRuntime();
-        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', '_dmarc.raww.az'], 0, '"v=DMARC1; p=none; rua=mailto:postmaster@raww.az; fo=1"');
+        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', '_dmarc.site2.example.com'], 0, '"v=DMARC1; p=none; rua=mailto:postmaster@site2.example.com; fo=1"');
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'TXT',
-            'name' => '_dmarc.raww.az',
-            'value' => MailDns::dmarc('raww.az'),
+            'name' => '_dmarc.site2.example.com',
+            'value' => MailDns::dmarc('site2.example.com'),
             'purpose' => 'DMARC',
             'required' => true,
         ]]);
@@ -115,12 +115,12 @@ final class MailDnsTest extends TestCase
     public function test_verify_matches_apex_mx_with_trailing_dot(): void
     {
         $rt = new FakeRuntime();
-        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'MX', 'let.az'], 0, "10 mail.let.az.\n");
+        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'MX', 'site3.example.com'], 0, "10 mail.site3.example.com.\n");
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'MX',
-            'name' => 'let.az',
-            'value' => '10 mail.let.az',
+            'name' => 'site3.example.com',
+            'value' => '10 mail.site3.example.com',
             'purpose' => 'MX',
             'required' => true,
         ]]);
@@ -132,13 +132,13 @@ final class MailDnsTest extends TestCase
     {
         $rt = new FakeRuntime();
         // First resolver empty (simulates flaky 127.0.0.53), second succeeds.
-        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'let.az'], 0, '');
-        $rt->script(['/usr/bin/dig', '+short', '@8.8.8.8', 'TXT', 'let.az'], 0, "\"v=spf1 a:mail.let.az ip4:64.226.78.176 ~all\"\n");
+        $rt->script(['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'site3.example.com'], 0, '');
+        $rt->script(['/usr/bin/dig', '+short', '@8.8.8.8', 'TXT', 'site3.example.com'], 0, "\"v=spf1 a:mail.site3.example.com ip4:203.0.113.10 ~all\"\n");
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'TXT',
-            'name' => 'let.az',
-            'value' => 'v=spf1 a:mail.let.az ip4:64.226.78.176 ~all',
+            'name' => 'site3.example.com',
+            'value' => 'v=spf1 a:mail.site3.example.com ip4:203.0.113.10 ~all',
             'purpose' => 'SPF',
             'required' => true,
         ]]);
@@ -151,14 +151,14 @@ final class MailDnsTest extends TestCase
         $rt = new FakeRuntime();
         // dig sometimes emits each 255-byte TXT string on its own line.
         $rt->script(
-            ['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'az._domainkey.let.az'],
+            ['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'az._domainkey.site3.example.com'],
             0,
             "\"v=DKIM1; h=sha256; k=rsa; p=AAA\"\n\"BBB\"\n"
         );
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'TXT',
-            'name' => 'az._domainkey.let.az',
+            'name' => 'az._domainkey.site3.example.com',
             'value' => 'v=DKIM1; h=sha256; k=rsa; p=AAABBB',
             'purpose' => 'DKIM',
             'required' => true,
@@ -171,14 +171,14 @@ final class MailDnsTest extends TestCase
     {
         $rt = new FakeRuntime();
         $rt->script(
-            ['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'az._domainkey.let.az'],
+            ['/usr/bin/dig', '+short', '@1.1.1.1', 'TXT', 'az._domainkey.site3.example.com'],
             0,
             "\"v=DKIM1; h=sha256; k=rsa; p=AAA\" \"BBB\"\n"
         );
 
         $verified = (new MailDns($rt))->verify([[
             'type' => 'TXT',
-            'name' => 'az._domainkey.let.az',
+            'name' => 'az._domainkey.site3.example.com',
             'value' => 'v=DKIM1; h=sha256; k=rsa; p=AAABBB',
             'purpose' => 'DKIM',
             'required' => true,
@@ -191,8 +191,8 @@ final class MailDnsTest extends TestCase
     {
         $verified = (new MailDns(new FakeRuntime()))->verify([[
             'type' => 'PTR',
-            'name' => '64.226.78.176',
-            'value' => 'mail.raww.az',
+            'name' => '203.0.113.10',
+            'value' => 'mail.site2.example.com',
             'purpose' => 'Reverse DNS',
             'required' => true,
         ]]);

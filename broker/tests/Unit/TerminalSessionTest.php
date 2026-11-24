@@ -39,7 +39,7 @@ shop.example.com {
     file_server
 }
 CADDY;
-        $this->rt->files['/etc/caddy/conf.d/projob.az.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');
+        $this->rt->files['/etc/caddy/conf.d/site1.example.com.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-site1.conf');
         $this->rt->dirs['/data/www/shop.example.com'] = true;
         $this->rt->dirs['/var/lib/azerioid-panel'] = true;
         $this->rt->uid = 1000;
@@ -139,7 +139,7 @@ CADDY;
 
     public function test_rejects_readonly_vhost_terminal(): void
     {
-        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'projob.az'], [
+        [$code, $json] = $this->capture(['broker', 'terminal.session.start', 'site1.example.com'], [
             'admin_user_id' => '1',
             'source_ip' => '127.0.0.1',
         ]);

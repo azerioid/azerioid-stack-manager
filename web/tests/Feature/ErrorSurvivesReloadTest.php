@@ -42,8 +42,8 @@ class ErrorSurvivesReloadTest extends TestCase
     public function test_a_failed_database_drop_reports_why(): void
     {
         $page = Livewire::actingAs($this->admin())->test(\App\Livewire\DatabasesPage::class)
-            ->set('confirmDelete', 'projob')
-            ->set('confirmTyped', 'projob');
+            ->set('confirmDelete', 'site1db')
+            ->set('confirmTyped', 'site1db');
 
         $this->failNext();
         $page->call('delete');

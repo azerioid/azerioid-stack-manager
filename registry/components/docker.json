@@ -2,7 +2,7 @@
   "id": "docker",
   "display_name": "Docker (rootless)",
   "category": "runtime",
-  "description": "Official Docker CE as a rootless daemon for azerioid-supervised only. Opt-in per-vhost container runtime (image / Dockerfile / compose). Rootful docker.service is masked after install.",
+  "description": "Official Docker CE, rootless only: each Docker site gets its own daemon, run by that site's own account. Opt-in per-vhost container runtime (image / Dockerfile / compose). Rootful docker.service is masked after install.",
   "managed": true,
   "system": false,
   "installable": true,

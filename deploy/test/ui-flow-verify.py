@@ -129,7 +129,7 @@ class PanelClient:
 def main() -> int:
     parser = argparse.ArgumentParser(description="UI-flow setup + first-login verification")
     parser.add_argument("--base", default="http://127.0.0.1:3169")
-    parser.add_argument("--email", default="azerioid@gmail.com")
+    parser.add_argument("--email", default="admin@example.com")
     parser.add_argument("--password", default="AdminPassw0rd!")
     parser.add_argument("--name", default="Admin")
     parser.add_argument("--skip-setup", action="store_true")

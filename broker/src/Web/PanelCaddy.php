@@ -70,7 +70,7 @@ https://{$publicIp}:{$port} {
 }
 
 # Catch-all on the panel port: Caddy otherwise serves a single site for any Host
-# (e.g. https://let.az:3169 hitting the panel). Unrelated site vhosts must 421.
+# (e.g. https://site3.example.com:3169 hitting the panel). Unrelated site vhosts must 421.
 https://:{$port} {
     tls internal
     respond "Misdirected request." 421

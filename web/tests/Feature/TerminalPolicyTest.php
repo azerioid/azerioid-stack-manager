@@ -22,7 +22,7 @@ class TerminalPolicyTest extends TestCase
     public function test_fake_broker_rejects_readonly_vhost_terminal(): void
     {
         $fake = $this->app->make(FakeBroker::class);
-        $res = $fake->handle('terminal.session.start', ['projob.az'], [
+        $res = $fake->handle('terminal.session.start', ['site1.example.com'], [
             'admin_user_id' => '1',
             'source_ip' => '127.0.0.1',
         ]);

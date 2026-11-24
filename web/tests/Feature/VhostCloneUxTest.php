@@ -28,7 +28,7 @@ final class VhostCloneUxTest extends TestCase
             ->call('startClone', 'shop.example.com')
             ->assertSet('cloningDomain', 'shop.example.com')
             ->set('cloneTarget', 'staging.example.com')
-            ->set('cloneDb', 'projob:projob_staging')
+            ->set('cloneDb', 'site1db:site1db_staging')
             ->call('saveClone')
             ->assertHasNoErrors()
             ->assertSet('cloningDomain', null)
@@ -40,7 +40,7 @@ final class VhostCloneUxTest extends TestCase
         $this->assertSame(['shop.example.com', 'staging.example.com'], $op->args);
         $this->assertSame(Operation::STATUS_COMPLETED, $op->status);
         // The record names the cloned database but never carries its password.
-        $this->assertStringContainsString('projob_staging', (string) $op->log);
+        $this->assertStringContainsString('site1db_staging', (string) $op->log);
         $this->assertStringNotContainsString('password', strtolower((string) $op->log));
     }
 
@@ -52,7 +52,7 @@ final class VhostCloneUxTest extends TestCase
         Livewire::test(\App\Livewire\VhostsPage::class)
             ->call('startClone', 'shop.example.com')
             ->set('cloneTarget', 'staging.example.com')
-            ->set('cloneDb', 'projob')
+            ->set('cloneDb', 'site1db')
             ->call('saveClone')
             ->assertHasErrors('cloneDb');
         $this->assertSame(0, Operation::query()->count());

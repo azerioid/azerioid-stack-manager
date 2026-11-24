@@ -65,10 +65,10 @@ final class FrontRouterTest extends TestCase
         $rt = $this->caddyRuntime();
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
-        $code = $kernel->run(['broker', 'vhost.add', 'example.az', '/data/www/example.az', 'php', '8.4'], []);
+        $code = $kernel->run(['broker', 'vhost.add', 'site9.example.com', '/data/www/site9.example.com', 'php', '8.4'], []);
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $conf = $rt->files['/etc/caddy/conf.d/example.az.conf'];
+        $conf = $rt->files['/etc/caddy/conf.d/site9.example.com.conf'];
         $this->assertStringContainsString('engine=caddy', $conf);
         $this->assertStringContainsString('php_fastcgi', $conf);
         $this->assertStringNotContainsString('127.0.0.1:8081', $conf);
@@ -79,16 +79,16 @@ final class FrontRouterTest extends TestCase
     {
         $rt = $this->caddyRuntime();
         $this->withApache($rt);
-        $rt->script(['/usr/sbin/a2ensite', 'abc.az'], 0, 'Enabling site abc.az');
+        $rt->script(['/usr/sbin/a2ensite', 'site4.example.com'], 0, 'Enabling site site4.example.com');
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'abc.az', '/data/www/abc.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site4.example.com', '/data/www/site4.example.com', 'php', '8.4'],
             ['engine' => 'apache']
         );
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $front = $rt->files['/etc/caddy/conf.d/abc.az.conf'];
+        $front = $rt->files['/etc/caddy/conf.d/site4.example.com.conf'];
         $this->assertStringContainsString('engine=apache', $front);
         $this->assertStringContainsString('reverse_proxy 127.0.0.1:8081', $front);
         $this->assertStringContainsString('header_up X-Forwarded-For {http.request.remote.host}', $front);
@@ -96,10 +96,10 @@ final class FrontRouterTest extends TestCase
         $this->assertStringContainsString('header_up X-Forwarded-Host {http.request.host}', $front);
         $this->assertStringContainsString('header_up X-Real-IP {http.request.remote.host}', $front);
         $this->assertStringNotContainsString('php_fastcgi', $front);
-        $backend = $rt->files['/etc/apache2/sites-available/abc.az.conf'];
+        $backend = $rt->files['/etc/apache2/sites-available/site4.example.com.conf'];
         $this->assertStringContainsString('<VirtualHost 127.0.0.1:8081>', $backend);
-        $this->assertStringContainsString('ServerName abc.az', $backend);
-        $this->assertStringContainsString('/run/php/azv-abc-az-8.4.sock', $backend);
+        $this->assertStringContainsString('ServerName site4.example.com', $backend);
+        $this->assertStringContainsString('/run/php/azv-site4-example-com-8.4.sock', $backend);
         $this->assertStringContainsString('SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on', $backend);
         $this->assertStringContainsString("ProxyFCGISetEnvIf \"req('X-Forwarded-Proto') == 'https'\" HTTPS on", $backend);
         $this->assertStringContainsString("ProxyFCGISetEnvIf \"req('X-Forwarded-Proto') == 'https'\" REQUEST_SCHEME https", $backend);
@@ -107,11 +107,11 @@ final class FrontRouterTest extends TestCase
         $this->assertStringContainsString('RemoteIPInternalProxy 127.0.0.1', $rt->files['/etc/apache2/conf-available/azerioid-backend.conf']);
         $this->assertStringContainsString('SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on', $rt->files['/etc/apache2/conf-available/azerioid-backend.conf']);
         $this->assertStringNotContainsString('RemoteIPInternalProxy 0.0.0.0', $rt->files['/etc/apache2/conf-available/azerioid-backend.conf']);
-        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/abc.az.conf', $front, []);
+        $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/site4.example.com.conf', $front, []);
         $this->assertSame('php', $parsed['type']);
         $this->assertSame('apache', $parsed['engine']);
         $this->assertSame('8.4', $parsed['php_version']);
-        $this->assertSame('/data/www/abc.az', $parsed['root']);
+        $this->assertSame('/data/www/site4.example.com', $parsed['root']);
     }
 
     public function test_nginx_engine_writes_loopback_backend(): void
@@ -121,17 +121,17 @@ final class FrontRouterTest extends TestCase
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'xyz.az', '/data/www/xyz.az', 'static', null],
+            ['broker', 'vhost.add', 'site5.example.com', '/data/www/site5.example.com', 'static', null],
             ['engine' => 'nginx']
         );
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $front = $rt->files['/etc/caddy/conf.d/xyz.az.conf'];
+        $front = $rt->files['/etc/caddy/conf.d/site5.example.com.conf'];
         $this->assertStringContainsString('reverse_proxy 127.0.0.1:8082', $front);
         $this->assertStringContainsString('engine=nginx', $front);
-        $backend = $rt->files['/etc/nginx/sites-available/xyz.az.conf'];
+        $backend = $rt->files['/etc/nginx/sites-available/site5.example.com.conf'];
         $this->assertStringContainsString('listen 127.0.0.1:8082', $backend);
-        $this->assertStringContainsString('server_name xyz.az', $backend);
+        $this->assertStringContainsString('server_name site5.example.com', $backend);
         $this->assertArrayNotHasKey('/etc/nginx/sites-enabled/default', $rt->files);
         $http = $rt->files['/etc/nginx/conf.d/00-azerioid-backend.conf'];
         $this->assertStringContainsString('set_real_ip_from 127.0.0.1', $http);
@@ -146,12 +146,12 @@ final class FrontRouterTest extends TestCase
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'xyz.az', '/data/www/xyz.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site5.example.com', '/data/www/site5.example.com', 'php', '8.4'],
             ['engine' => 'nginx']
         );
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $backend = $rt->files['/etc/nginx/sites-available/xyz.az.conf'];
+        $backend = $rt->files['/etc/nginx/sites-available/site5.example.com.conf'];
         $this->assertStringContainsString('fastcgi_param HTTPS $azerioid_https', $backend);
         $this->assertStringContainsString('fastcgi_param REQUEST_SCHEME $azerioid_scheme', $backend);
         $http = $rt->files['/etc/nginx/conf.d/00-azerioid-backend.conf'];
@@ -163,53 +163,53 @@ final class FrontRouterTest extends TestCase
         $rt = $this->caddyRuntime();
         $this->withApache($rt);
         $this->withNginx($rt);
-        $rt->script(['/usr/sbin/a2ensite', 'abc.az'], 0, 'Enabling site abc.az');
-        $rt->script(['/usr/sbin/a2dissite', 'abc.az'], 0);
+        $rt->script(['/usr/sbin/a2ensite', 'site4.example.com'], 0, 'Enabling site site4.example.com');
+        $rt->script(['/usr/sbin/a2dissite', 'site4.example.com'], 0);
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $this->assertSame(0, $kernel->run(
-            ['broker', 'vhost.add', 'abc.az', '/data/www/abc.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site4.example.com', '/data/www/site4.example.com', 'php', '8.4'],
             ['engine' => 'apache']
         ));
         ob_end_clean();
-        $this->assertArrayHasKey('/etc/apache2/sites-available/abc.az.conf', $rt->files);
+        $this->assertArrayHasKey('/etc/apache2/sites-available/site4.example.com.conf', $rt->files);
 
         ob_start();
-        $code = $kernel->run(['broker', 'vhost.edit', 'abc.az'], ['engine' => 'nginx']);
+        $code = $kernel->run(['broker', 'vhost.edit', 'site4.example.com'], ['engine' => 'nginx']);
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $front = $rt->files['/etc/caddy/conf.d/abc.az.conf'];
+        $front = $rt->files['/etc/caddy/conf.d/site4.example.com.conf'];
         $this->assertStringContainsString('engine=nginx', $front);
         $this->assertStringContainsString('reverse_proxy 127.0.0.1:8082', $front);
-        $this->assertArrayHasKey('/etc/nginx/sites-available/abc.az.conf', $rt->files);
-        $this->assertArrayNotHasKey('/etc/apache2/sites-available/abc.az.conf', $rt->files);
+        $this->assertArrayHasKey('/etc/nginx/sites-available/site4.example.com.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/apache2/sites-available/site4.example.com.conf', $rt->files);
     }
 
     public function test_migrate_does_not_steal_existing_caddy_vhost(): void
     {
         $rt = $this->caddyRuntime();
         $this->withNginx($rt);
-        $rt->files['/etc/caddy/conf.d/let.az.conf'] = <<<'CADDY'
-# azerioid-managed engine=caddy type=php php=8.4 root=/data/www/let.az
-let.az {
-    root * /data/www/let.az
+        $rt->files['/etc/caddy/conf.d/site3.example.com.conf'] = <<<'CADDY'
+# azerioid-managed engine=caddy type=php php=8.4 root=/data/www/site3.example.com
+site3.example.com {
+    root * /data/www/site3.example.com
     php_fastcgi unix//run/php/php8.4-fpm.sock
     file_server
 }
 CADDY;
-        $rt->files['/etc/nginx/sites-available/let.az.conf'] = "server {\n    listen 80;\n    server_name let.az;\n    root /data/www/let.az;\n}\n";
-        $rt->files['/etc/nginx/sites-enabled/let.az.conf'] = $rt->files['/etc/nginx/sites-available/let.az.conf'];
+        $rt->files['/etc/nginx/sites-available/site3.example.com.conf'] = "server {\n    listen 80;\n    server_name site3.example.com;\n    root /data/www/site3.example.com;\n}\n";
+        $rt->files['/etc/nginx/sites-enabled/site3.example.com.conf'] = $rt->files['/etc/nginx/sites-available/site3.example.com.conf'];
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(['broker', 'web.front-router.migrate'], []);
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
-        $front = $rt->files['/etc/caddy/conf.d/let.az.conf'];
+        $front = $rt->files['/etc/caddy/conf.d/site3.example.com.conf'];
         $this->assertStringContainsString('engine=caddy', $front);
         $this->assertStringContainsString('php_fastcgi', $front);
         $this->assertStringNotContainsString('127.0.0.1:8082', $front);
-        $this->assertArrayNotHasKey('/etc/nginx/sites-available/let.az.conf', $rt->files);
-        $this->assertArrayNotHasKey('/etc/nginx/sites-enabled/let.az.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/nginx/sites-available/site3.example.com.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/nginx/sites-enabled/site3.example.com.conf', $rt->files);
     }
 
     public function test_apache_engine_requires_apache_installed(): void
@@ -218,7 +218,7 @@ CADDY;
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'abc.az', '/data/www/abc.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site4.example.com', '/data/www/site4.example.com', 'php', '8.4'],
             ['engine' => 'apache']
         );
         $out = ob_get_clean();
@@ -226,7 +226,7 @@ CADDY;
         $this->assertStringContainsString('Apache is not installed', $out);
         $this->assertStringContainsString('Install it from Components before creating an Apache-engine vhost', $out);
         $this->assertStringNotContainsString('Directory does not exist', $out);
-        $this->assertArrayNotHasKey('/etc/caddy/conf.d/abc.az.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/site4.example.com.conf', $rt->files);
     }
 
     public function test_apache_leftover_config_dir_is_not_an_install(): void
@@ -238,14 +238,14 @@ CADDY;
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'leftover.az', '/data/www/leftover.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site8.example.com', '/data/www/site8.example.com', 'php', '8.4'],
             ['engine' => 'apache']
         );
         $out = ob_get_clean();
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString('Apache is not installed', $out);
         $this->assertStringNotContainsString('Directory does not exist', $out);
-        $this->assertArrayNotHasKey('/etc/caddy/conf.d/leftover.az.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/site8.example.com.conf', $rt->files);
     }
 
     public function test_nginx_engine_requires_nginx_installed(): void
@@ -256,7 +256,7 @@ CADDY;
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(
-            ['broker', 'vhost.add', 'ngx.az', '/data/www/ngx.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site7.example.com', '/data/www/site7.example.com', 'php', '8.4'],
             ['engine' => 'nginx']
         );
         $out = ob_get_clean();
@@ -264,7 +264,7 @@ CADDY;
         $this->assertStringContainsString('Nginx is not installed', $out);
         $this->assertStringContainsString('Install it from Components before creating an Nginx-engine vhost', $out);
         $this->assertStringNotContainsString('Directory does not exist', $out);
-        $this->assertArrayNotHasKey('/etc/caddy/conf.d/ngx.az.conf', $rt->files);
+        $this->assertArrayNotHasKey('/etc/caddy/conf.d/site7.example.com.conf', $rt->files);
     }
 
     public function test_backend_bind_rewrites_ports_conf(): void
@@ -327,7 +327,7 @@ NGINX;
     {
         $rt = $this->caddyRuntime();
         $original = $rt->files['/etc/caddy/Caddyfile'];
-        $rt->files['/etc/caddy/conf.d/let.az.conf'] = "let.az {\n    root * /data/www/let.az\n}\n";
+        $rt->files['/etc/caddy/conf.d/site3.example.com.conf'] = "site3.example.com {\n    root * /data/www/site3.example.com\n}\n";
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $code = $kernel->run(['broker', 'web.release-site-ports'], []);
@@ -337,32 +337,32 @@ NGINX;
         $this->assertTrue($decoded['data']['deprecated']);
         $this->assertFalse($decoded['data']['released']);
         $this->assertSame($original, $rt->files['/etc/caddy/Caddyfile']);
-        $this->assertArrayHasKey('/etc/caddy/conf.d/let.az.conf', $rt->files);
+        $this->assertArrayHasKey('/etc/caddy/conf.d/site3.example.com.conf', $rt->files);
     }
 
     public function test_tls_auto_is_always_caddy_native(): void
     {
         $rt = $this->caddyRuntime();
         $this->withApache($rt);
-        $rt->script(['/usr/sbin/a2ensite', 'abc.az'], 0, 'Enabling site abc.az');
+        $rt->script(['/usr/sbin/a2ensite', 'site4.example.com'], 0, 'Enabling site site4.example.com');
         $kernel = new Kernel(new Config(), $rt);
         ob_start();
         $this->assertSame(0, $kernel->run(
-            ['broker', 'vhost.add', 'abc.az', '/data/www/abc.az', 'php', '8.4'],
+            ['broker', 'vhost.add', 'site4.example.com', '/data/www/site4.example.com', 'php', '8.4'],
             ['engine' => 'apache']
         ));
         ob_end_clean();
         ob_start();
-        $code = $kernel->run(['broker', 'vhost.edit', 'abc.az'], ['tls_mode' => 'auto']);
+        $code = $kernel->run(['broker', 'vhost.edit', 'site4.example.com'], ['tls_mode' => 'auto']);
         $out = ob_get_clean();
         $this->assertSame(0, $code, $out);
         $decoded = json_decode($out, true);
         $this->assertSame('caddy_native', $decoded['data']['tls_issue']['path'] ?? null);
         $this->assertStringNotContainsString('certbot', json_encode($decoded['data']['tls_issue'] ?? []));
-        $front = $rt->files['/etc/caddy/conf.d/abc.az.conf'];
-        $this->assertStringContainsString('abc.az {', $front);
-        $this->assertStringNotContainsString('http://abc.az', $front);
-        $backend = $rt->files['/etc/apache2/sites-available/abc.az.conf'];
+        $front = $rt->files['/etc/caddy/conf.d/site4.example.com.conf'];
+        $this->assertStringContainsString('site4.example.com {', $front);
+        $this->assertStringNotContainsString('http://site4.example.com', $front);
+        $backend = $rt->files['/etc/apache2/sites-available/site4.example.com.conf'];
         $this->assertStringNotContainsString('SSLEngine', $backend);
     }
 }

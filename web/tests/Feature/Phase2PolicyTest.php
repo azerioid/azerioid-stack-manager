@@ -14,17 +14,17 @@ class Phase2PolicyTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_restore_over_projob_is_refused_without_force(): void
+    public function test_restore_over_site1db_is_refused_without_force(): void
     {
         $this->actingAs($this->admin());
         $this->seedBackupSecrets();
 
         Livewire::test(\App\Livewire\BackupsPage::class)
-            ->set('restore_key', 'azerioid/files/projob.az/fixture.bin')
-            ->set('restore_site', 'projob.az')
+            ->set('restore_key', 'azerioid/files/site1.example.com/fixture.bin')
+            ->set('restore_site', 'site1.example.com')
             ->set('restore_force', false)
             ->call('applyFiles')
-            ->assertSet('error', 'Refusing to restore over a read-only vhost without force + confirm PROJOB.AZ.');
+            ->assertSet('error', 'Refusing to restore over a read-only vhost without force + confirm SITE1.EXAMPLE.COM.');
     }
 
     public function test_restore_existing_db_refused_without_overwrite(): void
@@ -33,8 +33,8 @@ class Phase2PolicyTest extends TestCase
         $this->seedBackupSecrets();
 
         Livewire::test(\App\Livewire\BackupsPage::class)
-            ->set('restore_key', 'azerioid/db/projob/fixture.bin')
-            ->set('restore_target', 'projob')
+            ->set('restore_key', 'azerioid/db/site1db/fixture.bin')
+            ->set('restore_target', 'site1db')
             ->set('restore_overwrite', false)
             ->call('restoreDb')
             ->assertSet('error', 'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.');
@@ -47,11 +47,11 @@ class Phase2PolicyTest extends TestCase
 
         Livewire::test(\App\Livewire\BackupsPage::class)
             ->set('restore_key', 'azerioid/db/all/fixture.bin')
-            ->set('restore_target', 'projob_restore_1')
+            ->set('restore_target', 'site1db_restore_1')
             ->call('restoreDb')
             ->assertSet('error', null)
             // B5: the restore is queued now; the guards above still refuse inline.
-            ->assertSet('flash', 'Restore into projob_restore_1 queued. Progress and output are on the Operations page.');
+            ->assertSet('flash', 'Restore into site1db_restore_1 queued. Progress and output are on the Operations page.');
     }
 
     public function test_reboot_without_confirm_is_rejected(): void

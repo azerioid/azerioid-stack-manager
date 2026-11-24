@@ -405,8 +405,8 @@ class OperationsTest extends TestCase
         $this->seedBackupSecrets();
 
         Livewire::actingAs($this->admin())->test(\App\Livewire\BackupsPage::class)
-            ->set('restore_key', 'azerioid/db/projob/fixture.bin')
-            ->set('restore_target', 'projob')
+            ->set('restore_key', 'azerioid/db/site1db/fixture.bin')
+            ->set('restore_target', 'site1db')
             ->set('restore_overwrite', false)
             ->call('restoreDb')
             ->assertSet('error', 'Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.');

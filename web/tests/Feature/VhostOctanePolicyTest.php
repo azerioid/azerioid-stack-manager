@@ -93,11 +93,11 @@ class VhostOctanePolicyTest extends TestCase
         $fake = $this->fakeWithSupervisor();
 
         Livewire::test(\App\Livewire\VhostsPage::class)
-            ->set('octaneTarget', 'projob.az')
+            ->set('octaneTarget', 'site1.example.com')
             ->call('enableOctane')
-            ->assertSet('error', "projob.az is managed externally and can't be edited.");
+            ->assertSet('error', "site1.example.com is managed externally and can't be edited.");
 
-        $this->assertSame('fpm', $this->vhost($fake, 'projob.az')['runtime']);
+        $this->assertSame('fpm', $this->vhost($fake, 'site1.example.com')['runtime']);
     }
 
     public function test_disable_returns_the_vhost_to_php_fpm_and_drops_the_program(): void
