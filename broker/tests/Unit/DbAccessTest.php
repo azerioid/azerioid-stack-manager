@@ -82,6 +82,37 @@ final class DbAccessTest extends TestCase
         $this->assertSame(['localhost', '127.0.0.1', '203.0.113.5'], $result['hosts_after']);
     }
 
+    /** A108: access changes grant on the escaped name and find the user under either form. */
+    public function test_mariadb_access_grants_on_the_escaped_name(): void
+    {
+        $rt = new FakeRuntime();
+        $seen = [];
+        $rt->dbQueryFn = static function (string $sql, array $params) use (&$seen): array {
+            if (str_contains($sql, 'authentication_string')) {
+                return [['plugin' => 'mysql_native_password', 'authentication_string' => '*HASHHASHHASHHASH']];
+            }
+            if (str_contains($sql, 'FROM mysql.user')) {
+                return [['Host' => 'localhost'], ['Host' => '127.0.0.1']];
+            }
+            if (str_contains($sql, 'FROM mysql.db')) {
+                $seen = $params;
+
+                return [['User' => 'shop_u']];
+            }
+
+            return [];
+        };
+        $access = new \AzerioidPanel\Broker\Database\MariaDBAccess($rt);
+        $this->assertSame('shop_u', $access->userForDatabase('shop_1'));
+        $this->assertSame(['shop\\_1', 'shop_1'], $seen);
+        $access->apply('shop_1', 'shop_u', 'ips', ['198.51.100.9']);
+        $grants = array_values(array_filter($rt->dbExecLog, static fn (string $s): bool => str_starts_with($s, 'GRANT')));
+        $this->assertNotSame([], $grants);
+        foreach ($grants as $g) {
+            $this->assertStringContainsString('ON `shop\\_1`.*', $g);
+        }
+    }
+
     public function test_postgres_writes_per_database_hba_and_reloads(): void
     {
         $rt = new FakeRuntime();

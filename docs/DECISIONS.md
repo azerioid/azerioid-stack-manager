@@ -3007,3 +3007,33 @@ Repositories already on a host (their list/repo file or the NodeSource marker ex
 Tests: `ComponentRepoInstallerTest` — for docker, mongodb, nodejs and php on apt and dnf, only the pinned key is
 exported, no `| bash`, `| gpg` or `--add-repo` runs, and no repo file points `gpgkey` at a URL; Remi's release is
 installed with `localpkg_gpgcheck`; a key file without the pinned key adds no repository and installs nothing.
+
+## A108 — Database grants reach only their own database
+
+Security audit run-2 (2026-11-11), findings AZ-13 and AZ-38.
+
+**MariaDB (AZ-13).** A database-level `GRANT … ON \`name\`.*` treats the name as a pattern: `_` matches any one
+character. Panel database names may contain `_`, and the grant used the raw name, so the user of `app_1` also held
+ALL PRIVILEGES on `appx1`, `app11` and any other database that fits — including another site's, now or later.
+Decision: grants use `SqlIdent::mysqlGrantDb()`, the name with every `_` escaped (`app\_1`), in `db.add` and in
+`db.access` (`MariaDBAccess::grant`); `userForDatabase` finds the user under the escaped or the old raw form.
+Reproduced and checked on MariaDB 13.0: with the raw grant, `app_1`'s user read a table in `appx1`; with the escaped
+grant that is refused and its own database works.
+
+**PostgreSQL (AZ-38).** `CREATE DATABASE … OWNER` leaves PUBLIC's default `CONNECT` and `TEMPORARY` (and, before 15,
+`CREATE` on schema `public`), and the provisioned `pg_hba` allows `host all all` on loopback, so every site's role
+could connect to every other site's database and read its catalog. Decision: `PostgreSQLDriver::add` runs
+`REVOKE ALL ON DATABASE … FROM PUBLIC` right after the create, inside the block whose failure rolls back database
+and role; `db.clone` goes through the same path. The owner keeps its rights; the panel's role is a superuser.
+
+**Existing hosts.** `db.grants.converge` (scheduled hourly by `azerioid:db-grants-converge`, a no-op once done)
+moves each MariaDB grant that looks like the panel's own (all privileges, no GRANT OPTION, not root or the panel
+admin) from the raw name to the escaped one — escaped grant first, then the raw one revoked, so the user never
+loses its own database — and revokes PUBLIC on every non-template PostgreSQL database owned by a non-superuser
+role that is still open to it. A role an operator granted rights inside another site's database by hand relied on
+PUBLIC's CONNECT and needs an explicit `GRANT CONNECT` after this.
+
+Tests: `DbAddTest` — `db.add` grants on the escaped name only; the converge moves exactly the panel-made raw grant
+(escaped first) and leaves escaped, partial and root grants; the PostgreSQL create statements revoke PUBLIC right
+after `CREATE DATABASE`. `DbAccessTest` — access changes grant on the escaped name and the user lookup covers both
+forms.

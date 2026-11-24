@@ -18,6 +18,16 @@ final class SqlIdent
     }
 
     /**
+     * A database name as a MariaDB grant target (A108). In a database-level GRANT the
+     * name is a pattern: `_` matches any one character, so `app_1` also grants `appx1`.
+     * Escaped, it matches only itself. (Validated names contain no `%`.)
+     */
+    public static function mysqlGrantDb(string $name): string
+    {
+        return str_replace('_', '\\_', self::mysql($name));
+    }
+
+    /**
      * MariaDB user host: localhost, loopback, %, IPv4, or MariaDB % wildcards.
      */
     public static function mysqlHost(string $host): string
