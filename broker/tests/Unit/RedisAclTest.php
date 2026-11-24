@@ -183,13 +183,36 @@ final class RedisAclTest extends TestCase
         $this->assertNotSame($first, $this->acl()->enableSite('shop.example.com')['prefix']);
     }
 
+    /** Redis 6 knows no subcommand denies and no FUNCTION; one unknown rule invalidates the whole file. */
     public function test_redis_6_gets_no_rule_it_does_not_know(): void
     {
         $state = ['enforced' => true, 'admin_password' => 'x', 'redis_major' => 6,
             'sites' => ['a.test' => ['user' => 'az-vh-a-test', 'prefix' => 'a-test-abcdef:', 'password' => 'p']]];
-        $this->assertStringNotContainsString('function', RedisAcl::renderAcl($state));
+        $six = RedisAcl::renderAcl($state);
+        $this->assertStringNotContainsString('function', $six);
+        $this->assertDoesNotMatchRegularExpression('/ -[a-z]+\|/', $six, 'no -cmd|sub deny on Redis 6');
+        $this->assertStringContainsString('-script -client +script|load +script|exists +client|setname', $six);
         $state['redis_major'] = 7;
         $this->assertStringContainsString('-function -fcall -fcall_ro', RedisAcl::renderAcl($state));
+    }
+
+    /** A file Redis rejects is not left on disk, and the change is not recorded. */
+    public function test_a_rejected_acl_load_keeps_the_file_and_the_state_as_they_were(): void
+    {
+        $this->acl()->setup(true);
+        $this->acl()->enableSite('shop.example.com');
+        $file = $this->rt->files[RedisAcl::ACL_FILE];
+        $state = $this->rt->files[RedisAcl::STATE];
+        $this->rt->execFn = static fn (array $c): ?ExecResult => ($c[0] ?? '') === '/usr/bin/redis-cli' && in_array('LOAD', $c, true)
+            ? new ExecResult($c, 0, "ERR Error in ACL SETUSER modifier\n", '')
+            : null;
+        try {
+            $this->acl()->disableSite('shop.example.com');
+            $this->fail('expected failure');
+        } catch (BrokerException) {
+        }
+        $this->assertSame($file, $this->rt->files[RedisAcl::ACL_FILE]);
+        $this->assertSame($state, $this->rt->files[RedisAcl::STATE], 'the site stays recorded for a retry');
     }
 
     public function test_wiring_is_line_by_line_and_idempotent(): void
