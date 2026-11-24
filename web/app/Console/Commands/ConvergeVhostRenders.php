@@ -26,7 +26,7 @@ class ConvergeVhostRenders extends Command
         }
 
         $data = is_array($response->data) ? $response->data : [];
-        $changed = count((array) ($data['backends'] ?? [])) + count((array) ($data['caddy'] ?? []));
+        $changed = count((array) ($data['backends'] ?? [])) + count((array) ($data['caddy'] ?? [])) + count((array) ($data['docker_env'] ?? []));
         $this->line($changed > 0 ? "Updated {$changed} vhost(s)." : 'Nothing to change.');
 
         return self::SUCCESS;

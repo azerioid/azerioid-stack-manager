@@ -361,7 +361,7 @@ final class FakeBroker
                 'vhost.phppool.apply' => $this->phpPoolApply($stdin),
                 'vhost.phppool.converge' => $this->phpPoolConverge(),
                 'db.grants.converge' => ['mariadb' => [], 'postgresql' => null],
-                'vhost.render.converge' => ['backends' => [], 'caddy' => []],
+                'vhost.render.converge' => ['backends' => [], 'caddy' => [], 'docker_env' => []],
                 'vhost.phppool.set' => $this->phpPoolSet($args, $stdin),
                 'vhost.limits.show' => $this->vhostLimitsShow($args, $stdin),
                 'vhost.limits.set' => $this->vhostLimitsSet($args, $stdin),

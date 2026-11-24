@@ -97,6 +97,40 @@ final class SiteDockerTest extends TestCase
         }
     }
 
+    /** A117: a site's container environment is readable by a group only its own account is in — not the docroot group the web server is in. */
+    public function test_the_container_environment_is_not_readable_by_the_web_server(): void
+    {
+        $this->rt->script(['/usr/bin/getent', 'group', \AzerioidPanel\Broker\Vhost\DockerSettings::configGroup(self::DOMAIN)], 2, '');
+        [$code, $json] = $this->broker(['vhost.docker.enable', self::DOMAIN], ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80, 'env' => ['SECRET' => 'x']]);
+        $this->assertSame(0, $code, json_encode($json));
+        $group = \AzerioidPanel\Broker\Vhost\DockerSettings::configGroup(self::DOMAIN);
+        $this->assertMatchesRegularExpression('/^az-dk-[0-9a-f]{12}$/', $group);
+        $dir = \AzerioidPanel\Broker\Vhost\DockerSettings::dir(self::DOMAIN);
+        $this->assertSame(['root', $group], $this->rt->owners[$dir] ?? null);
+        $this->assertSame(['root', $group], $this->rt->owners[$dir . '/env'] ?? null);
+        $this->assertContains(['/usr/sbin/groupadd', '--system', $group], $this->commands());
+        $this->assertContains(['/usr/bin/gpasswd', '-a', self::USER, $group], $this->commands(), 'the site account is the member');
+        foreach ($this->commands() as $c) {
+            if (($c[0] ?? '') === '/usr/bin/gpasswd' && ($c[3] ?? '') === $group) {
+                $this->assertSame(self::USER, $c[2], 'nobody else joins the group');
+            }
+        }
+    }
+
+    /** A117: a site set up before keeps the docroot group until the converge re-owns it. */
+    public function test_the_converge_reowns_an_existing_sites_configuration(): void
+    {
+        [$code] = $this->broker(['vhost.docker.enable', self::DOMAIN], ['mode' => 'image', 'image' => 'nginx:alpine', 'internal_port' => 80]);
+        $this->assertSame(0, $code);
+        $dir = \AzerioidPanel\Broker\Vhost\DockerSettings::dir(self::DOMAIN);
+        $this->rt->owners[$dir] = ['root', self::USER];
+        $this->rt->script(['/usr/bin/stat', '-c', '%G', $dir], 0, self::USER . "\n");
+        [$code, $json] = $this->broker(['vhost.render.converge'], []);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertSame([self::DOMAIN], $json['data']['docker_env'], 'the scheduled converge re-owns it');
+        $this->assertSame(['root', \AzerioidPanel\Broker\Vhost\DockerSettings::configGroup(self::DOMAIN)], $this->rt->owners[$dir]);
+    }
+
     public function test_the_migration_moves_a_shared_daemon_site_and_renumbers_its_files(): void
     {
         $this->legacyDockerSite();
