@@ -58,6 +58,32 @@ final class CronJobsTest extends TestCase
         return $this->installedCrontabs[$user] ?? '';
     }
 
+    /** A114: deleting a site drops its panel jobs and its account's crontab; another site's jobs stay. */
+    public function test_deleting_a_site_leaves_no_cron_jobs_behind_for_a_reused_name(): void
+    {
+        $rt = $this->runtime();
+        foreach (['shop.example.com', 'root'] as $owner) {
+            $this->call($rt, ['cron.job.add'], ['owner' => $owner, 'schedule' => '0 * * * *', 'command' => '/bin/true', 'confirm' => 'RUN-AS-ROOT']);
+        }
+        $this->assertSame(1, (new \AzerioidPanel\Broker\Cron\CronManager($rt, new Config()))->forgetOwner('shop.example.com'));
+        $owners = array_map(static fn ($j) => $j->owner, (new \AzerioidPanel\Broker\Cron\CronStore($rt))->all());
+        $this->assertSame(['root'], $owners);
+
+        \AzerioidPanel\Broker\Vhost\VhostUser::deprovision($rt, new Config(), 'shop.example.com');
+        $cmds = array_column($rt->execLog, 'command');
+        $crontabR = array_search(['/usr/bin/crontab', '-u', 'az-vh-shop-example-com', '-r'], $cmds, true);
+        $userdel = array_search(['/usr/sbin/userdel', '--force', 'az-vh-shop-example-com'], $cmds, true);
+        $this->assertIsInt($crontabR);
+        $this->assertIsInt($userdel);
+        $this->assertLessThan($userdel, $crontabR, 'the crontab is removed while the name still maps to the old account');
+    }
+
+    public function test_vhost_del_calls_the_cron_cleanup(): void
+    {
+        $src = (string) file_get_contents(dirname(__DIR__, 2) . '/src/Actions/VhostDel.php');
+        $this->assertStringContainsString('->forgetOwner($domain)', $src);
+    }
+
     // -------------------------------------------------------------- identity
 
     public function test_a_site_job_runs_as_the_sites_own_identity_not_root(): void

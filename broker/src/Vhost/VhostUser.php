@@ -146,6 +146,9 @@ final class VhostUser
             // next vhost is created with. The isolation migrator already does this.
             $runtime->exec(['/usr/bin/pkill', '-TERM', '-u', $username], null, 10);
             $runtime->exec(['/usr/bin/pkill', '-KILL', '-u', $username], null, 10);
+            // A114: cron keeps a crontab by user name, and userdel does not remove it. The next
+            // account created under this name would inherit and run it.
+            $runtime->exec(['/usr/bin/crontab', '-u', $username, '-r'], null, 10);
             $runtime->exec(['/usr/sbin/userdel', '--force', $username], null, 30);
         }
         // userdel keeps a user-private group that still has members, and the readers

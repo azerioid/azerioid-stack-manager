@@ -80,6 +80,8 @@ final class VhostDel
         if (SiteDocker::ready($runtime, $domain) || $runtime->isDir(SiteDocker::home($domain))) {
             (new SiteDocker($config, $runtime))->remove($domain);
         }
+        // Its panel cron jobs go with it (A114); the account's crontab goes in deprovision.
+        $cronForgotten = (new \AzerioidPanel\Broker\Cron\CronManager($runtime, $config))->forgetOwner($domain);
         VhostUser::deprovision($runtime, $config, $domain);
         // Its Redis user goes with it (A111); the next site with this name gets a new one.
         $redisError = null;
@@ -92,6 +94,9 @@ final class VhostDel
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);
         if ($mailDropped !== null) {
             $result['mail_dropped'] = $mailDropped;
+        }
+        if ($cronForgotten > 0) {
+            $result['cron_jobs_removed'] = $cronForgotten;
         }
         if ($redisError !== null) {
             // The vhost is gone either way; say that its Redis user may still exist.

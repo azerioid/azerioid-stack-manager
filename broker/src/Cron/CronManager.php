@@ -78,6 +78,25 @@ final class CronManager
         return ['job' => $job->toArray()];
     }
 
+    /**
+     * A114: drop every panel job of a site that is being deleted. Nothing is applied: the
+     * site's account and its crontab go with the vhost (VhostUser::deprovision), and a site
+     * later created under the same name must start without them.
+     *
+     * @return int jobs removed
+     */
+    public function forgetOwner(string $domain): int
+    {
+        $domain = strtolower(trim($domain));
+        $all = $this->store()->all();
+        $keep = array_values(array_filter($all, static fn (CronJob $j): bool => $j->owner !== $domain));
+        if (count($keep) !== count($all)) {
+            $this->store()->save($keep);
+        }
+
+        return count($all) - count($keep);
+    }
+
     /** @return array<string,mixed> */
     public function delete(string $id): array
     {

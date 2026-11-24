@@ -3222,3 +3222,19 @@ Existing hosts keep their current snippet until the panel domain is next set or 
 Tests: `PanelCaddyTest` — on a tunnel-only install a domain set and a clear add no IP listener or catch-all; the
 cookie follows the scheme; a cached config is rebuilt as the panel account and its directory re-locked. The
 existing public-install tests now declare `ACCESS_MODE=public`.
+
+## A114 — Deleting a site removes its crontab and its panel cron jobs
+
+Security audit run-2 (2026-11-11), finding AZ-36. `vhost.del` removed the site's account (`userdel`), but cron
+keeps crontabs by user name and `userdel` leaves `/var/spool/cron/…/<user>` in place, and the panel's own job list
+(`/var/lib/azerioid-panel/cron/jobs.json`) kept the site's jobs. A site later created under the same domain gets the
+same `az-vh-` name (A49), so it inherited and ran the previous tenant's jobs, and the panel would re-install them on
+the next cron change.
+
+Decision: `VhostUser::deprovision` runs `crontab -u <user> -r` after ending the account's processes and before
+`userdel` (a missing crontab is not an error). `vhost.del` drops the site's jobs from the store with
+`CronManager::forgetOwner()` — without re-applying anything, since the crontab goes with the account — and reports
+`cron_jobs_removed`.
+
+Tests: `CronJobsTest` — `forgetOwner` removes only that site's jobs; deprovision removes the crontab before
+`userdel`; `vhost.del` calls the cleanup.
