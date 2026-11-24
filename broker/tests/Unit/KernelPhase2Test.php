@@ -370,10 +370,37 @@ final class KernelPhase2Test extends TestCase
         );
     }
 
+    public function test_restore_refuses_another_archive_moved_under_this_key(): void
+    {
+        // A122: site B's valid archive copied over site A's key does not restore as A.
+        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst', null, ArchiveCipher::contextForKey('azerioid/files/site2.example.com/fixture.bin')));
+        [$code, $json] = $this->capture(
+            $this->kernel(new FakeRuntime()),
+            ['broker', 'backup.restore.files', 'azerioid/files/site1.example.com/fixture.bin'],
+            $this->stdin() + ['site' => 'site1.example.com', 'apply' => false]
+        );
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('not the archive stored under this name', (string) $json['error']);
+    }
+
+    public function test_restore_of_an_unbound_archive_needs_the_opt_in(): void
+    {
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/old.bin', ArchiveCipher::encryptBlob("CREATE TABLE t (id int);\n", 'abcdefghijklmnopqrst'));
+        $args = ['broker', 'backup.restore.db', 'azerioid/db/all/old.bin'];
+        [$code, $json] = $this->capture($this->kernel(new FakeRuntime()), $args, $this->stdin() + ['target' => 'fresh_db']);
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('allow_unbound_identity', (string) $json['error']);
+        $rt = new FakeRuntime();
+        $rt->dbRows = [];
+        [$code, $json] = $this->capture($this->kernel($rt), $args, $this->stdin() + ['target' => 'fresh_db', 'allow_unbound_identity' => true]);
+        $this->assertSame(0, $code, (string) ($json['error'] ?? ''));
+        $this->assertFalse($json['data']['identity_bound']);
+    }
+
     public function test_restore_db_into_new_name(): void
     {
         $plain = "CREATE TABLE t (id int);\n";
-        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob($plain, 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob($plain, 'abcdefghijklmnopqrst', null, ArchiveCipher::contextForKey('azerioid/db/all/fixture.bin')));
         $rt = new FakeRuntime();
         $rt->dbRows = [];
         [$code, $json] = $this->capture(
@@ -414,7 +441,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_db_refuses_existing_without_overwrite(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob('-- dump --', 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/db/all/fixture.bin', ArchiveCipher::encryptBlob('-- dump --', 'abcdefghijklmnopqrst', null, ArchiveCipher::contextForKey('azerioid/db/all/fixture.bin')));
         $rt = new FakeRuntime();
         $rt->dbRows = [['Database' => 'site1db']];
         [$code, $json] = $this->capture(
@@ -428,7 +455,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_refuses_site1db_without_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst', null, ArchiveCipher::contextForKey('azerioid/files/site1.example.com/fixture.bin')));
         $rt = new FakeRuntime();
         $cfg = new Config();
         $cfg->readonlyVhosts = ['site1.example.com', 'www.site1.example.com'];
@@ -445,7 +472,7 @@ final class KernelPhase2Test extends TestCase
 
     public function test_restore_files_site1db_requires_typed_force(): void
     {
-        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst'));
+        $this->spaces->put('/azerioid-backups/azerioid/files/site1.example.com/fixture.bin', ArchiveCipher::encryptBlob(self::tgzFixture(), 'abcdefghijklmnopqrst', null, ArchiveCipher::contextForKey('azerioid/files/site1.example.com/fixture.bin')));
         $rt = new FakeRuntime();
         $rt->dirs['/data/www/site1.example.com'] = true;
         $rt->dirs['/var/lib/azerioid-panel/staging/restore-site1.example.com/site1.example.com'] = true;

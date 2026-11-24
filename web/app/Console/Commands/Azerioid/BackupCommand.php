@@ -27,6 +27,7 @@ class BackupCommand extends Command
         {--parts= : bundle-restore: comma-separated parts (default all), e.g. files,config}
         {--apply : bundle-restore: restore (without it: preview only)}
         {--db-confirm= : bundle-restore: OVERWRITE to let existing databases be overwritten}
+        {--allow-unbound : restore, bundle-restore: accept an archive made before v2.15.8, which cannot prove it is the one stored under this name}
         {--set=* : bundle-dbs: engine:name (repeatable); none clears the list}
         {--json : JSON output}';
 
@@ -97,7 +98,7 @@ class BackupCommand extends Command
         try {
             $domain = (string) $this->argument('domain');
             $dest = $this->bundleDest();
-            $stdin = $this->stdinFor($dest) + ['destination' => $dest, 'bundle' => (string) $this->option('bundle')];
+            $stdin = $this->stdinFor($dest) + ['destination' => $dest, 'bundle' => (string) $this->option('bundle'), 'allow_unbound_identity' => (bool) $this->option('allow-unbound')];
             if ((string) $this->option('parts') !== '') {
                 $stdin['parts'] = array_values(array_filter(array_map('trim', explode(',', (string) $this->option('parts')))));
             }
@@ -313,6 +314,7 @@ class BackupCommand extends Command
             $stdin['key'] = $file;
             $stdin['target'] = $target;
             $stdin['overwrite'] = (bool) $this->option('overwrite');
+            $stdin['allow_unbound_identity'] = (bool) $this->option('allow-unbound');
             if ($stdin['overwrite']) {
                 $stdin['confirm'] = 'OVERWRITE';
             }

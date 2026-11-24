@@ -124,6 +124,7 @@
             <input class="field mt-1" wire:model="restore_confirm">
         </label>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" wire:model="restore_force"> Force overwrite of a read-only vhost</label>
+        <label class="flex items-center gap-2 text-sm md:col-span-2"><input type="checkbox" wire:model="restore_allow_unbound"> Restore an archive made before v2.15.8 — it cannot prove it is the backup stored under this name, so only if you trust the storage</label>
         <div class="flex gap-2">
             <button class="btn-ghost" type="button" wire:click="previewFiles">Stage / preview</button>
             <button class="btn-danger" type="button" wire:click="applyFiles" wire:confirm="Apply staged files onto the live tree?">Apply files</button>

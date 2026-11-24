@@ -3380,3 +3380,37 @@ Decision (`PosixRuntime::execReader`, `BackupPipeline::run`):
 
 Tests: `BackupPipelineAbortTest` — a sink that throws makes the pipeline abort the source and never finish it; with
 the real `PosixRuntime`, a silent `sleep 30` with a 1 s deadline is killed within the deadline.
+
+## A122 — An archive authenticates the name it is stored under
+
+Security audit run-2 (2026-11-11), finding AZ-28. LACMP2 authenticated each archive's header and chunk order, but not
+which backup it is, and one passphrase protects every archive. Someone who can write to the backup storage but does
+not know the passphrase (the low-trust storage writer A74 names) could put site B's valid archive under site A's key,
+or an older archive of A under a newer stamp, and a standalone restore authenticated it: B's tree (its `.env`
+included) was restored into A and chowned to A's identity; a whole-server dump under one database's key reloaded
+every database. A74 closed this for bundle parts with the manifest's checksums; standalone archives and the manifest
+itself were still open.
+
+Decision (`ArchiveCipher`, header byte 9 — previously reserved, always 0):
+- Bit 0 marks a **bound** archive. Its AAD is `header ‖ chunk index ‖ final flag ‖ context`, where the context is the
+  last three components of the key it is stored under: `<kind>/<name>/<stamp>.lacmp2.bin` for a standalone archive,
+  `<domain>/<stamp>/<part>.lacmp2.bin` for a bundle part or manifest. The same archive in local storage and in Spaces
+  has the same context. The flag is in the header, which is authenticated, so it cannot be cleared.
+- Every new archive is bound: `backup.db|files|caddy`, each bundle part and each bundle manifest.
+- Restore and verify derive the context from the key they were asked for. A bound archive under any other name fails
+  authentication ("… or it is not the archive stored under this name"); an older bundle manifest copied under a newer
+  stamp fails the same way.
+- An **unbound** archive (every archive written before this release) is refused by `backup.restore.db|files` and
+  `backup.vhost.restore` unless the request carries `allow_unbound_identity` — the Backups and Site bundles pages have
+  a checkbox for it, the CLI `--allow-unbound`. A bundle part checked against its manifest's sha256 (A74) needs no
+  opt-in: the checksum is its binding. `backup.verify` accepts both and reports `identity_bound`.
+- Consequence: a bound archive cannot be read by a panel older than this release. The filename suffix is unchanged.
+- A legacy LACMP1/LCMP1 archive is neither authenticated nor bound. Where an identity is expected it needs the same
+  opt-in (`backup.restore.*` keeps its stronger `allow_legacy_unauthenticated`), so a bundle manifest cannot be
+  downgraded to the legacy format to skip the binding.
+
+Tests: `ArchiveCipherTest` — a bound archive opens only under its own context, not another site's or another stamp's;
+clearing the flag fails; an unbound archive needs the opt-in; the context is the last three key components.
+`KernelPhase2Test` — another site's archive under this key is refused; an unbound archive restores only with the
+opt-in. `VhostBundleTest` — an older manifest under a newer stamp, and a manifest under another domain, are refused.
+`Phase2PolicyTest` — the panel sends the opt-in only when it is ticked.

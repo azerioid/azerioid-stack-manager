@@ -176,8 +176,9 @@ final class VhostBundle
                 'parts' => $parts,
                 'not_included' => ['tls-private-keys', 'mail'],
             ];
-            $cipher = ArchiveCipher::encryptBlob((string) json_encode($manifest, JSON_UNESCAPED_SLASHES), $passphrase, $kdf);
             $key = $this->partKey($destination, $domain, $stamp, 'manifest');
+            // A122: a manifest is bound to its domain and stamp, so an older one cannot stand in for a newer bundle.
+            $cipher = ArchiveCipher::encryptBlob((string) json_encode($manifest, JSON_UNESCAPED_SLASHES), $passphrase, $kdf, ArchiveCipher::contextForKey($key));
             if ($client !== null) {
                 $client->put($key, $cipher);
             } else {
@@ -227,7 +228,8 @@ final class VhostBundle
         $key = $this->partKey($destination, $domain, $stamp, $part);
         $sink = $client !== null ? new SpacesArchiveSink($client, $key) : new LocalArchiveSink($this->runtime, $key);
         try {
-            $meta = $pipeline->run($source['command'], $sink, $passphrase, $kdf);
+            // A122: each part is bound to its own name (domain/stamp/part).
+            $meta = $pipeline->run($source['command'], $sink, $passphrase, $kdf, null, 3600, ArchiveCipher::contextForKey($key));
         } finally {
             ($source['cleanup'])();
         }
@@ -362,7 +364,9 @@ final class VhostBundle
         $manifestKey = $this->partKey($destination, $domain, $stamp, 'manifest');
         $manifest = json_decode(ArchiveCipher::decryptBlob(
             $client !== null ? $client->get($manifestKey) : $this->runtime->readFile($manifestKey),
-            $passphrase
+            $passphrase,
+            ArchiveCipher::contextForKey($manifestKey),
+            !empty($input['allow_unbound_identity'])
         ), true);
         if (!is_array($manifest) || ($manifest['format'] ?? '') !== 'azerioid-vhost-bundle') {
             throw new BrokerException('Not a vhost bundle manifest.', 2);
@@ -401,7 +405,8 @@ final class VhostBundle
         }
         if (in_array('config', $wanted, true)) {
             $part = $this->partOf($manifest, 'config');
-            $plain = ArchiveCipher::decryptBlob($client !== null ? $client->get($part['key']) : $this->runtime->readFile($part['key']), $passphrase);
+            // An unbound part is accepted here: the manifest's checksum below is its binding (A74).
+            $plain = ArchiveCipher::decryptBlob($client !== null ? $client->get($part['key']) : $this->runtime->readFile($part['key']), $passphrase, ArchiveCipher::contextForKey((string) $part['key']), true);
             // A74: bind the decrypted config to the authenticated manifest's checksum.
             if (!hash_equals(self::requirePartSha($part), hash('sha256', $plain))) {
                 throw new BrokerException('Bundle config part does not match its manifest checksum; refusing to restore a substituted part.', 2);

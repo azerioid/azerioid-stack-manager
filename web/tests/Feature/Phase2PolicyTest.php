@@ -54,6 +54,23 @@ class Phase2PolicyTest extends TestCase
             ->assertSet('flash', 'Restore into site1db_restore_1 queued. Progress and output are on the Operations page.');
     }
 
+    public function test_the_unbound_archive_opt_in_reaches_the_broker_only_when_ticked(): void
+    {
+        // A122: an archive made before identity binding restores only with the operator's opt-in.
+        $this->actingAs($this->admin());
+        $this->seedBackupSecrets();
+        $fake = app(\App\Services\Broker\FakeBroker::class);
+
+        $page = Livewire::test(\App\Livewire\BackupsPage::class)
+            ->set('restore_key', 'azerioid/db/all/fixture.bin')
+            ->set('restore_target', 'site1db_restore_1')
+            ->call('restoreDb');
+        $this->assertArrayNotHasKey('allow_unbound_identity', $fake->stdinLog['backup.restore.check']);
+
+        $page->set('restore_allow_unbound', true)->call('restoreDb');
+        $this->assertTrue($fake->stdinLog['backup.restore.check']['allow_unbound_identity']);
+    }
+
     public function test_reboot_without_confirm_is_rejected(): void
     {
         $this->actingAs($this->admin());

@@ -61,7 +61,10 @@ final class BackupVerify
         }
 
         // Layer 1: decrypting a LACMP2 archive authenticates it chunk by chunk.
-        $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
+        // A122: a bound archive must be the one stored under this name; an unbound one is verified
+        // for integrity and reported as unbound.
+        $plain = ArchiveCipher::decryptBlob($cipher, $passphrase, ArchiveCipher::contextForKey($key), true);
+        $bound = ArchiveCipher::isBound($cipher);
         unset($cipher);
 
         $kind = $this->kindOf($key, $input);
@@ -92,6 +95,8 @@ final class BackupVerify
             'format' => $format,
             'restore_check' => $restore,
             'authenticated' => $format === 'lacmp2',
+            // A122: whether the archive proves it is the one stored under this key.
+            'identity_bound' => $bound,
             'plain_bytes' => strlen($plain),
             'sha256' => hash('sha256', $plain),
             'kind' => $kind,

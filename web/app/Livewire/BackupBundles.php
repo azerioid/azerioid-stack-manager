@@ -37,6 +37,9 @@ class BackupBundles extends Component
 
     public string $dbConfirm = '';
 
+    /** A122: restore a bundle whose manifest predates binding to its storage name. */
+    public bool $allowUnbound = false;
+
     public ?string $flash = null;
 
     public ?string $error = null;
@@ -130,7 +133,7 @@ class BackupBundles extends Component
         $this->error = null;
         $this->preview = null;
         try {
-            $res = $broker->call('backup.vhost.restore', [$domain], $this->secrets($destination) + ['bundle' => $bundle], 120);
+            $res = $broker->call('backup.vhost.restore', [$domain], $this->secrets($destination) + ['bundle' => $bundle, 'allow_unbound_identity' => $this->allowUnbound], 120);
             if (! $res->ok) {
                 throw new \RuntimeException((string) $res->error);
             }
@@ -164,6 +167,7 @@ class BackupBundles extends Component
                 'apply' => true,
                 'confirm' => strtoupper($domain),
                 'db_confirm' => trim($this->dbConfirm),
+                'allow_unbound_identity' => $this->allowUnbound,
             ]);
             $this->flash = "Restore of {$domain} from {$this->preview['bundle']} queued. Follow it on the Operations page.";
             $this->preview = null;

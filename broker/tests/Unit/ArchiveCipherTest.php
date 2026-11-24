@@ -301,6 +301,56 @@ final class ArchiveCipherTest extends TestCase
 
     // ------------------------------------------------------------ header checks
 
+    public function test_a_bound_archive_opens_only_under_its_own_context(): void
+    {
+        // A122: kind/name/stamp is authenticated, so a valid archive cannot stand in for another.
+        $blob = ArchiveCipher::encryptBlob('site b', self::PASS, null, 'files/b.test/20261101T000000Z.lacmp2.bin');
+        $this->assertTrue(ArchiveCipher::isBound($blob));
+        $this->assertSame('site b', ArchiveCipher::decryptBlob($blob, self::PASS, 'files/b.test/20261101T000000Z.lacmp2.bin'));
+        foreach (['files/a.test/20261101T000000Z.lacmp2.bin', 'files/b.test/20261124T000000Z.lacmp2.bin'] as $other) {
+            try {
+                ArchiveCipher::decryptBlob($blob, self::PASS, $other);
+                $this->fail('opened under ' . $other);
+            } catch (BrokerException $e) {
+                $this->assertStringContainsString('not the archive stored under this name', $e->getMessage());
+            }
+        }
+        $this->expectException(BrokerException::class);
+        ArchiveCipher::decryptBlob($blob, self::PASS);
+    }
+
+    public function test_clearing_the_bound_flag_is_rejected(): void
+    {
+        $blob = ArchiveCipher::encryptBlob('x', self::PASS, null, 'db/shop/20261101T000000Z.lacmp2.bin');
+        $blob[9] = chr(0);
+        $this->expectException(BrokerException::class);
+        ArchiveCipher::decryptBlob($blob, self::PASS, 'db/shop/20261101T000000Z.lacmp2.bin', true);
+    }
+
+    public function test_an_unbound_archive_needs_an_explicit_opt_in_when_a_context_is_expected(): void
+    {
+        $blob = ArchiveCipher::encryptBlob('old', self::PASS);
+        $this->assertFalse(ArchiveCipher::isBound($blob));
+        $this->assertSame('old', ArchiveCipher::decryptBlob($blob, self::PASS, 'db/shop/x.lacmp2.bin', true));
+        $this->expectExceptionMessage('allow_unbound_identity');
+        ArchiveCipher::decryptBlob($blob, self::PASS, 'db/shop/x.lacmp2.bin');
+    }
+
+    public function test_a_legacy_archive_cannot_skip_the_binding(): void
+    {
+        $legacy = ArchiveCrypto::encrypt('old', self::PASS);
+        $this->expectExceptionMessage('legacy');
+        ArchiveCipher::decryptBlob($legacy, self::PASS, 'vhost/shop.test/20261101T000000Z/manifest.lacmp2.bin');
+    }
+
+    public function test_context_is_the_last_three_components_of_the_key(): void
+    {
+        $this->assertSame('files/shop/s.lacmp2.bin', ArchiveCipher::contextForKey('/var/lib/azerioid-panel/backups/files/shop/s.lacmp2.bin'));
+        $this->assertSame('files/shop/s.lacmp2.bin', ArchiveCipher::contextForKey('azerioid/files/shop/s.lacmp2.bin'));
+        $this->expectException(BrokerException::class);
+        ArchiveCipher::contextForKey('shop/s.bin');
+    }
+
     public function test_rejects_a_foreign_magic(): void
     {
         $this->expectException(BrokerException::class);

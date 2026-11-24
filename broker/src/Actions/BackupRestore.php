@@ -51,7 +51,18 @@ final class BackupRestore
                 2
             );
         }
-        $plain = ArchiveCipher::decryptBlob($cipher, $passphrase);
+        // A122: a bound archive must be the one stored under the requested name. An unbound one
+        // (written before A122) needs the operator's opt-in — or a manifest checksum, which binds it.
+        $expectedSha = trim((string) ($input['expected_sha256'] ?? ''));
+        $plain = ArchiveCipher::decryptBlob(
+            $cipher,
+            $passphrase,
+            ArchiveCipher::contextForKey($key),
+            $expectedSha !== '' || !empty($input['allow_unbound_identity'])
+                // A legacy archive already needed its own, stronger opt-in above.
+                || $format !== 'lacmp2'
+        );
+        $bound = ArchiveCipher::isBound($cipher);
 
         // A74: when the caller holds an authenticated manifest (a vhost bundle),
         // verify the decrypted part against the sha256 the manifest recorded for
@@ -61,7 +72,6 @@ final class BackupRestore
         // domain's) because the GCM AAD binds only the per-part header, not the
         // part's identity. The manifest checksum is the binding of which content
         // belongs to this part; enforce it.
-        $expectedSha = trim((string) ($input['expected_sha256'] ?? ''));
         if ($expectedSha !== '' && !hash_equals($expectedSha, hash('sha256', $plain))) {
             throw new BrokerException(
                 'Backup part does not match its manifest checksum; refusing to restore a substituted '
@@ -76,12 +86,14 @@ final class BackupRestore
                 'key' => $key,
                 'storage' => $storage,
                 'format' => $format,
+                'identity_bound' => $bound,
             ];
         }
         return $this->restoreFiles($runtime, $config, $plain, $input) + [
             'key' => $key,
             'storage' => $storage,
             'format' => $format,
+            'identity_bound' => $bound,
         ];
     }
 
