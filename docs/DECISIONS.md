@@ -3037,3 +3037,23 @@ Tests: `DbAddTest` — `db.add` grants on the escaped name only; the converge mo
 (escaped first) and leaves escaped, partial and root grants; the PostgreSQL create statements revoke PUBLIC right
 after `CREATE DATABASE`. `DbAccessTest` — access changes grant on the escaped name and the user lookup covers both
 forms.
+
+## A109 — Engine admin passwords stay off argv while engines are provisioned or adopted
+
+Security audit run-2 (2026-11-11), finding AZ-19 — the rest of A68. A68 took the MongoDB admin password off the
+command line of the running driver; installing or adopting an engine still put the freshly generated superuser
+password on a child's argv, which every local account (site identities included) can read from
+`/proc/<pid>/cmdline` while it runs: `mariadb -e "CREATE USER … IDENTIFIED BY '…'"`, `psql -c "… PASSWORD '…'"`, and
+for MongoDB `mongosh --eval "createUser({pwd: '…'})"` plus `mongosh -p <password>` in a readiness loop of up to 60
+tries.
+
+Decision: `DatabaseProvisioner` sends the MariaDB statements to `mariadb` (or `mysql`) on stdin and the PostgreSQL
+role script to `psql -v ON_ERROR_STOP=1 -f -` on stdin. `MongoProvisioner` runs every script as
+`mongosh --quiet --file /dev/stdin` (one program, so a failed auth guard aborts it) with the password in the child's
+environment (`AZ_MONGO_PW`, read as `process.env` — never a script literal); authenticated checks log in with
+`db.auth()` inside the script, as `MongoDriver` does. A child's environment is readable only by its own uid and root.
+A warning that echoes mongosh output strips the password.
+
+Tests: `DatabaseProvisionerArgvTest` — adopting MariaDB and PostgreSQL and provisioning MongoDB put the generated
+password (read back from broker.json) on no argv while it still reaches the client on stdin or in its environment;
+for MongoDB it is not in any script either.

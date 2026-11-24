@@ -107,24 +107,11 @@ final class MongoProvisioner
     private function waitForMongo(bool $withAuth, string $password = '', int $attempts = 30): bool
     {
         for ($i = 0; $i < $attempts; $i++) {
-            if ($withAuth) {
-                $result = $this->runtime->exec(
-                    $this->mongoshAuthArgv($password, "db.adminCommand({ping:1})"),
-                    null,
-                    30
-                );
-                if ($this->mongoshOk($result)) {
-                    return true;
-                }
-            } else {
-                $result = $this->runtime->exec(
-                    ['/usr/bin/mongosh', '--quiet', '--eval', 'db.adminCommand({ping:1})'],
-                    null,
-                    30
-                );
-                if ($this->mongoshOk($result)) {
-                    return true;
-                }
+            $result = $withAuth
+                ? $this->mongoshScript('printjson(db.adminCommand({ping:1}));', 30, $password)
+                : $this->mongoshScript('printjson(db.adminCommand({ping:1}));', 30);
+            if ($this->mongoshOk($result)) {
+                return true;
             }
             usleep(500_000);
         }
@@ -134,10 +121,11 @@ final class MongoProvisioner
 
     private function ensureAdminUser(string $password, OperationLogger $log): bool
     {
-        $escaped = str_replace("'", "\\'", $password);
-        $create = "db.getSiblingDB('admin').createUser({user: '" . self::ADMIN_USER
-            . "', pwd: '{$escaped}', roles: [{role: 'root', db: 'admin'}]});";
-        $result = $this->mongoshEval($create, 120);
+        // A109: the password reaches mongosh through its environment (AZ_MONGO_PW), read
+        // in the script as process.env — never as a literal, never on argv.
+        $create = "printjson(db.getSiblingDB('admin').createUser({user: '" . self::ADMIN_USER
+            . "', pwd: process.env.AZ_MONGO_PW, roles: [{role: 'root', db: 'admin'}]}));";
+        $result = $this->mongoshScript($create, 120, null, $password);
         if ($this->mongoshOk($result)) {
             return true;
         }
@@ -145,24 +133,34 @@ final class MongoProvisioner
         $combined = strtolower($result->stderr . "\n" . $result->stdout);
         if (str_contains($combined, 'already exists')) {
             $log->info('MongoDB admin user already exists; updating password.');
-            $update = "db.getSiblingDB('admin').updateUser('" . self::ADMIN_USER
-                . "', {pwd: '{$escaped}'});";
+            $update = "printjson(db.getSiblingDB('admin').updateUser('" . self::ADMIN_USER
+                . "', {pwd: process.env.AZ_MONGO_PW}) ?? {ok: 1});";
 
-            return $this->mongoshOk($this->mongoshEval($update, 120));
+            return $this->mongoshOk($this->mongoshScript($update, 120, null, $password));
         }
 
-        $log->warn(trim($result->stderr . ' ' . $result->stdout));
+        $log->warn(str_replace($password, '[redacted]', trim($result->stderr . ' ' . $result->stdout)));
 
         return false;
     }
 
-    private function mongoshEval(string $script, int $timeoutSeconds): ExecResult
+    /**
+     * A109 (A68's pattern): the script on stdin, run as one program (`--file /dev/stdin`,
+     * so a failed auth guard aborts it), credentials in the environment. $authAs logs in
+     * as the panel admin first; $secret only makes the password available to the script.
+     */
+    private function mongoshScript(string $script, int $timeoutSeconds, ?string $authAs = null, ?string $secret = null): ExecResult
     {
-        return $this->runtime->exec(
-            ['/usr/bin/mongosh', '--quiet', '--eval', $script],
-            null,
-            $timeoutSeconds
-        );
+        $env = [];
+        if ($authAs !== null) {
+            $env = ['AZ_MONGO_USER' => self::ADMIN_USER, 'AZ_MONGO_PW' => $authAs];
+            $script = 'if (!db.getSiblingDB("admin").auth(process.env.AZ_MONGO_USER, process.env.AZ_MONGO_PW)) {'
+                . ' throw new Error("MongoDB authentication failed"); }' . "\n" . $script;
+        } elseif ($secret !== null) {
+            $env = ['AZ_MONGO_PW' => $secret];
+        }
+
+        return $this->runtime->exec(['/usr/bin/mongosh', '--quiet', '--file', '/dev/stdin'], $script . "\n", $timeoutSeconds, $env === [] ? null : $env);
     }
 
     private function mongoshOk(ExecResult $result): bool
@@ -189,23 +187,6 @@ final class MongoProvisioner
         );
 
         return $result->ok() && str_contains($result->stdout, 'databases');
-    }
-
-    /** @return list<string> */
-    private function mongoshAuthArgv(string $password, string $eval): array
-    {
-        return [
-            '/usr/bin/mongosh',
-            '--quiet',
-            '-u',
-            self::ADMIN_USER,
-            '-p',
-            $password,
-            '--authenticationDatabase',
-            'admin',
-            '--eval',
-            $eval,
-        ];
     }
 
     private function mongodConfPath(): ?string
