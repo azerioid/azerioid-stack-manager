@@ -281,11 +281,18 @@ Further command groups: `backup`, `deploy`, `cron`, `sftp`, `firewall`, `search`
 - Docker compose host bind mounts are not scanned; they are bounded by the site's own account. Amazon ECR
   registries are not supported.
 - SFTP has no chroot. The terminal is a normal shell limited by file permissions, not by path.
+- Apache sites: `.htaccess` cannot use rewrite, redirect, handler or proxy directives (they are ignored). PHP
+  sites route through `FallbackResource /index.php`; custom `RewriteRule`s belong in the vhost, not `.htaccess`.
+- App upstreams (Octane, PM2, Docker) are loopback TCP ports. Another local account can bind one while the site's
+  worker is down; the panel then refuses to start onto it and raises the `app.down` alert, but does not prevent it.
 
 **Mail**
 
 - No webmail, spam filtering, quotas or catch-all addresses.
 - Messages are limited to 25 MiB.
+- Only mail sent through submission (587/465) with a mailbox login is DKIM-signed. Local mail (PHP `mail()`,
+  `sendmail`, loopback SMTP, the Mail page's test message) is relayed unsigned.
+- A login sends only as its own addresses (envelope sender); the `From:` header is not checked against it.
 - Deliverability depends on reverse DNS set at your provider; many providers block outbound port 25, in
   which case use a smarthost.
 
