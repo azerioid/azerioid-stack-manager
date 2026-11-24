@@ -3084,3 +3084,49 @@ first-user bootstrap.
 Tests: `MongoProvisionerTest` — a fresh instance is never restarted with authorization off; an enforcing instance is
 not opened and adoption is refused; an unexpected user fails provisioning; an already-open instance with users ends
 enforced and keeps them.
+
+## A111 — Redis: one user per site, limited to its own key prefix; Memcached is single-tenant
+
+Security audit run-2 (2026-11-11), finding AZ-11. The Redis component was one instance on 127.0.0.1:6379 whose
+`default` user had no password (`bind` and `protected-mode` only). Loopback is not a boundary between sites (A54):
+every site's PHP, terminal, cron and programs reach it, so any site could read and change every other site's
+sessions, cache and queues and run instance-wide commands (FLUSHALL, CONFIG, …). Memcached has the same exposure
+and no access control at all. Operator decision (2026-11-24): per-site Redis users.
+
+Decision — Redis (`broker/src/Redis/RedisAcl.php`):
+- The panel owns an ACL file, `/etc/redis/azerioid-users.acl` (root:redis 0640, **hashes only**), wired into
+  `redis.conf` as `aclfile` line by line (`requirepass` and inline `user` lines, which conflict, are commented out).
+  Its own user `azerioid-admin` runs `ACL LOAD` and checks through `redis-cli --user`, the password in
+  `REDISCLI_AUTH`, never on argv. Plain passwords live root-only in `/etc/azerioid-panel/redis-acl.json` (0600).
+- Each site that is enabled gets `az-vh-<slug>` with
+  `resetchannels ~<slug>:* &<slug>:* +@all -@admin -@dangerous -scan -randomkey -pubsub +client|setname
+  +client|getname +client|id`: its own keys and channels only, none of the instance-wide commands, and none of the
+  commands that list key or channel names across the instance (Redis checks values against the pattern, not the
+  names SCAN/RANDOMKEY/PUBSUB return).
+- A new install starts enforced (`user default off`). An existing install keeps `default on nopass` until the
+  operator enforces per-site users on the Redis page (typed `REDIS-PER-SITE`), after enabling each site that uses
+  Redis and putting its lines in the site's `.env`: sites that connect without a password today would otherwise stop
+  working without warning. Enforcing verifies that a client without credentials is refused.
+- If Redis does not come up with the ACL file after the one restart `aclfile` needs, `redis.conf` is put back and
+  Redis restarted. Later changes use `ACL LOAD`, which leaves the running users in place when it rejects a file.
+- Deleting a vhost removes its user; uninstalling the component removes the file and the state.
+- Surfaces: the **Redis** page (enable/disable per site, connection as `.env` lines: `REDIS_USERNAME`,
+  `REDIS_PASSWORD`, `REDIS_PREFIX=<slug>:`, enforce); broker actions `redis.status`, `redis.site.enable|show|disable`,
+  `redis.enforce`. Credentials are returned only in the response, never written to the audit log.
+- Consequence for applications: every key must carry the prefix (Laravel's `REDIS_PREFIX` does this for cache,
+  sessions and queues), and `cache:clear` on a Redis store fails because FLUSHDB is refused.
+
+Checked against a real redis-server 7.4 with the rendered file: an anonymous client gets `NOAUTH`; a site's user
+reads, writes, deletes, expires and `EVAL`s its own keys, selects a database and names its connection; another
+site's key, channel, FLUSHDB, KEYS, CONFIG, SCAN, RANDOMKEY and PUBSUB CHANNELS are `NOPERM`. That check also found
+that Redis refuses an ACL file containing a comment line and then does not start — the file has none. EL9's Redis
+6.2 supports every rule used (`resetchannels` since 6.2, subcommand rules since 6.0) but was not run here.
+
+Memcached: no access control exists to scope per site. The component is described as single-tenant — every site
+can read and change every item — to be used for one site or for data that is not private.
+
+Tests: `RedisAclTest` — a new install is enforced and hashes only; a site's exact ACL line; the admin password only
+in the environment; an existing instance stays open until a typed enforce, which fails if anonymous access still
+works; redis.conf restored when Redis will not start; users only for vhosts and removed with them; line-by-line,
+idempotent wiring; the kernel action. `RedisPageTest` — the open-instance warning, `.env` lines on enable, disable,
+typed enforce, and no password in the audit log.

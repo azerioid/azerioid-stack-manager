@@ -2,7 +2,7 @@
   "id": "memcached",
   "display_name": "Memcached",
   "category": "cache",
-  "description": "Distributed memory caching system",
+  "description": "Distributed memory caching system. Single-tenant: Memcached has no access control, so every site on the host can read and change every other site's items — use it only for one site, or for data that is not private.",
   "managed": true,
   "system": false,
   "installable": true,

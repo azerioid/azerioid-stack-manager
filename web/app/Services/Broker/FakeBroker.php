@@ -563,6 +563,11 @@ final class FakeBroker
                 'backup.restore.check' => $this->restoreCheck($args, $stdin),
                 'spaces.test' => ['ok' => true, 'bucket' => 'azerioid', 'region' => 'fra1'],
                 'auth.audit' => ['path' => '/var/log/auth.log', 'missing' => false, 'success' => [['user' => 'root', 'ip' => '127.0.0.1', 'method' => 'publickey', 'line' => 'Accepted publickey for root from 127.0.0.1']], 'failed' => [], 'failed_count' => 0, 'new_root_ips' => []],
+                'redis.status' => $this->redisStatus(),
+                'redis.site.enable' => $this->redisEnable($args, $stdin),
+                'redis.site.show' => $this->redisShow($args, $stdin),
+                'redis.site.disable' => $this->redisDisable($args, $stdin),
+                'redis.enforce' => $this->redisEnforce($stdin),
                 'sftp.status' => $this->sftpStatus(),
                 'sftp.configure' => $this->sftpConfigure(true),
                 'sftp.unconfigure' => $this->sftpConfigure(false),
@@ -1456,6 +1461,65 @@ final class FakeBroker
 
     /** @var list<string> domains with SFTP enabled */
     public array $sftpSites = [];
+
+    /** @var array<string,array{user:string,prefix:string,password:string}> A111 per-site Redis users */
+    public array $redisSites = [];
+
+    public bool $redisEnforced = false;
+
+    /** @return array<string,mixed> */
+    private function redisStatus(): array
+    {
+        $sites = [];
+        foreach ($this->redisSites as $domain => $s) {
+            $sites[] = ['domain' => $domain, 'user' => $s['user'], 'prefix' => $s['prefix']];
+        }
+
+        return ['installed' => true, 'managed' => $this->redisSites !== [] || $this->redisEnforced, 'enforced' => $this->redisEnforced, 'sites' => $sites];
+    }
+
+    /** @return array<string,string> */
+    private function redisConnection(string $domain): array
+    {
+        $s = $this->redisSites[$domain] ?? throw new BrokerCallException("Redis is not enabled for {$domain}.", 3);
+
+        return ['domain' => $domain, 'host' => '127.0.0.1', 'port' => '6379', 'user' => $s['user'], 'password' => $s['password'], 'prefix' => $s['prefix']];
+    }
+
+    /** @return array<string,string> */
+    private function redisEnable(array $args, array $stdin): array
+    {
+        $domain = $this->sftpDomain($args, $stdin);
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($domain)), '-');
+        $this->redisSites[$domain] ??= ['user' => 'az-vh-' . $slug, 'prefix' => $slug . ':', 'password' => 'fake-redis-' . substr(md5($domain), 0, 16)];
+
+        return $this->redisConnection($domain);
+    }
+
+    /** @return array<string,string> */
+    private function redisShow(array $args, array $stdin): array
+    {
+        return $this->redisConnection(trim((string) ($args[0] ?? $stdin['domain'] ?? '')));
+    }
+
+    /** @return array<string,mixed> */
+    private function redisDisable(array $args, array $stdin): array
+    {
+        $domain = trim((string) ($args[0] ?? $stdin['domain'] ?? ''));
+        $removed = isset($this->redisSites[$domain]);
+        unset($this->redisSites[$domain]);
+
+        return ['domain' => $domain, 'removed' => $removed];
+    }
+
+    /** @return array<string,mixed> */
+    private function redisEnforce(array $stdin): array
+    {
+        $this->requireConfirm($stdin, 'REDIS-PER-SITE', []);
+        $this->redisEnforced = true;
+
+        return $this->redisStatus();
+    }
 
     /** @var array<string, list<array{fingerprint:string,type:string,comment:string}>> */
     public array $sftpKeys = [];

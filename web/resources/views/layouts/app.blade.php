@@ -40,6 +40,7 @@
                         ['firewall', 'Firewall', '/firewall'],
                         ['cron', 'Cron', '/cron'],
                         ['sftp', 'SFTP', '/sftp'],
+                        ['redis', 'Redis', '/redis'],
                         ['audit', 'Audit', '/audit'],
                         ['settings', 'Settings', '/settings'],
                     ];
