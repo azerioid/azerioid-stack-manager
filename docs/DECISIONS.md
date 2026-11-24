@@ -3414,3 +3414,64 @@ clearing the flag fails; an unbound archive needs the opt-in; the context is the
 `KernelPhase2Test` — another site's archive under this key is refused; an unbound archive restores only with the
 opt-in. `VhostBundleTest` — an older manifest under a newer stamp, and a manifest under another domain, are refused.
 `Phase2PolicyTest` — the panel sends the opt-in only when it is ticked.
+
+## A123 — A mailbox login sends only as the addresses it owns
+
+Security audit run-2 (2026-11-11), finding AZ-35. Submission (587/465) accepted any envelope sender from any
+authenticated login, and the signer chooses its key from the From domain alone, so one mailbox's password sent —
+DKIM-signed — as any address of every mail-enabled domain on the host.
+
+Decision:
+- `MailMaps` writes `azerioid-sender-logins` (hash map, rebuilt with the other maps): every active mailbox owns
+  itself; an alias is owned by the active local mailboxes it delivers to; a disabled mailbox owns nothing, and an
+  alias with no local owner cannot be sent from.
+- `smtpd_sender_login_maps` points at it, and both managed submission services carry
+  `smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch`. Port 25 is unchanged.
+- Residual: the envelope sender is bound to the login; the From header is not (Postfix and OpenDKIM cannot do that).
+  A client can still put another of the host's addresses in From with its own envelope sender. DMARC alignment of
+  such a message depends on the receiver.
+
+## A124 — The DKIM signer sees authenticated submissions only
+
+Security audit run-2 (2026-11-11), finding AZ-39. `smtpd_milters` and `non_smtpd_milters` sent every message to
+OpenDKIM — loopback SMTP and `sendmail` from any local account — and OpenDKIM signs mail from its internal hosts
+(loopback). Every site identity (`az-vh-*`) could get mail signed as any domain on the host.
+
+Decision: no global milters (`smtpd_milters=` and `non_smtpd_milters=` empty); the two managed submission services
+carry `-o smtpd_milters=<signer>`. Only SASL-authenticated mail reaches the signer, and A123 binds its sender.
+
+Consequences, accepted:
+- Local mail (PHP `mail()`, `sendmail`, loopback SMTP, the panel's test message) is still relayed, but unsigned. The
+  Mail page says so next to the test form.
+- Incoming mail no longer gets OpenDKIM's verification header.
+- Not done: removing `permit_mynetworks` and setting `authorized_submit_users` would stop local accounts relaying at
+  all, which ends `mail()` for every site. That is an operator decision, not a security fix to make silently; a site
+  that relays locally sends unsigned, and SPF still names the host.
+
+## A125 — The DKIM signer listens on a unix socket
+
+Security audit run-2 (2026-11-11), finding AZ-40. OpenDKIM listened on `127.0.0.1:8891`, which any local account can
+connect to and have mail signed. It had been moved there from a unix socket (commit 4c1fc74) because SELinux
+Enforcing EL hosts denied the socket.
+
+Checked on the Rocky 9 staging host (SELinux Enforcing): `dkim_milter_t` may not even search `postfix_spool_t`, so a
+socket under `/var/spool/postfix` cannot work on EL whatever its label. `/run/opendkim` (systemd `RuntimeDirectory`,
+already `dkim_milter_data_t`) works: the socket was created, and both `cleanup` and `smtpd` handed messages to it with
+no AVC denials.
+
+Decision:
+- Debian/Ubuntu: `Socket local:/var/spool/postfix/opendkim/opendkim.sock`, directory `opendkim:postfix 0750`; the
+  chrooted smtpd addresses it as `unix:opendkim/opendkim.sock`.
+- EL: `Socket local:/run/opendkim/opendkim.sock` (registry `opendkim_socket`), and the managed submission services
+  run unchrooted (`n`, as EL's own master.cf does) so `/run` is reachable.
+- `UMask 007` and Postfix in the `opendkim` group: the socket is 0660, open to opendkim and Postfix only.
+
+Existing hosts: `mail.boundaries.converge` (hourly, `azerioid:mail-boundaries-converge`) applies A123–A125 when they
+are missing and is a no-op afterwards or without the mail component. It saves `main.cf`, `master.cf` and
+`opendkim.conf`; applies; runs `postfix check`; restarts both services; then requires both active and the `postfix`
+user able to open the socket. Any failure puts the three files back and restarts both services.
+
+Tests: `MailBoundariesTest` — the sender map (mailboxes, aliases, disabled boxes, external-only aliases); both
+submission services carry the sender check and the only milter, port 25 neither; the EL variant is unchrooted with
+the /run socket; converge on an old host writes the socket config, empties the global milters and sets the sender
+map; a failed socket probe restores all three files; no-op without mail and once converged.

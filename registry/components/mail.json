@@ -127,7 +127,7 @@
         "dovecot_confd": ["/etc/dovecot/conf.d"],
         "opendkim_conf": ["/etc/opendkim.conf"],
         "opendkim_keys": ["/etc/opendkim/keys"],
-        "opendkim_socket": ["/var/spool/postfix/opendkim/opendkim.sock"],
+        "opendkim_socket": ["/run/opendkim/opendkim.sock"],
         "mail_log": ["/var/log/maillog", "/var/log/mail.log"],
         "vmail_root": ["/var/vmail"],
         "tls_cert": ["/etc/pki/tls/certs/postfix.pem"],

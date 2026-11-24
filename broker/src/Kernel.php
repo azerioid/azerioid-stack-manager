@@ -47,6 +47,7 @@ use AzerioidPanel\Broker\Actions\MailDnsAction;
 use AzerioidPanel\Broker\Actions\MailDomain;
 use AzerioidPanel\Broker\Actions\MailHostname;
 use AzerioidPanel\Broker\Actions\MailMailbox;
+use AzerioidPanel\Broker\Actions\MailBoundariesConverge;
 use AzerioidPanel\Broker\Actions\MailQueue;
 use AzerioidPanel\Broker\Actions\MailSmarthostAction;
 use AzerioidPanel\Broker\Actions\MailStatus;
@@ -225,6 +226,7 @@ final class Kernel
         'mail.logs' => MailQueue::class,
         'mail.test.send' => MailQueue::class,
         'mail.alerts.set' => MailQueue::class,
+        'mail.boundaries.converge' => MailBoundariesConverge::class,
         'mariadb.bind.status' => MariadbBindStatus::class,
         'mariadb.bind.fix' => MariadbBindFix::class,
         'mariadb.bind.rollback' => MariadbBindRollback::class,
