@@ -3182,3 +3182,19 @@ in the environment; an existing instance stays open until a typed enforce, which
 works; redis.conf restored when Redis will not start; users only for vhosts and removed with them; line-by-line,
 idempotent wiring; the kernel action. `RedisPageTest` — the open-instance warning, `.env` lines on enable, disable,
 typed enforce, and no password in the audit log.
+
+## A112 — The installer's admin password never appears on a command line
+
+Security audit run-2 (2026-11-11), finding AZ-31. `CreatePanelAdmin` reads the password from
+`PANEL_INSTALL_ADMIN_PASSWORD` so it stays off argv, but the installer set that variable as an argument:
+`sudo -u <panel> -H env … PANEL_INSTALL_ADMIN_PASSWORD=<password> bash -c '…'`. Both `sudo` and `env` then
+carried the new admin's password on their command lines, readable by every local account through
+`/proc/<pid>/cmdline` while they ran; the printed manual hint showed the same pattern.
+
+Decision: `_invoke_create_panel_admin` assigns the variable in the caller's environment and switches user with
+`runuser -u <panel> -- env COMPOSER_HOME=… PATH=… bash -c '…'`. `runuser` keeps the environment (it sets HOME,
+USER and SHELL for the target), so the password reaches artisan and no argv carries it. The manual hint now reads
+the password with `read -rs` and exports it before the same `runuser` call.
+
+Tests: `InstallerAdminPasswordTest` runs the real function under bash with recording stubs for `runuser` and
+`sudo`: the password is in no recorded argv and does reach the child's environment; the hint uses a prompt.
