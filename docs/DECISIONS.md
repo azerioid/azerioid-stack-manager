@@ -349,9 +349,9 @@ collapses the isolation the rest of this project's design depends on (**A25** pe
 **A33** refusing to widen Caddy's privileges). EL hosts were already correct: the distro web user does
 not exist on a bare EL image, so the re-detect fired there and selected the dedicated identity.
 
-**Disclosure note:** the precise privilege chain and the exploitation preconditions are deliberately
-**not** recorded here for now. They will be added to this ADR after a release carrying Part B is
-published and operators have had a window to update. Operators should run
+**Disclosure note:** the precise privilege chain and the exploitation preconditions were deliberately
+**not** recorded here at first, so operators had a window to update after Part B shipped. They are now
+published — see *Disclosure* at the end of this ADR. Operators should run
 `azerioid panel harden status` — it reports whether a given host is affected and exits non-zero when
 remediation is needed.
 
@@ -543,6 +543,42 @@ it, so the schema does not grow ahead of real use.
 **Tradeoff accepted:** because reconciliation is change-triggered, an out-of-band
 edit is invisible until something asks. That is the cost of not re-parsing every
 config file on every page load, and it is why drift reporting exists at all.
+
+**Disclosure (published 2026-11-24; promised for 2026-10-10 in the v1.6.1 release notes and published late).**
+
+*Affected:* Debian 12/13 and Ubuntu 24.04 hosts installed with any release up to and including **v1.6.0**
+without `--web-user=caddy`. EL hosts (AlmaLinux, Rocky, CentOS Stream) installed with the default options
+were not affected.
+
+*The chain, as the v1.6.0 code had it:*
+
+1. `deploy/install.sh` resolved the panel's web user **before** installing Caddy. On a stock Debian/Ubuntu
+   image the `caddy` account does not exist yet while `www-data` does, so `detect_web_user()`
+   (`deploy/lib/common.sh`) chose `www-data`. The corrective re-detect after package installation only ran
+   when the chosen account did not exist, which is never the case for `www-data` on apt.
+2. `deploy/lib/broker-setup.sh` then granted that account the broker:
+   `www-data ALL=(root) NOPASSWD: /usr/local/lib/azerioid-panel/broker`.
+3. Hosted PHP sites ran in the distribution's shared PHP-FPM pool, **also as `www-data`** (per-site pools
+   arrived only in v2.5.0, A55), and site pools allowed process spawning.
+4. So any PHP code running on any hosted site — a vulnerable plugin, an uploaded web shell, or simply the
+   site's own owner — could run `sudo -n /usr/local/lib/azerioid-panel/broker <action>` with no password and
+   call any broker action as root. One example: in v1.6.0 the `cron.set` action replaced **root's crontab**
+   with lines read from stdin (`broker/src/Actions/CronManage.php`), which turns the grant into root code
+   execution within a minute.
+
+*Preconditions:* an affected host (above) and the ability to execute code as `www-data`, which any hosted
+PHP site had. No panel login and no network access to the panel were needed.
+
+*Fixed in:* **v1.6.1** (2026-09-26, Part B: detection moved after package installation; the installer
+refuses an account that also runs a site pool; `azerioid panel harden status|apply` migrates existing hosts)
+and structurally in **v2.0.0** (2026-09-27, Part A: the dedicated `azerioid-panel` account is the only holder
+of the broker grant). Per-site PHP pools (v2.5.0, A55) removed the shared `www-data` pool as well.
+
+*If you ran v1.6.0 or earlier on Debian/Ubuntu:* update, then run `azerioid panel harden status`. To look
+for misuse during the exposure window, compare `/var/log/azerioid-panel/broker-audit.log` (every broker call,
+written by the broker itself) with the panel's Audit page (calls made through the panel): a mutating action
+— `cron.set` above all — that appears only in the broker log was not made by the panel. Also check root's
+crontab (`crontab -l -u root`) for lines you did not add.
 
 ## A40 — File Manager archive operations: zip-slip exclusion partially lifted
 
