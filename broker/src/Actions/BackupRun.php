@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace AzerioidPanel\Broker\Actions;
 
+use AzerioidPanel\Broker\Backup\ArchiveCipher;
 use AzerioidPanel\Broker\Backup\BackupEngines;
 use AzerioidPanel\Broker\Backup\BackupPipeline;
 use AzerioidPanel\Broker\Backup\LocalArchiveSink;
@@ -70,7 +71,10 @@ final class BackupRun
                 $sink,
                 $passphrase,
                 $kdf,
-                $source['cwd'] ?? null
+                $source['cwd'] ?? null,
+                3600,
+                // A122: the archive authenticates the name it is stored under.
+                ArchiveCipher::contextForKey($key)
             );
         } finally {
             ($source['cleanup'])();

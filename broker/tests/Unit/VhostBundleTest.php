@@ -93,12 +93,12 @@ final class VhostBundleTest extends TestCase
         foreach (['manifest', 'files', 'config', 'db-mariadb-shop'] as $part) {
             $this->assertArrayHasKey("{$dir}/{$part}.lacmp2.bin", $this->rt->files, $part);
         }
-        $manifest = json_decode(ArchiveCipher::decryptBlob($this->rt->files["{$dir}/manifest.lacmp2.bin"], self::PASS), true);
+        $manifest = json_decode(ArchiveCipher::decryptBlob($this->rt->files["{$dir}/manifest.lacmp2.bin"], self::PASS, ArchiveCipher::contextForKey("{$dir}/manifest.lacmp2.bin")), true);
         $this->assertSame('shop.test', $manifest['domain']);
         $this->assertSame('/data/www/shop.test', $manifest['top'], 'the whole site, not only public/');
         $this->assertSame(['files', 'config', 'db-mariadb-shop'], array_column($manifest['parts'], 'part'));
         $this->assertContains('tls-private-keys', $manifest['not_included']);
-        $files = ArchiveCipher::decryptBlob($this->rt->files["{$dir}/files.lacmp2.bin"], self::PASS);
+        $files = ArchiveCipher::decryptBlob($this->rt->files["{$dir}/files.lacmp2.bin"], self::PASS, ArchiveCipher::contextForKey("{$dir}/files.lacmp2.bin"));
         $this->assertStringContainsString('-C /data/www -czf - --exclude=shop.test/node_modules --exclude=shop.test/storage/logs shop.test', $files);
         $this->assertNotEmpty(array_filter($this->rt->execLog, static fn (array $e): bool => ($e['command'][0] ?? '') === '/bin/rm'
             && str_contains((string) end($e['command']), '/staging/bundle-')), 'the config staging directory is removed');
@@ -179,6 +179,19 @@ final class VhostBundleTest extends TestCase
         ]);
     }
 
+    public function test_an_older_manifest_under_a_newer_stamp_is_refused(): void
+    {
+        // A122: the manifest authenticates its stamp, so a rollback by copying fails.
+        $bundle = new VhostBundle($this->cfg, $this->rt);
+        $out = $bundle->run(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local']);
+        $base = '/var/lib/azerioid-panel/backups/vhost/shop.test/';
+        $this->rt->files[$base . '20991231T000000Z/manifest.lacmp2.bin'] = $this->rt->files[$base . $out['bundle'] . '/manifest.lacmp2.bin'];
+
+        $this->expectException(BrokerException::class);
+        $this->expectExceptionMessage('not the archive stored under this name');
+        $bundle->restore(self::DOMAIN, ['passphrase' => self::PASS, 'destination' => 'local', 'bundle' => '20991231T000000Z']);
+    }
+
     public function test_a_bundle_cannot_be_restored_into_another_domain(): void
     {
         $bundle = new VhostBundle($this->cfg, $this->rt);
@@ -186,8 +199,9 @@ final class VhostBundleTest extends TestCase
         $this->rt->files['/var/lib/azerioid-panel/backups/vhost/other.test/' . $out['bundle'] . '/manifest.lacmp2.bin']
             = $this->rt->files['/var/lib/azerioid-panel/backups/vhost/shop.test/' . $out['bundle'] . '/manifest.lacmp2.bin'];
 
+        // A122: the manifest is bound to shop.test, so under other.test it does not even authenticate.
         $this->expectException(BrokerException::class);
-        $this->expectExceptionMessage('another domain is not supported');
+        $this->expectExceptionMessage('not the archive stored under this name');
         $bundle->restore('other.test', ['passphrase' => self::PASS, 'destination' => 'local', 'bundle' => $out['bundle']]);
     }
 

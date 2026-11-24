@@ -36,6 +36,9 @@ class BackupsPage extends Component
     public string $restore_destination = 'spaces';
     public bool $restore_force = false;
     public bool $restore_overwrite = false;
+
+    /** A122: restore an archive written before archives were bound to their storage name. */
+    public bool $restore_allow_unbound = false;
     public ?array $preview = null;
     public ?string $flash = null;
     public ?string $error = null;
@@ -308,10 +311,12 @@ class BackupsPage extends Component
     /** @return array<string,mixed>|null */
     private function restoreStdin(): ?array
     {
-        if ($this->restore_destination === 'local') {
-            return $this->localStdin();
+        $stdin = $this->restore_destination === 'local' ? $this->localStdin() : $this->spacesStdin();
+        if ($stdin !== null && $this->restore_allow_unbound) {
+            $stdin['allow_unbound_identity'] = true;
         }
-        return $this->spacesStdin();
+
+        return $stdin;
     }
 
     public function render()

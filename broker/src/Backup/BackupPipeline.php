@@ -37,6 +37,7 @@ final class BackupPipeline
         ?string $kdfName = null,
         ?string $cwd = null,
         int $timeoutSeconds = 3600,
+        ?string $context = null,
     ): array {
         $proc = $this->runtime->execReader($command, $cwd, $timeoutSeconds);
 
@@ -48,7 +49,8 @@ final class BackupPipeline
                 },
                 $passphrase,
                 ArchiveCipher::DEFAULT_CHUNK_BYTES,
-                $kdfName
+                $kdfName,
+                $context
             );
         } catch (\Throwable $e) {
             // A121: stop the child (finish() would read the rest of its stream and wait for it),

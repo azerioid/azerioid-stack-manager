@@ -259,7 +259,7 @@ final class BackupVerifyTest extends TestCase
             $this->rt->dirs[$www . '/shop.lacmp-pre-restore-' . $stamp] = true;
         }
         $this->rt->dirs['/var/lib/azerioid-panel/staging/restore-shop/shop'] = true;
-        $this->storeLocal('files/shop/20260926T000000Z.lacmp2.bin', ArchiveCipher::encryptBlob(self::tgz(), self::PASS));
+        $this->storeLocal('files/shop/20260926T000000Z.lacmp2.bin', ArchiveCipher::encryptBlob(self::tgz(), self::PASS, null, ArchiveCipher::contextForKey('files/shop/20260926T000000Z.lacmp2.bin')));
 
         [$code, $json] = $this->broker(
             ['broker', 'backup.restore.files', $this->cfg->localBackupDir . '/files/shop/20260926T000000Z.lacmp2.bin'],
@@ -296,7 +296,7 @@ final class BackupVerifyTest extends TestCase
         $this->rt->dirs[$www . '/shop'] = true;
         $this->rt->dirs[$www . '/shop.lacmp-pre-restore-20260101T000000Z'] = true;
         $this->rt->dirs['/var/lib/azerioid-panel/staging/restore-shop/shop'] = true;
-        $this->storeLocal('files/shop/20260926T000000Z.lacmp2.bin', ArchiveCipher::encryptBlob(self::tgz(), self::PASS));
+        $this->storeLocal('files/shop/20260926T000000Z.lacmp2.bin', ArchiveCipher::encryptBlob(self::tgz(), self::PASS, null, ArchiveCipher::contextForKey('files/shop/20260926T000000Z.lacmp2.bin')));
 
         [, $json] = $this->broker(
             ['broker', 'backup.restore.files', $this->cfg->localBackupDir . '/files/shop/20260926T000000Z.lacmp2.bin'],

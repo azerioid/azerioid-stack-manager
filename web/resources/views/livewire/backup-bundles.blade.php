@@ -51,6 +51,7 @@
             <p class="px-4 py-3 text-xs text-zinc-500">No bundles yet.</p>
         @endforelse
     </div>
+    <label class="flex items-center gap-2 text-xs text-zinc-500"><input type="checkbox" wire:model="allowUnbound"> Restore a bundle made before v2.15.8 — its manifest cannot prove it is the one stored under that name, so only if you trust the storage</label>
 
     @if ($preview)
         <div class="rounded border border-warn/40 p-4">
