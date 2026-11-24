@@ -365,7 +365,8 @@ final class OctaneManager
             return false;
         }
         try {
-            $decoded = json_decode($runtime->readFile($path), true);
+            // A119: the site's own file, read by root: bounded, regular files only.
+            $decoded = json_decode($runtime->readFileBounded($path, 1 << 20), true);
         } catch (\Throwable) {
             return false;
         }

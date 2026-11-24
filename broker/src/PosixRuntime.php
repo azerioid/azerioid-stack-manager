@@ -144,6 +144,71 @@ final class PosixRuntime implements Runtime
         return $data;
     }
 
+    public function readFileBounded(string $path, int $maxBytes): string
+    {
+        $fh = $this->openRegular($path);
+        try {
+            $st = fstat($fh);
+            if ($st === false || $st['size'] > $maxBytes) {
+                throw new BrokerException("{$path} is larger than {$maxBytes} bytes; not read.", 1);
+            }
+            $data = stream_get_contents($fh, $maxBytes + 1);
+            if ($data === false || strlen($data) > $maxBytes) {
+                throw new BrokerException("{$path} is larger than {$maxBytes} bytes; not read.", 1);
+            }
+
+            return $data;
+        } finally {
+            fclose($fh);
+        }
+    }
+
+    public function readTail(string $path, int $bytes): string
+    {
+        $fh = $this->openRegular($path);
+        try {
+            $st = fstat($fh);
+            $size = $st === false ? 0 : (int) $st['size'];
+            if ($size > $bytes && fseek($fh, $size - $bytes) !== 0) {
+                throw new BrokerException("Unable to read {$path}.", 1);
+            }
+            $data = stream_get_contents($fh, $bytes);
+
+            return $data === false ? '' : $data;
+        } finally {
+            fclose($fh);
+        }
+    }
+
+    /**
+     * Open a file a lower-privileged account controls: lstat first (a regular file, not a link,
+     * not a FIFO or device that would block or never end), then fstat the handle to be sure the
+     * file opened is still a regular file.
+     *
+     * @return resource
+     */
+    private function openRegular(string $path)
+    {
+        clearstatcache(true, $path);
+        $l = @lstat($path);
+        if ($l === false || ($l['mode'] & 0170000) !== 0100000) {
+            throw new BrokerException("{$path} is not a regular file; not read.", 1);
+        }
+        // 'n' = O_NONBLOCK: if the path is swapped for a FIFO after the lstat, the open still
+        // returns at once and the fstat below refuses it. Reads of a regular file are unaffected.
+        $fh = @fopen($path, 'rbn');
+        if ($fh === false) {
+            throw new BrokerException("Unable to read {$path}.", 1);
+        }
+        $st = fstat($fh);
+        if ($st === false || ($st['mode'] & 0170000) !== 0100000 || $st['ino'] !== $l['ino'] || $st['dev'] !== $l['dev']) {
+            fclose($fh);
+            throw new BrokerException("{$path} changed while it was opened; not read.", 1);
+        }
+
+        return $fh;
+    }
+
     public function writeFile(string $path, string $contents, int $mode = 0644): void
     {
         $dir = dirname($path);

@@ -167,7 +167,13 @@ final class CronManager
         if (!$this->runtime->fileExists($path)) {
             return ['id' => $job->id, 'path' => $path, 'missing' => true, 'lines' => []];
         }
-        $body = explode("\n", rtrim($this->runtime->readFile($path), "\n"));
+        // A120: a site job's log is in a directory the site owns — bounded, regular files only.
+        try {
+            $raw = $this->runtime->readTail($path, 1 << 20);
+        } catch (\Throwable $e) {
+            return ['id' => $job->id, 'path' => $path, 'missing' => false, 'lines' => [], 'error' => $e->getMessage()];
+        }
+        $body = explode("\n", rtrim($raw, "\n"));
 
         return [
             'id' => $job->id,
@@ -192,8 +198,12 @@ final class CronManager
         if (!$this->runtime->fileExists($path)) {
             return ['at' => null, 'exit_code' => null, 'ok' => null];
         }
-        $body = $this->runtime->readFile($path);
-        $tail = strlen($body) > 8192 ? substr($body, -8192) : $body;
+        // A120: only the tail is read, and only from a regular file.
+        try {
+            $tail = $this->runtime->readTail($path, 8192);
+        } catch (\Throwable) {
+            return ['at' => null, 'exit_code' => null, 'ok' => null];
+        }
         $at = null;
         $code = null;
         foreach (array_reverse(explode("\n", trim($tail))) as $line) {

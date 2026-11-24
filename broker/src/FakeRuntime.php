@@ -133,6 +133,27 @@ final class FakeRuntime implements Runtime
         return $this->files[$path];
     }
 
+    public function readFileBounded(string $path, int $maxBytes): string
+    {
+        if (isset($this->links[$path]) || !isset($this->files[$path])) {
+            throw new BrokerException("{$path} is not a regular file; not read.", 1);
+        }
+        if (strlen($this->files[$path]) > $maxBytes) {
+            throw new BrokerException("{$path} is larger than {$maxBytes} bytes; not read.", 1);
+        }
+
+        return $this->files[$path];
+    }
+
+    public function readTail(string $path, int $bytes): string
+    {
+        if (isset($this->links[$path]) || !isset($this->files[$path])) {
+            throw new BrokerException("{$path} is not a regular file; not read.", 1);
+        }
+
+        return strlen($this->files[$path]) > $bytes ? substr($this->files[$path], -$bytes) : $this->files[$path];
+    }
+
     public function writeFile(string $path, string $contents, int $mode = 0644): void
     {
         $this->files[$path] = $contents;

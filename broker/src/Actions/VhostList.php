@@ -29,7 +29,11 @@ final class VhostList
             static fn (array $v): bool => ($v['domain'] ?? '') !== DefaultSite::SNI_HOST
         ));
         foreach ($vhosts as &$vhost) {
-            $vhost = self::withRuntimeFields($runtime, $vhost);
+            // A119: one site's files can never make the whole listing fail.
+            try {
+                $vhost = self::withRuntimeFields($runtime, $vhost);
+            } catch (\Throwable) {
+            }
             // Hash of the config file itself. The panel keeps a projection of these
             // vhosts in its own database (A44); comparing this hash is how it knows
             // a config file was edited outside the panel. Done here rather than per

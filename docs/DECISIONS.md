@@ -3328,3 +3328,37 @@ A put-back reason (A56) still wins.
 
 Tests: `SiteDockerTest` — the record is in root's directory and the site deleting its home files changes nothing;
 an older site is adopted from the drop-in and recorded; without record or drop-in the site is not ready.
+
+## A119 — Root reads a site's composer.json and package.json only as bounded reads of regular files
+
+Security audit run-2 (2026-11-11), finding AZ-33. `vhost.list` detected Laravel and Node apps by reading
+`<app>/composer.json` and `<app>/package.json` with `readFile` — as root, whole file, links followed, no size or type
+check. Those paths are in the site's own tree, so a site could make the listing fail for every site with a large
+file (a PHP memory fatal that `catch (\Throwable)` does not stop) or hang it with a FIFO, and the listing feeds the
+`app.down` and `tls.issuance` alerts.
+
+Decision:
+- `Runtime::readFileBounded($path, $maxBytes)`: `lstat` must show a regular file; it is opened `rb` and `fstat` on
+  the descriptor must show a regular file with the same inode and device (a swap between the two checks is refused);
+  a file over the limit is refused before reading. The open is non-blocking (`fopen` mode `rbn`, O_NONBLOCK), so a
+  path swapped for a FIFO between the `lstat` and the open returns at once and the `fstat` refuses it. PHP has no
+  O_NOFOLLOW: a final component swapped for a symlink in that window is opened (not read) before the inode check
+  refuses it. Nothing is read from it, but the open itself happens; a device whose open has side effects (a watchdog)
+  is the residual case, and closing it needs openat/O_NOFOLLOW, which PHP does not expose.
+- Octane and PM2 detection read with a 1 MiB limit; a refusal means "not detected".
+- `VhostList` isolates each vhost: one vhost whose runtime fields cannot be read is listed without them instead of
+  failing the whole listing.
+
+Tests: `BoundedReadTest` runs the real `PosixRuntime` on temporary files — a regular file within the limit is read; a
+file over it, a symlink and a FIFO are refused, the FIFO without blocking.
+
+## A120 — Cron log reads are bounded tails of regular files
+
+Security audit run-2 (2026-11-11), finding AZ-34. `cron.jobs` called `lastRun` for every job, and it loaded the whole
+log with `readFile` before keeping the last 8 KiB; `cron.job.log` did the same before keeping the last lines. A site
+job's log lives in `/var/log/azerioid-cron/<site identity>/`, which the site owns, so its size and type were the
+site's choice — the same failure modes as A119, for the cron page and the `cron.failed` alert.
+
+Decision: `Runtime::readTail($path, $bytes)` with the same regular-file checks as A119, seeking to the last `$bytes`.
+`lastRun` reads 8 KiB and reports "no run recorded" when the read is refused; `cron.job.log` reads the last 1 MiB and
+returns an `error` instead of failing. `BoundedReadTest` covers the tail and the symlink refusal.
