@@ -148,6 +148,72 @@ final class ApacheDriver implements WebServerDriver
      * @param  array{domain:string,root:string,type:string,php_version:?string,upstream:?string}  $spec
      * @return array<string,mixed>
      */
+
+    /**
+     * A115/A116: patch backend vhosts written by older releases in place — only the hardening
+     * lines, line by line. The file is not re-rendered: a parser that cannot read back every
+     * detail (a per-site PHP socket, say) would drop it, and a disabled vhost stays disabled.
+     * All changed files are validated together; on failure every one is put back.
+     *
+     * @return list<string> domains patched
+     */
+    public function patchHardening(Runtime $runtime, Config $config): array
+    {
+        $dir = $config->vhostAvailableDir !== '' ? $config->vhostAvailableDir : $config->vhostDir;
+        $originals = [];
+        foreach ($runtime->glob(rtrim($dir, '/') . '/*.conf') as $file) {
+            $file = (string) $file;
+            $body = $runtime->readFile($file);
+            if (!str_starts_with($body, '# azerioid-backend engine=apache')) {
+                continue;
+            }
+            $next = self::hardenedBody($body);
+            if ($next !== $body) {
+                $originals[$file] = $body;
+                $runtime->writeFile($file, $next, 0644);
+            }
+        }
+        if ($originals === []) {
+            return [];
+        }
+        try {
+            $this->validate($runtime, $config);
+            $this->reload($runtime, $config, 'auto');
+        } catch (BrokerException $e) {
+            foreach ($originals as $file => $body) {
+                $runtime->writeFile($file, $body, 0644);
+            }
+            throw new BrokerException('Apache refused the hardened vhosts; they were put back: ' . $e->getMessage(), 1);
+        }
+
+        return array_map(static fn (string $f): string => basename($f, '.conf'), array_keys($originals));
+    }
+
+    /** The A115/A116 lines added to an Apache backend vhost, leaving everything else as it is. */
+    public static function hardenedBody(string $body): string
+    {
+        $php = str_contains($body, 'SetHandler "proxy:unix:');
+        $hasFallback = str_contains($body, 'FallbackResource ');
+        $hasRedirect = str_contains($body, 'RedirectMatch 404 "/\\.(git|composer)');
+        $out = [];
+        foreach (explode("\n", $body) as $line) {
+            if (preg_match('/^(\s*)AllowOverride\s+All\s*$/', $line, $m) === 1) {
+                $out[] = $m[1] . 'AllowOverride AuthConfig Indexes Limit Nonfatal=Override';
+                if ($php && !$hasFallback) {
+                    $out[] = $m[1] . 'FallbackResource /index.php';
+                }
+                continue;
+            }
+            $out[] = $line;
+            if (!$hasRedirect && preg_match('/^(\s*)<\/Directory>\s*$/', $line, $m) === 1) {
+                $out[] = substr($m[1], 0, max(0, strlen($m[1]) - 4)) . '    RedirectMatch 404 "/\\.(git|composer)(/|$)"';
+                $hasRedirect = true;
+            }
+        }
+
+        return implode("\n", $out);
+    }
+
     public function upsertBackendVhost(Runtime $runtime, Config $config, array $spec): array
     {
         $domain = $spec['domain'];
@@ -604,13 +670,20 @@ PHP;
             $proxyBlock = "    ProxyPreserveHost On\n    ProxyPass / http://{$upstream}/\n    ProxyPassReverse / http://{$upstream}/\n";
         }
         if ($type !== 'proxy') {
+            // A116: .htaccess may not choose a handler (FileInfo: SetHandler, RewriteRule
+            // [H]/[P]). Apache reaches every site's PHP socket, so with AllowOverride All one
+            // site's .htaccess could hand its scripts to another site's pool. Forbidden
+            // directives are ignored rather than fatal, and front controllers keep working
+            // through FallbackResource. A115: repository and Composer state are never served.
+            $fallback = $type === 'php' ? "        FallbackResource /index.php\n" : '';
             $dirBlock = <<<DIR
     DocumentRoot {$root}
     <Directory {$root}>
         Options -Indexes +FollowSymLinks
-        AllowOverride All
-        Require all granted
+        AllowOverride AuthConfig Indexes Limit Nonfatal=Override
+{$fallback}        Require all granted
     </Directory>
+    RedirectMatch 404 "/\.(git|composer)(/|$)"
     SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on
 
 DIR;

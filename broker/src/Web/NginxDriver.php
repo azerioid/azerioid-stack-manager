@@ -146,6 +146,68 @@ final class NginxDriver implements WebServerDriver
      * @param  array{domain:string,root:string,type:string,php_version:?string,upstream:?string}  $spec
      * @return array<string,mixed>
      */
+
+    /**
+     * A115: patch backend vhosts written by older releases in place — only the hidden-path
+     * block, inserted before the first `location / {`. Not re-rendered (see ApacheDriver), and a
+     * disabled vhost stays disabled. Validated together; on failure every file is put back.
+     *
+     * @return list<string> domains patched
+     */
+    public function patchHardening(Runtime $runtime, Config $config): array
+    {
+        $dir = $config->vhostAvailableDir !== '' ? $config->vhostAvailableDir : $config->vhostDir;
+        $originals = [];
+        foreach ($runtime->glob(rtrim($dir, '/') . '/*.conf') as $file) {
+            $file = (string) $file;
+            $body = $runtime->readFile($file);
+            if (!str_starts_with($body, '# azerioid-backend engine=nginx')) {
+                continue;
+            }
+            $next = self::hardenedBody($body);
+            if ($next !== $body) {
+                $originals[$file] = $body;
+                $runtime->writeFile($file, $next, 0644);
+            }
+        }
+        if ($originals === []) {
+            return [];
+        }
+        try {
+            $this->validate($runtime);
+            $this->reload($runtime, $config, 'auto');
+        } catch (BrokerException $e) {
+            foreach ($originals as $file => $body) {
+                $runtime->writeFile($file, $body, 0644);
+            }
+            throw new BrokerException('Nginx refused the hardened vhosts; they were put back: ' . $e->getMessage(), 1);
+        }
+
+        return array_map(static fn (string $f): string => basename($f, '.conf'), array_keys($originals));
+    }
+
+    /** The A115 block added to an Nginx backend vhost that serves files, leaving everything else as it is. */
+    public static function hardenedBody(string $body): string
+    {
+        if (str_contains($body, '(git|composer)') || str_contains($body, 'proxy_pass ')) {
+            return $body;
+        }
+        $out = [];
+        $done = false;
+        foreach (explode("\n", $body) as $line) {
+            if (!$done && preg_match('/^(\s*)location \/ \{\s*$/', $line, $m) === 1) {
+                $out[] = $m[1] . 'location ~ /\\.(git|composer)(/|$) {';
+                $out[] = $m[1] . '    return 404;';
+                $out[] = $m[1] . '}';
+                $out[] = '';
+                $done = true;
+            }
+            $out[] = $line;
+        }
+
+        return implode("\n", $out);
+    }
+
     public function upsertBackendVhost(Runtime $runtime, Config $config, array $spec): array
     {
         $domain = $spec['domain'];
@@ -596,6 +658,11 @@ PROXY;
     }
 
 STATIC;
+        }
+
+        if ($type !== 'proxy') {
+            // A115: repository and Composer state are never served.
+            $location = "    location ~ /\\.(git|composer)(/|\$) {\n        return 404;\n    }\n\n" . $location;
         }
 
         $listen = $config->backendBind . ':' . $config->nginxBackendPort;
