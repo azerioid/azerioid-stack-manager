@@ -12,6 +12,7 @@ use AzerioidPanel\Broker\Tls\TlsMode;
 use AzerioidPanel\Broker\Vhost\AppRuntime;
 use AzerioidPanel\Broker\Vhost\DockerManager;
 use AzerioidPanel\Broker\Vhost\OctaneManager;
+use AzerioidPanel\Broker\Vhost\UpstreamListener;
 use AzerioidPanel\Broker\Vhost\Pm2Manager;
 use AzerioidPanel\Broker\Web\WebServers;
 
@@ -193,6 +194,11 @@ final class VhostList
             : null;
 
         $domain = (string) ($vhost['domain'] ?? '');
+        // A126: a listener on the site's upstream port that is not the site's identity.
+        $upstreamPort = (int) ($vhost['octane_port'] ?? $vhost['pm2_port'] ?? $vhost['docker_port'] ?? 0);
+        $vhost['upstream_foreign_uid'] = $upstreamPort > 0 && $domain !== ''
+            ? UpstreamListener::foreignOwner($runtime, $upstreamPort, $domain)
+            : null;
         $vhost['octane_program'] = null;
         $vhost['laravel_app'] = false;
         $vhost['laravel_app_detail'] = null;

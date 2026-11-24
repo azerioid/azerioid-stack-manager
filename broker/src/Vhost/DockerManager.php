@@ -127,7 +127,7 @@ final class DockerManager
         ]);
         $supervisor->control($program, 'start');
 
-        if (!$this->waitForPort($spec['port'])) {
+        if (!$this->waitForPort($spec['port'], $domain)) {
             $this->removeProgram($supervisor, $program);
             $this->cleanupContainers($spec);
             throw new BrokerException(
@@ -259,7 +259,7 @@ final class DockerManager
             'environment' => $this->programEnvironment($domain),
         ]);
         $restart = $supervisor->control($program, 'restart');
-        if (!$this->waitForPort((int) $spec['port'])) {
+        if (!$this->waitForPort((int) $spec['port'], $domain)) {
             throw new BrokerException(
                 'Docker rebuild finished but 127.0.0.1:' . $spec['port'] . ' is not listening.',
                 1
@@ -638,7 +638,7 @@ final class DockerManager
             'environment' => $this->programEnvironment($domain),
         ]);
         $supervisor->control($program, 'restart');
-        if (!$this->waitForPort((int) $spec['port'])) {
+        if (!$this->waitForPort((int) $spec['port'], $domain)) {
             throw new BrokerException(
                 'Settings saved, but the container is not listening on 127.0.0.1:' . $spec['port']
                 . ' after the restart. Check: azerioid vhost docker logs --domain=' . $domain,
@@ -1494,7 +1494,7 @@ final class DockerManager
         $cameUp = false;
         try {
             $supervisor->control($program, 'restart');
-            $cameUp = $this->waitForPort((int) $spec['port']);
+            $cameUp = $this->waitForPort((int) $spec['port'], $domain);
         } catch (\Throwable) {
             $cameUp = false;
         }
@@ -1512,7 +1512,7 @@ final class DockerManager
         $pools->saveSettings($domain, ['docker_limits_unenforced' => true]);
         $this->upsertProgram($supervisor, $program, ['command' => $this->runCommand($spec)] + $base);
         $supervisor->control($program, 'restart');
-        if (! $this->waitForPort((int) $spec['port'])) {
+        if (! $this->waitForPort((int) $spec['port'], $domain)) {
             throw new BrokerException(
                 'Could not restart the container on 127.0.0.1:' . $spec['port'] . ' — check the container logs.',
                 1
@@ -1814,14 +1814,18 @@ final class DockerManager
         }
     }
 
-    private function waitForPort(int $port, int $attempts = 60): bool
+    private function waitForPort(int $port, string $domain, int $attempts = 60): bool
     {
         if ($port < 1 || $this->ssBin() === null) {
             return true;
         }
         for ($i = 0; $i < $attempts; $i++) {
+            // A126: up means listening *and* every listener is this site's identity (or root);
+            // a port another account grabbed while the worker was down is not this site.
             if ($this->portListening($port)) {
-                return true;
+                // Not up: every caller then takes its own rollback path (the program removed,
+                // the vhost left as it was). vhost.list and the app.down alert name the uid.
+                return UpstreamListener::foreignOwner($this->runtime, $port, $domain) === null;
             }
             $this->runtime->exec(['/bin/sleep', '1'], null, 5);
         }
@@ -1954,7 +1958,7 @@ final class DockerManager
         ]);
         $supervisor->control($program, 'restart');
 
-        return $this->waitForPort((int) $spec['port']);
+        return $this->waitForPort((int) $spec['port'], $domain);
     }
 
     /**

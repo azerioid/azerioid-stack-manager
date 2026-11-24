@@ -117,7 +117,7 @@ final class Pm2Manager
         ]);
         $supervisor->control($program, 'start');
 
-        if (!$this->waitForPort($port)) {
+        if (!$this->waitForPort($port, $domain)) {
             $this->removeProgram($supervisor, $program);
             throw new BrokerException(
                 "PM2 did not start listening on 127.0.0.1:{$port}. Check the process logs under "
@@ -248,7 +248,7 @@ final class Pm2Manager
         $supervisor = new SupervisorManager($this->config, $this->runtime);
         $restart = $supervisor->control($program, 'restart');
         $port = (int) ($vhost['pm2_port'] ?? 0);
-        if ($port > 0 && !$this->waitForPort($port)) {
+        if ($port > 0 && !$this->waitForPort($port, $domain)) {
             throw new BrokerException(
                 'PM2 reload failed and Supervisor restart did not restore the listen port: '
                 . self::execDetail($reload),
@@ -696,7 +696,7 @@ final class Pm2Manager
         ]);
         $this->runtime->writeFile($this->metaPath($domain), json_encode(array_merge($restore, ['node' => $to]), JSON_THROW_ON_ERROR) . "\n", 0640);
         $supervisor->control($program, 'restart');
-        if ($port > 0 && !$this->waitForPort($port)) {
+        if ($port > 0 && !$this->waitForPort($port, $domain)) {
             throw new BrokerException(
                 "{$domain} did not listen on 127.0.0.1:{$port} under Node.js {$to}. Native modules built for "
                 . "Node.js {$from} may need `npm rebuild`; switch back with node={$from}.",
@@ -744,7 +744,7 @@ final class Pm2Manager
             'autorestart' => true,
         ]);
         $supervisor->control($program, 'restart');
-        if ($port > 0 && !$this->waitForPort($port)) {
+        if ($port > 0 && !$this->waitForPort($port, $domain)) {
             throw new BrokerException("{$domain} did not listen on 127.0.0.1:{$port} after applying the memory cap.", 1);
         }
 
@@ -837,7 +837,7 @@ final class Pm2Manager
         ]);
         $supervisor->control($program, 'restart');
 
-        return $port <= 0 || $this->waitForPort($port);
+        return $port <= 0 || $this->waitForPort($port, $domain);
     }
 
     private function runUser(string $domain): string
@@ -998,14 +998,18 @@ final class Pm2Manager
         }
     }
 
-    private function waitForPort(int $port, int $attempts = 40): bool
+    private function waitForPort(int $port, string $domain, int $attempts = 40): bool
     {
         if ($this->ssBin() === null) {
             return true;
         }
         for ($i = 0; $i < $attempts; $i++) {
+            // A126: up means listening *and* every listener is this site's identity (or root);
+            // a port another account grabbed while the worker was down is not this site.
             if ($this->portListening($port)) {
-                return true;
+                // Not up: every caller then takes its own rollback path (the program removed,
+                // the vhost left as it was). vhost.list and the app.down alert name the uid.
+                return UpstreamListener::foreignOwner($this->runtime, $port, $domain) === null;
             }
             $this->runtime->exec(['/bin/sleep', '1'], null, 5);
         }

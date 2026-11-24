@@ -288,6 +288,47 @@ CADDY;
         $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-octane-app-example-com.conf', $this->rt->files);
     }
 
+    public function test_enable_refuses_a_port_another_account_listens_on(): void
+    {
+        // A126: a listener that is not the site's identity is not the site's worker.
+        $this->listenerOn(OctaneManager::PORT_MIN, 2222);
+
+        [$code] = $this->capture(['broker', 'vhost.octane.enable', self::DOMAIN], ['port' => OctaneManager::PORT_MIN]);
+
+        $this->assertNotSame(0, $code);
+        $this->assertStringContainsString('php_fastcgi', $this->rt->files[self::CONF], 'the vhost is left on PHP-FPM');
+        $this->assertArrayNotHasKey('/etc/supervisor/conf.d/azerioid-octane-app-example-com.conf', $this->rt->files);
+    }
+
+    public function test_enable_accepts_the_sites_own_listener(): void
+    {
+        $this->listenerOn(OctaneManager::PORT_MIN, 1001);
+
+        [$code, $json] = $this->capture(['broker', 'vhost.octane.enable', self::DOMAIN], ['port' => OctaneManager::PORT_MIN]);
+
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertStringContainsString('reverse_proxy 127.0.0.1:34000 {', $this->rt->files[self::CONF]);
+    }
+
+    public function test_vhost_list_names_a_foreign_upstream_listener(): void
+    {
+        $this->assertSame(0, $this->capture(['broker', 'vhost.octane.enable', self::DOMAIN])[0]);
+        $this->listenerOn(OctaneManager::PORT_MIN, 2222);
+
+        [, $json] = $this->capture(['broker', 'vhost.list'], ['probe_certs' => false]);
+        $row = array_values(array_filter($json['data']['vhosts'], static fn (array $v): bool => $v['domain'] === self::DOMAIN))[0];
+        $this->assertSame(2222, $row['upstream_foreign_uid']);
+    }
+
+    /** ss shows a listener on $port owned by $uid; the site's identity is uid 1001. */
+    private function listenerOn(int $port, int $uid): void
+    {
+        $this->rt->files['/usr/sbin/ss'] = '';
+        $this->rt->script(['/usr/sbin/ss', '-H', '-tln', 'sport', '=', ':' . $port], 0, "LISTEN 0 511 127.0.0.1:{$port} 0.0.0.0:*\n");
+        $this->rt->script(['/usr/sbin/ss', '-H', '-tlne', 'sport', '=', ':' . $port], 0, "LISTEN 0 511 127.0.0.1:{$port} 0.0.0.0:* uid:{$uid} ino:4242 sk:1 <->\n");
+        $this->rt->script(['/usr/bin/id', '-u', \AzerioidPanel\Broker\Vhost\VhostUser::username(self::DOMAIN)], 0, "1001\n");
+    }
+
     public function test_disable_restores_php_fastcgi_and_removes_program(): void
     {
         $this->assertSame(0, $this->capture(['broker', 'vhost.octane.enable', self::DOMAIN])[0]);

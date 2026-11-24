@@ -91,6 +91,26 @@ class AlertEvaluatorTest extends TestCase
         $this->assertSame(1, $second['resolved']);
     }
 
+    public function test_app_down_alerts_when_another_account_holds_the_upstream_port(): void
+    {
+        // A126: the worker can be "running" while someone else's process has the port.
+        Setting::put('alert.rules', [
+            'service_down' => false, 'observed_down' => false, 'reboot_required' => false,
+            'tls' => false, 'backup_stale' => false, 'cron_failed' => false, 'ssh' => false,
+            'app_down' => true,
+            'disk_percent' => 99, 'ram_percent' => 99, 'load' => 100, 'tls_days' => 1, 'backup_stale_hours' => 168,
+        ]);
+        $fake = $this->app->make(FakeBroker::class);
+        $fake->fakeInstalledComponents['supervisor'] = ['unit' => 'supervisor'];
+        $fake->vhosts[] = ['domain' => 'shop.test', 'domains' => ['shop.test'], 'runtime' => 'pm2', 'pm2_program' => 'pm2-shop-test',
+            'readonly' => false, 'upstream_foreign_uid' => 2222];
+        $fake->supervisorPrograms['pm2-shop-test'] = ['state' => 'running', 'status_raw' => 'RUNNING'];
+
+        $first = $this->app->make(AlertEvaluator::class)->run();
+        $this->assertSame(1, $first['opened']);
+        $this->assertDatabaseHas('alert_incidents', ['rule_key' => 'app.down', 'subject' => 'shop.test']);
+    }
+
     public function test_telegram_test_does_not_echo_token(): void
     {
         $this->actingAs($this->admin());
