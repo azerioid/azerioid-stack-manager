@@ -194,7 +194,9 @@ final class PosixRuntime implements Runtime
         if ($l === false || ($l['mode'] & 0170000) !== 0100000) {
             throw new BrokerException("{$path} is not a regular file; not read.", 1);
         }
-        $fh = @fopen($path, 'rb');
+        // 'n' = O_NONBLOCK: if the path is swapped for a FIFO after the lstat, the open still
+        // returns at once and the fstat below refuses it. Reads of a regular file are unaffected.
+        $fh = @fopen($path, 'rbn');
         if ($fh === false) {
             throw new BrokerException("Unable to read {$path}.", 1);
         }

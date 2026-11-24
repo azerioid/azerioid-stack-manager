@@ -3340,7 +3340,10 @@ file (a PHP memory fatal that `catch (\Throwable)` does not stop) or hang it wit
 Decision:
 - `Runtime::readFileBounded($path, $maxBytes)`: `lstat` must show a regular file; it is opened `rb` and `fstat` on
   the descriptor must show a regular file with the same inode and device (a swap between the two checks is refused);
-  a file over the limit is refused before reading. A FIFO is never opened, so nothing blocks.
+  a file over the limit is refused before reading. The open is non-blocking (`fopen` mode `rbn`, O_NONBLOCK), so a
+  path swapped for a FIFO between the `lstat` and the open returns at once and the `fstat` refuses it. PHP has no
+  O_NOFOLLOW: a final component swapped for a symlink in that window is opened (not read) before the inode check
+  refuses it — only a path the site can name, and a device node is not one it can create.
 - Octane and PM2 detection read with a 1 MiB limit; a refusal means "not detected".
 - `VhostList` isolates each vhost: one vhost whose runtime fields cannot be read is listed without them instead of
   failing the whole listing.
