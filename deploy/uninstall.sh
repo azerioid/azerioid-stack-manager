@@ -29,10 +29,11 @@ Usage: uninstall.sh [options]
   --remove-bootstrap     Remove Caddy/PHP only if bootstrap.json says installer added them
   --purge-managed        Uninstall broker-managed components (Redis, MariaDB, Nginx, …)
   --purge-repos          Remove panel-added apt/yum repo entries and keyrings
-  --purge-package-data   Remove engine data dirs (/var/lib/mysql, mongodb, postgresql)
+  --purge-package-data   Remove engine data dirs (/var/lib/mysql, mongodb, postgresql) —
+                         this DELETES EVERY DATABASE on the host, site databases included
   --full                 --drop-db --remove-bootstrap --purge-managed --purge-repos --purge-package-data
 
-  /data/www and customer site databases are never modified.
+  /data/www is never modified. Site databases are kept unless --purge-package-data (or --full) is given.
 EOF
 }
 
@@ -379,5 +380,9 @@ if [[ "${PURGE_MANAGED}" -eq 0 ]]; then
     echo "  Managed components (MariaDB, Redis, Nginx, …) were left installed."
     echo "  Re-run with --purge-managed or --full to remove them via the broker."
 fi
-echo "  /data/www and user databases were not modified."
+if [[ "${PURGE_PACKAGE_DATA}" -eq 1 ]]; then
+    echo "  /data/www was not modified. Engine data directories (all databases) were removed."
+else
+    echo "  /data/www and user databases were not modified."
+fi
 echo "  /var/log/azerioid-panel retained for audit trail (ADR A29)."
