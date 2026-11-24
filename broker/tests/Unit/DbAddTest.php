@@ -38,6 +38,60 @@ final class DbAddTest extends TestCase
         $this->assertStringNotContainsString('abcdefghijklmnopqrst', $out);
     }
 
+    /** A108: a database-level grant escapes `_`, which MariaDB treats as a one-character wildcard. */
+    public function test_mariadb_grant_matches_only_its_own_database(): void
+    {
+        $rt = new FakeRuntime();
+        $cfg = new Config();
+        $cfg->databaseEngine = 'mariadb';
+        $cfg->mysqlPassword = 'abcdefghijklmnopqrst';
+        ob_start();
+        $code = (new Kernel($cfg, $rt))->run(['broker', 'db.add', 'shop_1', 'shop_u'], ['password' => 'abcdefghijklmnopqrst']);
+        ob_end_clean();
+        $this->assertSame(0, $code);
+        $grants = array_values(array_filter($rt->dbExecLog, static fn (string $s): bool => str_starts_with($s, 'GRANT')));
+        $this->assertCount(2, $grants);
+        foreach ($grants as $g) {
+            $this->assertStringContainsString('ON `shop\_1`.*', $g);
+            $this->assertStringNotContainsString('`shop_1`', $g);
+        }
+    }
+
+    /** A108: grants made before are moved to the escaped name, panel-made ones only. */
+    public function test_converge_moves_pattern_grants_onto_escaped_names(): void
+    {
+        $rt = new FakeRuntime();
+        $rt->dbQueryFn = static fn (string $sql): array => str_contains($sql, 'FROM mysql.db') ? [
+            ['Db' => 'app_1', 'User' => 'app_u', 'Host' => 'localhost', 'Select_priv' => 'Y', 'Drop_priv' => 'Y', 'Grant_priv' => 'N'],
+            ['Db' => 'app\\_2', 'User' => 'app_v', 'Host' => 'localhost', 'Select_priv' => 'Y', 'Drop_priv' => 'Y', 'Grant_priv' => 'N'],
+            ['Db' => 'ro_db', 'User' => 'reader', 'Host' => 'localhost', 'Select_priv' => 'Y', 'Drop_priv' => 'N', 'Grant_priv' => 'N'],
+            ['Db' => 'adm_db', 'User' => 'root', 'Host' => 'localhost', 'Select_priv' => 'Y', 'Drop_priv' => 'Y', 'Grant_priv' => 'N'],
+        ] : [];
+        $cfg = new Config();
+        $cfg->databaseEngine = 'mariadb';
+        $cfg->mysqlPassword = 'abcdefghijklmnopqrst';
+        ob_start();
+        $code = (new Kernel($cfg, $rt))->run(['broker', 'db.grants.converge'], []);
+        $json = json_decode((string) ob_get_clean(), true);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertSame(['app_u@localhost on app_1'], $json['data']['mariadb']);
+        $this->assertSame([
+            'GRANT ALL PRIVILEGES ON `app\\_1`.* TO `app_u`@`localhost`',
+            'REVOKE ALL PRIVILEGES ON `app_1`.* FROM `app_u`@`localhost`',
+            'FLUSH PRIVILEGES',
+        ], array_values(array_filter($rt->dbExecLog, static fn (string $q): bool => !str_starts_with($q, 'SELECT'))), 'the escaped grant comes first; already-escaped, partial and root grants are left alone');
+    }
+
+    /** A108: a new PostgreSQL site database is closed to PUBLIC before add() returns. */
+    public function test_postgres_create_statements_close_the_database_to_public(): void
+    {
+        $sql = \AzerioidPanel\Broker\Database\PostgreSQLDriver::createStatements('shop_1', 'shop_u', 'abcdefghijklmnopqrst');
+        $create = array_search('CREATE DATABASE "shop_1" OWNER "shop_u"', $sql, true);
+        $revoke = array_search('REVOKE ALL ON DATABASE "shop_1" FROM PUBLIC', $sql, true);
+        $this->assertIsInt($create);
+        $this->assertSame($create + 1, $revoke, 'revoked right after the create, inside the rolled-back block');
+    }
+
     public function test_pdo_message_redacts_identified_by(): void
     {
         $e = new PDOException("SQLSTATE[42000]: Syntax error: IDENTIFIED BY 'supersecret-password-xx'");

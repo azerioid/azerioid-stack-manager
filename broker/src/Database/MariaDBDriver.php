@@ -112,7 +112,7 @@ final class MariaDBDriver implements DatabaseDriver
                 );
                 $createdHosts[] = $host;
                 $this->runtime->dbExec(
-                    'GRANT ALL PRIVILEGES ON `' . SqlIdent::mysql($name) . '`.* TO `'
+                    'GRANT ALL PRIVILEGES ON `' . SqlIdent::mysqlGrantDb($name) . '`.* TO `'
                     . SqlIdent::mysql($user) . '`@`' . SqlIdent::mysql($host) . '`'
                 );
             }
@@ -238,6 +238,44 @@ final class MariaDBDriver implements DatabaseDriver
     }
 
     /** @param list<string> $createdHosts */
+    /**
+     * A108: move database-level grants made before names were escaped onto the escaped
+     * form. Only rows that look like the panel's own grant (all privileges, no GRANT
+     * OPTION, a user other than root) are touched; each gets the escaped grant first and
+     * then loses the pattern one, so access to its own database never lapses.
+     *
+     * @return list<string> "user@host on db" for every grant moved
+     */
+    public function convergeGrantPatterns(): array
+    {
+        $moved = [];
+        $rows = $this->runtime->dbQuery(
+            "SELECT Db, User, Host, Select_priv, Drop_priv, Grant_priv FROM mysql.db WHERE Db <> ''"
+        );
+        foreach ($rows as $row) {
+            $db = (string) ($row['Db'] ?? '');
+            $user = (string) ($row['User'] ?? '');
+            if (!str_contains($db, '_') || str_contains($db, '\\') || preg_match(Validator::DB_NAME_PATTERN, $db) !== 1
+                || in_array($user, ['', 'root', 'azerioid_panel_admin'], true)
+                || ($row['Select_priv'] ?? '') !== 'Y' || ($row['Drop_priv'] ?? '') !== 'Y' || ($row['Grant_priv'] ?? '') !== 'N') {
+                continue;
+            }
+            try {
+                $ident = '`' . SqlIdent::mysql(Validator::userName($user)) . '`@`' . SqlIdent::mysqlHost((string) ($row['Host'] ?? '')) . '`';
+            } catch (BrokerException) {
+                continue;
+            }
+            $this->runtime->dbExec('GRANT ALL PRIVILEGES ON `' . SqlIdent::mysqlGrantDb($db) . '`.* TO ' . $ident);
+            $this->runtime->dbExec('REVOKE ALL PRIVILEGES ON `' . SqlIdent::mysql($db) . '`.* FROM ' . $ident);
+            $moved[] = $user . '@' . $row['Host'] . ' on ' . $db;
+        }
+        if ($moved !== []) {
+            $this->runtime->dbExec('FLUSH PRIVILEGES');
+        }
+
+        return $moved;
+    }
+
     private function rollback(string $name, string $user, bool $createdDb, array $createdHosts): void
     {
         try {

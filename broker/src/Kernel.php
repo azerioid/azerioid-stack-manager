@@ -26,6 +26,7 @@ use AzerioidPanel\Broker\Actions\CronManage;
 use AzerioidPanel\Broker\Actions\DbAccessSet;
 use AzerioidPanel\Broker\Actions\DbAccessShow;
 use AzerioidPanel\Broker\Actions\DbAdd;
+use AzerioidPanel\Broker\Actions\DbGrantsConverge;
 use AzerioidPanel\Broker\Actions\DbDel;
 use AzerioidPanel\Broker\Actions\DbClone;
 use AzerioidPanel\Broker\Actions\DbDump;
@@ -177,6 +178,7 @@ final class Kernel
         'web.front-router.migrate' => WebFrontRouterMigrate::class,
         'db.list' => DbList::class,
         'db.add' => DbAdd::class,
+        'db.grants.converge' => DbGrantsConverge::class,
         'db.del' => DbDel::class,
         'db.resetpw' => DbResetpw::class,
         'db.engine' => DbEngine::class,

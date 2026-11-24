@@ -72,8 +72,9 @@ final class MariaDBAccess
     public function userForDatabase(string $dbName): string
     {
         $rows = $this->runtime->dbQuery(
-            "SELECT User FROM mysql.db WHERE Db = ? AND User <> '' ORDER BY User",
-            [$dbName]
+            // A108: grants are stored escaped (`app\_1`); older ones raw (`app_1`).
+            "SELECT User FROM mysql.db WHERE Db IN (?, ?) AND User <> '' ORDER BY User",
+            [SqlIdent::mysqlGrantDb($dbName), $dbName]
         );
         foreach ($rows as $row) {
             $user = (string) ($row['User'] ?? '');
@@ -150,7 +151,7 @@ final class MariaDBAccess
     private function grant(string $user, string $host, string $dbName): void
     {
         $this->runtime->dbExec(
-            'GRANT ALL PRIVILEGES ON `' . SqlIdent::mysql($dbName) . '`.* TO ' . $this->ident($user, $host)
+            'GRANT ALL PRIVILEGES ON `' . SqlIdent::mysqlGrantDb($dbName) . '`.* TO ' . $this->ident($user, $host)
         );
     }
 

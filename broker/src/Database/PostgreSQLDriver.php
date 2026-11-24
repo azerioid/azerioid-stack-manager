@@ -81,21 +81,14 @@ final class PostgreSQLDriver implements DatabaseDriver
             throw new BrokerException("Database user {$user} already exists.", 3);
         }
 
-        $escaped = SqlIdent::escapeLiteral($password);
         $createdRole = false;
         $createdDb = false;
         try {
-            // EL defaults password_encryption=md5 while panel pg_hba uses scram-sha-256.
-            // Hash new role passwords as SCRAM so TCP auth from Adminer/apps succeeds.
-            $this->exec("SET password_encryption = 'scram-sha-256'");
-            $this->exec(
-                'CREATE ROLE "' . SqlIdent::postgres($user) . '" WITH LOGIN PASSWORD \'' . $escaped . '\''
-            );
-            $createdRole = true;
-            $this->exec(
-                'CREATE DATABASE "' . SqlIdent::postgres($name) . '" OWNER "' . SqlIdent::postgres($user) . '"'
-            );
-            $createdDb = true;
+            foreach (self::createStatements($name, $user, $password) as $i => $sql) {
+                $this->exec($sql);
+                $createdRole = $createdRole || $i >= 1;
+                $createdDb = $createdDb || $i >= 2;
+            }
         } catch (\Throwable $e) {
             $this->rollback($name, $user, $createdDb, $createdRole);
             if ($e instanceof BrokerException) {
@@ -109,6 +102,60 @@ final class PostgreSQLDriver implements DatabaseDriver
             'user' => $user,
             'hosts' => ['local'],
         ];
+    }
+
+    /**
+     * The statements that create a site database (A108). The last one takes PUBLIC's
+     * default CONNECT and TEMPORARY away: the owner keeps its rights and the panel's role
+     * is a superuser, while every other site's role can no longer connect.
+     *
+     * @return list<string>
+     */
+    public static function createStatements(string $name, string $user, string $password): array
+    {
+        $db = '"' . SqlIdent::postgres($name) . '"';
+        $role = '"' . SqlIdent::postgres($user) . '"';
+
+        return [
+            // EL defaults password_encryption=md5 while panel pg_hba uses scram-sha-256.
+            // Hash new role passwords as SCRAM so TCP auth from Adminer/apps succeeds.
+            "SET password_encryption = 'scram-sha-256'",
+            'CREATE ROLE ' . $role . " WITH LOGIN PASSWORD '" . SqlIdent::escapeLiteral($password) . "'",
+            'CREATE DATABASE ' . $db . ' OWNER ' . $role,
+            self::revokePublicStatement($name),
+        ];
+    }
+
+    public static function revokePublicStatement(string $name): string
+    {
+        return 'REVOKE ALL ON DATABASE "' . SqlIdent::postgres($name) . '" FROM PUBLIC';
+    }
+
+    /**
+     * A108: the same for databases made before — every non-template database owned by a
+     * role that is not a superuser and still open to PUBLIC.
+     *
+     * @return list<string> the databases changed
+     */
+    public function convergePublicAccess(): array
+    {
+        $rows = $this->query(
+            "SELECT d.datname AS name FROM pg_catalog.pg_database d
+             JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
+             WHERE NOT d.datistemplate AND NOT r.rolsuper
+               AND (d.datacl IS NULL OR EXISTS (SELECT 1 FROM unnest(d.datacl) a WHERE a::text LIKE '=%'))"
+        );
+        $changed = [];
+        foreach ($rows as $row) {
+            $name = (string) ($row['name'] ?? '');
+            if ($name === '' || $this->isProtected($name) || preg_match(Validator::DB_NAME_PATTERN, $name) !== 1) {
+                continue;
+            }
+            $this->exec(self::revokePublicStatement($name));
+            $changed[] = $name;
+        }
+
+        return $changed;
     }
 
     public function delete(string $name, string $user): array
