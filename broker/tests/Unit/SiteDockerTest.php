@@ -125,7 +125,9 @@ final class SiteDockerTest extends TestCase
         $dir = \AzerioidPanel\Broker\Vhost\DockerSettings::dir(self::DOMAIN);
         $this->rt->owners[$dir] = ['root', self::USER];
         $this->rt->script(['/usr/bin/stat', '-c', '%G', $dir], 0, self::USER . "\n");
-        $this->assertSame([self::DOMAIN], \AzerioidPanel\Broker\Vhost\DockerSettings::convergeAll($this->rt, new \AzerioidPanel\Broker\Config()));
+        [$code, $json] = $this->broker(['vhost.render.converge'], []);
+        $this->assertSame(0, $code, json_encode($json));
+        $this->assertSame([self::DOMAIN], $json['data']['docker_env'], 'the scheduled converge re-owns it');
         $this->assertSame(['root', \AzerioidPanel\Broker\Vhost\DockerSettings::configGroup(self::DOMAIN)], $this->rt->owners[$dir]);
     }
 
