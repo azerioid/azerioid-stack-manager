@@ -28,6 +28,7 @@ use AzerioidPanel\Broker\Actions\DbAccessShow;
 use AzerioidPanel\Broker\Actions\DbAdd;
 use AzerioidPanel\Broker\Actions\DbGrantsConverge;
 use AzerioidPanel\Broker\Actions\RedisManage;
+use AzerioidPanel\Broker\Actions\VhostRenderConverge;
 use AzerioidPanel\Broker\Actions\DbDel;
 use AzerioidPanel\Broker\Actions\DbClone;
 use AzerioidPanel\Broker\Actions\DbDump;
@@ -122,6 +123,7 @@ final class Kernel
         'vhost.phppool.status' => SitePhpPool::class,
         'vhost.phppool.apply' => SitePhpPool::class,
         'vhost.phppool.converge' => SitePhpPool::class,
+        'vhost.render.converge' => VhostRenderConverge::class,
         'vhost.phppool.set' => SitePhpPool::class,
         'vhost.limits.show' => VhostLimits::class,
         'vhost.limits.set' => VhostLimits::class,

@@ -70,6 +70,74 @@ final class ApacheVhostTest extends TestCase
         $this->assertSame('systemctl', $result['apply']['path']);
     }
 
+    /**
+     * A116: .htaccess cannot pick a handler (no FileInfo), forbidden directives are ignored rather
+     * than fatal, PHP front controllers keep working; A115: repository and Composer state are 404.
+     */
+    public function test_apache_vhost_takes_no_handler_from_htaccess_and_hides_repository_state(): void
+    {
+        $rt = $this->runtime();
+        $cfg = $this->lampConfig();
+        (new ApacheDriver($cfg))->addVhost($rt, $cfg, ['domain' => 'shop.example.com', 'root' => '/data/www/shop.example.com', 'type' => 'php', 'php_version' => '8.4', 'upstream' => null]);
+        $conf = $rt->files['/etc/apache2/sites-available/shop.example.com.conf'];
+        $this->assertStringNotContainsString('AllowOverride All', $conf);
+        $this->assertStringContainsString('AllowOverride AuthConfig Indexes Limit Nonfatal=Override', $conf);
+        $this->assertStringContainsString('FallbackResource /index.php', $conf);
+        $this->assertStringContainsString('RedirectMatch 404 "/\\.(git|composer)(/|$)"', $conf);
+    }
+
+    /**
+     * A115/A116: an old backend vhost gets only the hardening lines, in place — its per-site PHP
+     * socket and everything else stay, and a disabled vhost is not enabled.
+     */
+    public function test_converge_patches_an_old_backend_vhost_in_place_once(): void
+    {
+        $rt = $this->runtime();
+        $cfg = $this->lampConfig();
+        $path = '/etc/apache2/sites-available/shop.example.com.conf';
+        $old = "# azerioid-backend engine=apache\n<VirtualHost 127.0.0.1:8081>\n    ServerName shop.example.com\n    DocumentRoot /data/www/shop.example.com\n"
+            . "    <Directory /data/www/shop.example.com>\n        Options -Indexes +FollowSymLinks\n        AllowOverride All\n        Require all granted\n    </Directory>\n"
+            . "    <FilesMatch \\.php\$>\n        SetHandler \"proxy:unix:/run/php/azv-shop-example-com-8.4.sock|fcgi://localhost\"\n    </FilesMatch>\n</VirtualHost>\n";
+        $rt->files[$path] = $old;
+        $rt->files['/etc/apache2/sites-available/other.conf'] = "# not ours\nAllowOverride All\n";
+        $this->assertSame(['shop.example.com'], (new ApacheDriver($cfg))->patchHardening($rt, $cfg));
+        $new = $rt->files[$path];
+        $this->assertStringNotContainsString('AllowOverride All', $new);
+        $this->assertStringContainsString("        AllowOverride AuthConfig Indexes Limit Nonfatal=Override\n        FallbackResource /index.php\n", $new);
+        $this->assertStringContainsString("    </Directory>\n    RedirectMatch 404 \"/\\.(git|composer)(/|\$)\"\n", $new);
+        $this->assertStringContainsString('proxy:unix:/run/php/azv-shop-example-com-8.4.sock', $new, 'the per-site socket is kept');
+        $this->assertSame("# not ours\nAllowOverride All\n", $rt->files['/etc/apache2/sites-available/other.conf']);
+        $this->assertNull(array_filter(array_column($rt->execLog, 'command'), static fn (array $c): bool => ($c[0] ?? '') === '/usr/sbin/a2ensite') ?: null, 'nothing is enabled');
+        $this->assertSame([], (new ApacheDriver($cfg))->patchHardening($rt, $cfg), 'idempotent');
+    }
+
+    public function test_converge_puts_apache_files_back_when_the_config_test_fails(): void
+    {
+        $rt = $this->runtime();
+        $rt->script(['/usr/sbin/apachectl', '-t'], 1, '', 'Syntax error');
+        $cfg = $this->lampConfig();
+        $path = '/etc/apache2/sites-available/shop.example.com.conf';
+        $old = "# azerioid-backend engine=apache\n<Directory /x>\n        AllowOverride All\n    </Directory>\n";
+        $rt->files[$path] = $old;
+        try {
+            (new ApacheDriver($cfg))->patchHardening($rt, $cfg);
+            $this->fail('expected refusal');
+        } catch (\AzerioidPanel\Broker\BrokerException $e) {
+            $this->assertStringContainsString('put back', $e->getMessage());
+        }
+        $this->assertSame($old, $rt->files[$path]);
+    }
+
+    public function test_nginx_backend_gets_the_hidden_path_block_once_and_proxies_none(): void
+    {
+        $old = "# azerioid-backend engine=nginx\nserver {\n    root /data/www/s;\n    location / {\n        try_files \$uri =404;\n    }\n}\n";
+        $new = \AzerioidPanel\Broker\Web\NginxDriver::hardenedBody($old);
+        $this->assertStringContainsString("    location ~ /\\.(git|composer)(/|\$) {\n        return 404;\n    }\n\n    location / {", $new);
+        $this->assertSame($new, \AzerioidPanel\Broker\Web\NginxDriver::hardenedBody($new));
+        $proxy = "# azerioid-backend engine=nginx\nserver {\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
+        $this->assertSame($proxy, \AzerioidPanel\Broker\Web\NginxDriver::hardenedBody($proxy));
+    }
+
     public function test_rolls_back_when_apachectl_fails(): void
     {
         $rt = $this->runtime();

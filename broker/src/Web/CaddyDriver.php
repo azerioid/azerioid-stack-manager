@@ -22,6 +22,9 @@ use AzerioidPanel\Broker\Vhost\VhostWelcomePage;
 
 final class CaddyDriver implements WebServerDriver
 {
+    /** A115: what every managed file_server block hides. */
+    public const HIDE_LINE = 'hide .git .composer';
+
     public const CADDYFILE = Config::CADDYFILE;
 
     public function stackName(): string
@@ -559,7 +562,8 @@ PROXY;
 PROXY;
             }
             $rootBlock = $type === 'proxy' ? '' : "    root * {$root}\n";
-            $fileServer = $type === 'proxy' ? '' : "    file_server {\n        index index.html index.php\n    }\n";
+            // A115: repository and Composer state are never served (hide matches any path component).
+            $fileServer = $type === 'proxy' ? '' : "    file_server {\n        index index.html index.php\n        " . self::HIDE_LINE . "\n    }\n";
         }
 
         return <<<EOF

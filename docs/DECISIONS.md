@@ -3238,3 +3238,59 @@ Decision: `VhostUser::deprovision` runs `crontab -u <user> -r` after ending the 
 
 Tests: `CronJobsTest` — `forgetOwner` removes only that site's jobs; deprovision removes the crontab before
 `userdel`; `vhost.del` calls the cleanup.
+
+## A115 — Repository and Composer state are never served
+
+Security audit run-2 (2026-11-11), finding AZ-29. Git deploy (A53) checks a site out into its top directory as
+the site, so for a site whose docroot is that directory the checkout's `.git/` — history, remotes, any secret ever
+committed — sat in the served tree; deploy commands also keep `COMPOSER_HOME` (with any `auth.json` tokens) in
+`<top>/.composer`. The web server is in the site's group (A49), so it could read and serve both. No vhost template
+hid them.
+
+Decision: every engine refuses them.
+- Caddy: each `file_server` block carries `hide .git .composer` (`CaddyDriver::HIDE_LINE`); a bare name hides that
+  path component anywhere in the tree.
+- Nginx backends: `location ~ /\.(git|composer)(/|$) { return 404; }` before `location /`.
+- Apache backends: `RedirectMatch 404 "/\.(git|composer)(/|$)"`.
+
+Existing vhosts: the scheduled `vhost.render.converge` (hourly, `azerioid:vhost-render-converge`) patches the
+hardening lines into vhost files written by older releases, in place and line by line — it never re-renders a
+file: a parser that cannot read every detail back (a per-site PHP socket, a runtime block) would drop it and could
+leave a PHP site without its handler, and a disabled backend vhost must stay disabled. Per engine:
+`hide .git .composer` into every managed Caddy `file_server` block that lacks it; the location block before the
+first `location / {` of an Nginx backend that serves files; the Apache lines of A116. The changed files of each
+engine are validated together (`caddy validate`, `nginx -t`, `apachectl -t`) and reloaded; if the engine refuses
+them, every file is put back.
+
+Checked on the fleet host's real binaries: `nginx -t` accepts the location; a loopback-only `caddy run` with the
+block answers 404 for `/.git/HEAD`, `/.git/` and `/.composer/auth.json` and 200 for the site.
+
+Tests: `VhostRenderHardeningTest` (hide line inserted once, proxy vhosts untouched, converge adds it, files put
+back when Caddy refuses), `ApacheVhostTest` (the Apache rule; the Nginx block inserted once and never into a proxy
+vhost).
+
+## A116 — Apache .htaccess cannot choose a handler
+
+Security audit run-2 (2026-11-11), finding AZ-03. Apache backend vhosts granted `AllowOverride All` on the
+site-owned docroot. Apache serves every Apache site, so it can reach every site's PHP-FPM socket; a site's
+`.htaccess` could set `SetHandler "proxy:unix:<another site's socket>|fcgi://localhost"` or
+`RewriteRule … [H=proxy:unix:…]` and have its script run by another site's pool, as that site (reaching a script
+outside the target's tree through `/tmp`, which `open_basedir` allows). Reproduced on Apache 2.4.62 with two
+recording sockets: with `AllowOverride All` both directives reached the other socket. A `<Proxy>`/`<ProxyMatch>`
+guard per vhost cannot help — Apache strips the `unix:` part before matching (the match sees only
+`fcgi://localhost/…`).
+
+Decision: Apache backend `<Directory>` blocks use
+`AllowOverride AuthConfig Indexes Limit Nonfatal=Override` — no FileInfo, so no handler, rewrite or proxy
+directives from `.htaccess` — and `Nonfatal=Override` makes a forbidden directive ignored with a log line instead
+of a 500. PHP vhosts get `FallbackResource /index.php` so front-controller apps (Laravel, WordPress) keep their
+pretty URLs. The converge patches `AllowOverride All` to this line (adding `FallbackResource` where the vhost has a
+PHP handler) and adds the A115 `RedirectMatch` after `</Directory>`. Same test: no request reached the other socket, the site's own scripts and `/pretty/url` reached its
+own pool, nothing returned 500.
+
+Cost: custom rewrite and redirect rules in `.htaccess` stop applying on Apache sites (Caddy and Nginx sites never
+read `.htaccess`). Existing Apache vhosts are re-rendered by the A115 converge.
+
+Tests: `ApacheVhostTest` — the override list, `FallbackResource` and no `AllowOverride All`; the converge patches
+an old backend vhost in place once (its per-site socket kept, nothing enabled), leaves files that are not the
+panel's alone, and puts the files back when `apachectl -t` fails.

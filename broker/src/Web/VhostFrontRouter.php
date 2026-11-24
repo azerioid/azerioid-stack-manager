@@ -279,6 +279,85 @@ final class VhostFrontRouter implements WebServerDriver
         }
     }
 
+    /**
+     * A115/A116: bring vhosts written by older renderers in line with the current ones.
+     *  - Apache/Nginx backends get only the hardening lines patched in (patchHardening): not a
+     *    re-render, which could lose a detail the parser cannot read back, and a disabled vhost
+     *    stays disabled.
+     *  - Caddy vhosts can carry runtime blocks (Octane, PM2, Docker) that are not re-rendered
+     *    here; only `hide .git .composer` is added to each managed `file_server` block, line
+     *    by line, and the whole set is validated — on failure every file is put back.
+     *
+     * @return array{backends: list<string>, caddy: list<string>}
+     */
+    public function convergeRenders(Runtime $runtime, Config $config): array
+    {
+        $out = ['backends' => [], 'caddy' => []];
+        $bind = new BackendEngineBind($runtime, $config);
+        foreach ([VhostEngine::APACHE, VhostEngine::NGINX] as $engine) {
+            if ($bind->installed($engine)) {
+                foreach ($this->backendDriver($engine)->patchHardening($runtime, $this->backendConfig($runtime, $config, $engine)) as $domain) {
+                    $out['backends'][] = $engine . ':' . $domain;
+                }
+            }
+        }
+
+        $originals = [];
+        foreach ($runtime->glob(rtrim($config->caddyConfD, '/') . '/*.conf') as $file) {
+            $file = (string) $file;
+            if (basename($file) === PanelCaddy::SNIPPET) {
+                continue;
+            }
+            $body = $runtime->readFile($file);
+            if (!str_starts_with(ltrim($body), '# azerioid-managed ')) {
+                continue;
+            }
+            $next = self::withHiddenFiles($body);
+            if ($next !== $body) {
+                $originals[$file] = $body;
+                $runtime->writeFile($file, $next, 0644);
+                $out['caddy'][] = basename($file, '.conf');
+            }
+        }
+        if ($originals !== []) {
+            try {
+                \AzerioidPanel\Broker\CaddyApply::run($runtime, $config, 'auto');
+            } catch (\Throwable $e) {
+                foreach ($originals as $file => $body) {
+                    $runtime->writeFile($file, $body, 0644);
+                }
+                throw new BrokerException('Caddy refused the hardened vhosts; they were put back: ' . $e->getMessage(), 1);
+            }
+        }
+
+        return $out;
+    }
+
+    /** Add the hide line to every `file_server {` block that has none, line by line. */
+    public static function withHiddenFiles(string $body): string
+    {
+        $lines = explode("\n", $body);
+        $out = [];
+        $count = count($lines);
+        for ($i = 0; $i < $count; $i++) {
+            $out[] = $lines[$i];
+            if (preg_match('/^(\s*)file_server\s*\{\s*$/', $lines[$i], $m) !== 1) {
+                continue;
+            }
+            $hasHide = false;
+            for ($k = $i + 1; $k < $count && preg_match('/^\s*\}\s*$/', $lines[$k]) !== 1; $k++) {
+                if (preg_match('/^\s*hide\s/', $lines[$k]) === 1) {
+                    $hasHide = true;
+                }
+            }
+            if (!$hasHide) {
+                $out[] = $m[1] . '    ' . CaddyDriver::HIDE_LINE;
+            }
+        }
+
+        return implode("\n", $out);
+    }
+
     private function backendDriver(string $engine): ApacheDriver|NginxDriver
     {
         return $engine === VhostEngine::APACHE ? new ApacheDriver(new Config()) : new NginxDriver(new Config());

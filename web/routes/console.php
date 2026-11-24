@@ -3,6 +3,7 @@
 use App\Console\Commands\ConvergePanelIdentity;
 use App\Console\Commands\ConvergeProgramIdentity;
 use App\Console\Commands\ConvergeDbGrants;
+use App\Console\Commands\ConvergeVhostRenders;
 use App\Console\Commands\ConvergeSitePhpPools;
 use App\Console\Commands\ConvergeVhostIsolation;
 use App\Console\Commands\DeployScheduled;
@@ -43,6 +44,10 @@ Schedule::command(ConvergeSitePhpPools::class)->everyFiveMinutes()->withoutOverl
 // A108: database grants confined to their own database (escaped MariaDB names, PostgreSQL
 // site databases closed to PUBLIC). A no-op once converged.
 Schedule::command(ConvergeDbGrants::class)->hourly()->withoutOverlapping();
+
+// A115/A116: vhosts written by older renderers get the current hardening (hidden .git/.composer,
+// no handler overrides in Apache .htaccess). A no-op once converged.
+Schedule::command(ConvergeVhostRenders::class)->hourly()->withoutOverlapping();
 
 // A56: run every site-bound program (Octane, PM2, operator programs) as its own site.
 Schedule::command(ConvergeProgramIdentity::class)->everyFiveMinutes()->withoutOverlapping();
