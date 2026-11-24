@@ -9,9 +9,10 @@ _admin_create_manual_hint() {
     echo "  The panel stack is installed and running."
     echo "  Create an admin account using either:"
     echo "    • Browser:  ${setup_url}"
-    echo "    • CLI (password via env only — not argv):"
-    echo "        sudo -u ${PANEL_USER} env PANEL_INSTALL_ADMIN_PASSWORD='your-password' \\"
-    echo "          bash -c 'cd ${PREFIX}/web && $(php_bin) artisan panel:create-admin --email=you@example.com'"
+    echo "    • CLI (the password is read from a prompt, never put on a command line):"
+    echo "        read -rs -p 'Admin password: ' PANEL_INSTALL_ADMIN_PASSWORD; echo; export PANEL_INSTALL_ADMIN_PASSWORD"
+    echo "        runuser -u ${PANEL_USER} -- bash -c 'cd ${PREFIX}/web && $(php_bin) artisan panel:create-admin --email=you@example.com'"
+    echo "        unset PANEL_INSTALL_ADMIN_PASSWORD"
 }
 
 _panel_admin_email_if_exists() {
@@ -34,10 +35,13 @@ _invoke_create_panel_admin() {
     local allow_opt="${2:-}"
     local admin_password="$3"
 
-    sudo -u "${PANEL_USER}" -H env \
+    # A112: the password reaches artisan through the environment only. As an argument to sudo
+    # or env it was on their command lines, readable by every local account in /proc while
+    # they ran. runuser keeps the caller's environment (setting HOME, USER and SHELL for the
+    # target), so the assignment below never appears in any argv.
+    PANEL_INSTALL_ADMIN_PASSWORD="${admin_password}" runuser -u "${PANEL_USER}" -- env \
         COMPOSER_HOME="${COMPOSER_HOME:-/tmp}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
-        PANEL_INSTALL_ADMIN_PASSWORD="${admin_password}" \
         bash -c "cd '${PREFIX}/web' && '${php_bin}' artisan panel:create-admin --email='${ADMIN_EMAIL}' --name='${ADMIN_NAME}' ${allow_opt}"
 }
 
