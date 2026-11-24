@@ -182,6 +182,9 @@ final class FakeRuntime implements Runtime
         };
     }
 
+    /** @var list<string> which execReader closures ended a stream ('finish' or 'abort') */
+    public array $readerCalls = [];
+
     public function execReader(array $command, ?string $cwd = null, int $timeoutSeconds = 3600): array
     {
         $result = $this->exec($command, null, min($timeoutSeconds, 30));
@@ -198,7 +201,14 @@ final class FakeRuntime implements Runtime
 
                 return $out;
             },
-            'finish' => static fn (): ExecResult => new ExecResult($command, $result->exitCode, '', $result->stderr),
+            'finish' => function () use ($command, $result): ExecResult {
+                $this->readerCalls[] = 'finish';
+
+                return new ExecResult($command, $result->exitCode, '', $result->stderr);
+            },
+            'abort' => function (): void {
+                $this->readerCalls[] = 'abort';
+            },
         ];
     }
 

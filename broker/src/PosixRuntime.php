@@ -283,31 +283,68 @@ final class PosixRuntime implements Runtime
 
         $deadline = microtime(true) + $timeoutSeconds;
         $stderr = '';
+        $closed = false;
 
-        $read = static function (int $n) use ($pipes, &$stderr, $deadline): string {
-            if ($n <= 0) {
+        // A121: stderr is diagnostics only — keep the first 64 KiB so a chatty child cannot grow root's memory.
+        $drainErr = static function () use ($pipes, &$stderr): void {
+            $err = stream_get_contents($pipes[2]);
+            if (is_string($err) && $err !== '' && strlen($stderr) < 65536) {
+                $stderr .= substr($err, 0, 65536 - strlen($stderr));
+            }
+        };
+
+        // A121: stop the child and discard its output — the error path and the deadline use this,
+        // never finish(), which would read the rest of the stream and wait for the child.
+        $abort = static function () use ($proc, $pipes, &$closed): void {
+            if ($closed) {
+                return;
+            }
+            $closed = true;
+            @proc_terminate($proc, 9);
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            @proc_close($proc);
+        };
+
+        $read = static function (int $n) use ($pipes, $deadline, $drainErr, $abort, &$closed): string {
+            if ($n <= 0 || $closed) {
                 return '';
             }
-            // Drain stderr opportunistically so a chatty child cannot deadlock on
-            // a full pipe while we are only reading stdout.
-            $err = stream_get_contents($pipes[2]);
-            if (is_string($err) && $err !== '') {
-                $stderr .= $err;
-            }
-            if (microtime(true) > $deadline) {
-                throw new BrokerException('Command timed out while streaming output.', 1);
+            while (true) {
+                // Drain stderr opportunistically so a chatty child cannot deadlock on
+                // a full pipe while we are only reading stdout.
+                $drainErr();
+                $left = $deadline - microtime(true);
+                if ($left <= 0) {
+                    $abort();
+                    throw new BrokerException('Command timed out while streaming output.', 1);
+                }
+                $r = [$pipes[1]];
+                $w = null;
+                $e = null;
+                $sec = (int) min(1, floor($left));
+                $usec = $sec >= 1 ? 0 : (int) (($left - floor($left)) * 1000000);
+                $ready = @stream_select($r, $w, $e, $sec, $usec);
+                if ($ready === false) {
+                    $abort();
+                    throw new BrokerException('Failed to wait for command output.', 1);
+                }
+                if ($ready > 0) {
+                    break;
+                }
             }
             $chunk = fread($pipes[1], $n);
 
             return $chunk === false ? '' : $chunk;
         };
 
-        $finish = static function () use ($proc, $pipes, &$stderr, $command): ExecResult {
-            $rest = stream_get_contents($pipes[1]);
-            $err = stream_get_contents($pipes[2]);
-            if (is_string($err) && $err !== '') {
-                $stderr .= $err;
+        $finish = static function () use ($proc, $pipes, &$stderr, $command, $drainErr, &$closed): ExecResult {
+            if ($closed) {
+                throw new BrokerException('Command was already aborted.', 1);
             }
+            $closed = true;
+            $rest = stream_get_contents($pipes[1]);
+            $drainErr();
             fclose($pipes[1]);
             fclose($pipes[2]);
             $code = proc_close($proc);
@@ -315,7 +352,7 @@ final class PosixRuntime implements Runtime
             return new ExecResult($command, $code, is_string($rest) ? $rest : '', $stderr);
         };
 
-        return ['read' => $read, 'finish' => $finish];
+        return ['read' => $read, 'finish' => $finish, 'abort' => $abort];
     }
 
     public function appendWriter(string $path, int $mode = 0600): callable

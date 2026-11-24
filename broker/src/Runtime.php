@@ -26,7 +26,7 @@ interface Runtime
      * returned finish() afterwards to reap the child and obtain its exit status.
      *
      * @param  list<string>  $command
-     * @return array{read: callable(int):string, finish: callable():ExecResult}
+     * @return array{read: callable(int):string, finish: callable():ExecResult, abort: callable():void}
      */
     public function execReader(array $command, ?string $cwd = null, int $timeoutSeconds = 3600): array;
 

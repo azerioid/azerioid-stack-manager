@@ -51,9 +51,10 @@ final class BackupPipeline
                 $kdfName
             );
         } catch (\Throwable $e) {
-            // Reap the child so it cannot linger, then discard partial output.
+            // A121: stop the child (finish() would read the rest of its stream and wait for it),
+            // then discard partial output.
             try {
-                ($proc['finish'])();
+                ($proc['abort'])();
             } catch (\Throwable) {
                 // ignore
             }
