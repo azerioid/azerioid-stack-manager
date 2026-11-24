@@ -48,7 +48,11 @@ final class RedisAcl
      * all channels (SCAN, RANDOMKEY, PUBSUB) — Redis checks values against the key pattern, not
      * the names those return. Laravel's connection naming stays allowed.
      */
-    private const SITE_EXTRA = '-scan -randomkey -pubsub +client|setname +client|getname +client|id';
+    private const SITE_EXTRA = '-scan -randomkey -pubsub -script|flush -script|kill -client|tracking -client|caching'
+        . ' +client|setname +client|getname +client|id';
+
+    /** Redis 7+: functions are instance-wide libraries — a site may not load, delete or flush them. */
+    private const SITE_EXTRA_7 = '-function -fcall -fcall_ro';
 
     public function __construct(
         private readonly Runtime $runtime,
@@ -92,6 +96,12 @@ final class RedisAcl
         $conf = $this->confPath() ?? throw new BrokerException('Redis is not installed (redis.conf not found).', 3);
         $wasManaged = $this->isManaged();
         $state = $this->state();
+        if (!$wasManaged) {
+            // An instance someone already secured by hand is not taken over blindly: its own
+            // users or ACL file stay theirs, and an existing password stays required.
+            $state += self::inspectConf($this->runtime->readFile($conf));
+        }
+        $state['redis_major'] = $this->redisMajor();
         if (!isset($state['admin_password'])) {
             $state['admin_password'] = Secrets::generatePassword();
         }
@@ -131,10 +141,11 @@ final class RedisAcl
         $domain = $this->assertVhost($domain);
         $state = $this->managedState();
         if (!isset($state['sites'][$domain])) {
-            $slug = VhostUser::slug($domain);
+            // A fresh suffix each time: a site later created under the same name does not
+            // inherit the keys an earlier one left behind.
             $state['sites'][$domain] = [
                 'user' => VhostUser::username($domain),
-                'prefix' => $slug . ':',
+                'prefix' => VhostUser::slug($domain) . '-' . bin2hex(random_bytes(3)) . ':',
                 'password' => Secrets::generatePassword(),
             ];
             $this->saveState($state);
@@ -234,14 +245,49 @@ final class RedisAcl
         return implode("\n", $lines);
     }
 
+    /**
+     * What a redis.conf the panel does not manage yet already requires (A111 review): its
+     * `requirepass` is kept as the `default` user's password until per-site users are
+     * enforced; inline `user` lines or another ACL file mean the operator manages users, and
+     * the panel refuses rather than replace them.
+     *
+     * @return array<string,string>
+     */
+    public static function inspectConf(string $content): array
+    {
+        $out = [];
+        foreach (explode("\n", $content) as $line) {
+            $trim = trim($line);
+            if (preg_match('/^user\s/i', $trim) === 1) {
+                throw new BrokerException('redis.conf defines its own users; the panel will not replace them. Move them out or manage Redis users yourself.', 3);
+            }
+            if (preg_match('/^aclfile\s+(\S+)/i', $trim, $m) === 1 && trim($m[1], '"\'') !== self::ACL_FILE) {
+                throw new BrokerException('Redis already uses its own ACL file (' . $m[1] . '); the panel will not replace it.', 3);
+            }
+            if (preg_match('/^requirepass\s+(.+)$/i', $trim, $m) === 1) {
+                $pass = trim($m[1]);
+                $pass = strlen($pass) >= 2 && in_array($pass[0], ['"', "'"], true) && str_ends_with($pass, $pass[0]) ? substr($pass, 1, -1) : $pass;
+                if ($pass !== '') {
+                    $out['default_password_hash'] = hash('sha256', $pass);
+                }
+            }
+        }
+
+        return $out;
+    }
+
     /** @param array<string,mixed> $state */
     public static function renderAcl(array $state): string
     {
         // No comment lines: Redis refuses an ACL file with anything but `user` lines and will
         // not start (found against a real redis-server 7.4).
+        $default = isset($state['default_password_hash']) && preg_match('/^[0-9a-f]{64}$/', (string) $state['default_password_hash']) === 1
+            ? '#' . $state['default_password_hash']
+            : 'nopass';
         $out = ($state['enforced'] ?? false)
             ? "user default off\n"
-            : "user default on nopass ~* &* +@all\n";
+            : "user default on {$default} ~* &* +@all\n";
+        $extra = self::SITE_EXTRA . ((int) ($state['redis_major'] ?? 7) >= 7 ? ' ' . self::SITE_EXTRA_7 : '');
         $out .= 'user ' . self::ADMIN_USER . ' on #' . hash('sha256', (string) $state['admin_password']) . " ~* &* +@all\n";
         foreach ((array) ($state['sites'] ?? []) as $site) {
             $user = (string) $site['user'];
@@ -250,7 +296,7 @@ final class RedisAcl
                 continue;
             }
             $out .= "user {$user} on #" . hash('sha256', (string) $site['password'])
-                . " resetchannels ~{$prefix}* &{$prefix}* +@all -@admin -@dangerous " . self::SITE_EXTRA . "\n";
+                . " resetchannels ~{$prefix}* &{$prefix}* +@all -@admin -@dangerous {$extra}\n";
         }
 
         return $out;
@@ -366,6 +412,13 @@ final class RedisAcl
         $this->runtime->mkdir(dirname(self::STATE), 0750);
         $this->runtime->writeFile(self::STATE, (string) json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", 0600);
         $this->runtime->chmod(self::STATE, 0600);
+    }
+
+    private function redisMajor(): int
+    {
+        $v = $this->runtime->exec(['/usr/bin/redis-server', '--version'], null, 10);
+
+        return preg_match('/v=(\d+)\./', $v->stdout, $m) === 1 ? (int) $m[1] : 7;
     }
 
     private function unit(): string

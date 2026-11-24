@@ -3122,6 +3122,16 @@ site's key, channel, FLUSHDB, KEYS, CONFIG, SCAN, RANDOMKEY and PUBSUB CHANNELS 
 that Redis refuses an ACL file containing a comment line and then does not start — the file has none. EL9's Redis
 6.2 supports every rule used (`resetchannels` since 6.2, subcommand rules since 6.0) but was not run here.
 
+**Review addendum (v2.15.7, before any host ran v2.15.6).** (1) An instance someone already secured is not opened
+up: a `requirepass` in `redis.conf` becomes the `default` user's password (as a hash) until per-site users are
+enforced, never `nopass`; inline `user` lines or an ACL file of the operator's own make the panel refuse instead of
+replacing them. (2) A site's prefix carries a random suffix chosen when Redis is enabled for it
+(`<slug>-<6 hex>:`), so a site later created under the same name does not reach the keys an earlier one left; a
+vhost deletion that could not remove the Redis user says so in its result. (3) Instance-wide scripting state is
+closed to sites as well: `SCRIPT FLUSH`/`KILL`, `CLIENT TRACKING`/`CACHING`, and on Redis 7+ (`FUNCTION` does not exist
+in 6.2, and an unknown command makes the whole file invalid) `FUNCTION`, `FCALL`, `FCALL_RO`; the major version is
+read from `redis-server --version`. `SCRIPT LOAD`/`EVALSHA` stay. All re-checked on redis-server 7.4.
+
 Memcached: no access control exists to scope per site. The component is described as single-tenant — every site
 can read and change every item — to be used for one site or for data that is not private.
 
