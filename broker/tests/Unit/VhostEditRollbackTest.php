@@ -18,7 +18,7 @@ final class VhostEditRollbackTest extends TestCase
     {
         $this->rt = new FakeRuntime();
         $this->rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
-        $this->rt->files['/etc/caddy/conf.d/projob.az.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');
+        $this->rt->files['/etc/caddy/conf.d/site1.example.com.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-site1.conf');
         $this->rt->files['/etc/caddy/conf.d/default.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-default.conf');
         $this->rt->files['/etc/caddy/conf.d/shop.example.com.conf'] = <<<'CADDY'
 shop.example.com {
@@ -122,7 +122,7 @@ CADDY;
     public function test_refuses_to_edit_readonly_vhost(): void
     {
         ob_start();
-        $code = $this->kernel->run(['broker', 'vhost.edit', 'projob.az'], ['root' => '/data/www/x']);
+        $code = $this->kernel->run(['broker', 'vhost.edit', 'site1.example.com'], ['root' => '/data/www/x']);
         $out = ob_get_clean();
 
         $this->assertNotSame(0, $code);

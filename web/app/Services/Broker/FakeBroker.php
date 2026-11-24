@@ -179,9 +179,9 @@ final class FakeBroker
                 'source' => '/etc/caddy/conf.d/shop.example.com.conf',
             ],
             [
-                'domains' => ['projob.az'],
-                'domain' => 'projob.az',
-                'root' => '/data/www/projob.az',
+                'domains' => ['site1.example.com'],
+                'domain' => 'site1.example.com',
+                'root' => '/data/www/site1.example.com',
                 'php_socket' => null,
                 'php_version' => null,
                 'type' => 'proxy',
@@ -206,7 +206,7 @@ final class FakeBroker
                 'laravel_app_detail' => null,
                 'readonly' => true,
                 'enabled' => true,
-                'source' => '/etc/caddy/conf.d/projob.az.conf',
+                'source' => '/etc/caddy/conf.d/site1.example.com.conf',
             ],
             [
                 'domains' => ['node.example.com'],
@@ -287,7 +287,7 @@ final class FakeBroker
         $this->databases = [
             ['name' => 'mysql', 'size_bytes' => 1_200_000, 'table_count' => 31, 'users' => [], 'protected' => true],
             ['name' => 'lacmp_panel', 'size_bytes' => 80_000, 'table_count' => 6, 'users' => [['user' => 'lacmp_panel', 'host' => 'localhost']], 'protected' => true],
-            ['name' => 'projob', 'size_bytes' => 42_000_000, 'table_count' => 48, 'users' => [['user' => 'projob', 'host' => 'localhost']], 'protected' => false],
+            ['name' => 'site1db', 'size_bytes' => 42_000_000, 'table_count' => 48, 'users' => [['user' => 'site1db', 'host' => 'localhost']], 'protected' => false],
         ];
         $this->mongoDatabases = [
             ['name' => 'admin', 'size_bytes' => 1_000, 'table_count' => 0, 'users' => [['user' => 'azerioid_panel_admin', 'host' => 'instance']], 'protected' => true],
@@ -505,7 +505,7 @@ final class FakeBroker
                 'updates.apply.security' => $this->requireConfirm($stdin, 'APPLY-SECURITY', ['action' => $action, 'exit' => 0, 'output' => 'unattended-upgrade fake ok']),
                 'updates.apply.all' => $this->requireConfirm($stdin, 'APPLY-ALL', ['action' => $action, 'exit' => 0, 'output' => 'apt-get upgrade fake ok']),
                 'tls.certs' => ['certs' => [[
-                    'domain' => 'projob.az', 'ok' => true, 'issuer' => 'C=US, O=Let\'s Encrypt', 'issuer_type' => 'lets_encrypt',
+                    'domain' => 'site1.example.com', 'ok' => true, 'issuer' => 'C=US, O=Let\'s Encrypt', 'issuer_type' => 'lets_encrypt',
                     'valid_from' => 'Aug  1 00:00:00 2026 GMT',
                     'valid_to' => 'Oct 30 00:00:00 2026 GMT', 'days_remaining' => 63, 'renewal' => 'ok', 'tls_mode' => 'auto',
                 ]]],
@@ -2332,7 +2332,7 @@ final class FakeBroker
     {
         $target = (string) ($stdin['target'] ?? '');
         $overwrite = (bool) ($stdin['overwrite'] ?? false);
-        $existing = in_array($target, ['projob', 'mysql', 'lacmp_panel'], true);
+        $existing = in_array($target, ['site1db', 'mysql', 'lacmp_panel'], true);
         if ($existing && ! $overwrite) {
             throw new BrokerCallException('Target database exists. Restore into a new name, or send overwrite confirm OVERWRITE.', 3);
         }

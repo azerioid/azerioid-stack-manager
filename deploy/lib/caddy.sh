@@ -221,7 +221,7 @@ if access == "public":
     tls internal
 {common}
 }}
-# Catch-all: a lone site on this port would otherwise match any Host (e.g. let.az:3169).
+# Catch-all: a lone site on this port would otherwise match any Host (e.g. site3.example.com:3169).
 https://:{port} {{
     tls internal
     respond "Misdirected request." 421

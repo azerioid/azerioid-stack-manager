@@ -2,7 +2,7 @@
 
 **Analysis date:** 2026-09-26
 **Repository HEAD:** `25a0d88` (docs: refresh README for v1.6 features and opaque row-actions menu)
-**Live verification host:** `64.226.78.176` (Ubuntu 24.04.4 LTS, kernel 6.8.0-139, panel `v1.6.0` @ `689916c`)
+**Live verification host:** `203.0.113.10` (Ubuntu 24.04.4 LTS, kernel 6.8.0-139, panel `v1.6.0` @ `689916c`)
 **Mode:** Read-only. No files modified, no dependencies touched, no server state changed.
 
 ---
@@ -1304,7 +1304,7 @@ WEB_USER=www-data, --web-user=  -> proceed, exit 0 (explicit operator override h
 **Migration order (keeps a working broker path at every intermediate step):**
 additive sudoers granting **both** identities → ownership migration → pool user → queue unit → broker.json / tmpfiles / scheduler cron → FPM reload (restart fallback if the socket is not re-owned) → **verify: unit active + socket owner + real broker call as the new identity** → only then drop the old grant → restart queue. Any failure reverts the entire journal and restarts services.
 
-## 3. Live evidence on `64.226.78.176`
+## 3. Live evidence on `203.0.113.10`
 
 **BEFORE:**
 ```
@@ -1377,7 +1377,7 @@ Also not done (deliberately, out of P0 scope): nothing was committed to git.
 
 **Is the passwordless-root-sudo-from-any-hosted-site-code path now closed?**
 
-- **On the already-live `64.226.78.176`: YES.** `www-data` — the identity every hosted PHP site runs as — has no sudo entitlement at all (`sudo: a password is required`), holds no writable file anywhere under `PREFIX`, is not in the `caddy` group, and `caddy`'s shell is `nologin`. Panel, queue, CLI and all 9 site vhosts verified functional and byte-identical to baseline.
+- **On the already-live `203.0.113.10`: YES.** `www-data` — the identity every hosted PHP site runs as — has no sudo entitlement at all (`sudo: a password is required`), holds no writable file anywhere under `PREFIX`, is not in the `caddy` group, and `caddy`'s shell is `nologin`. Panel, queue, CLI and all 9 site vhosts verified functional and byte-identical to baseline.
 - **On fresh installs: YES by code path, not yet by live proof.** The ordering fix plus the new refuse-to-install guard make the vulnerable outcome unreachable, demonstrated deterministically — but a real clean-host install has not been run (§7).
 - **Fully structurally isolated? NO, and not claimed.** Site pools retain process-spawning unless `--lockdown-site-pools` is used, and `caddy` rather than a dedicated account holds the grant. Both are A39 Part A.
 

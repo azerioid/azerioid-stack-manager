@@ -30,7 +30,7 @@ shop.example.com {
     file_server
 }
 CADDY;
-        $this->rt->files['/etc/caddy/conf.d/projob.az.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');
+        $this->rt->files['/etc/caddy/conf.d/site1.example.com.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-site1.conf');
         $this->rt->dirs['/data/www/shop.example.com'] = true;
         $this->rt->uid = 1000;
         $this->kernel = new Kernel($this->cfg, $this->rt);
@@ -48,7 +48,7 @@ CADDY;
 
     public function test_rejects_readonly_vhost_at_broker(): void
     {
-        [$code, $json] = $this->capture(['broker', 'vhost.files.list', 'projob.az'], ['path' => '']);
+        [$code, $json] = $this->capture(['broker', 'vhost.files.list', 'site1.example.com'], ['path' => '']);
         $this->assertSame(3, $code, json_encode($json));
         $this->assertStringContainsString('read-only', strtolower((string) ($json['error'] ?? '')));
         $this->assertSame([], $this->rt->execLog);

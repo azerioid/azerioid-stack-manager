@@ -65,11 +65,11 @@ class ProcessesPolicyTest extends TestCase
             ->call('openVhostTied')
             ->set('name', 'evil-ro')
             ->set('command', 'node app.js')
-            ->set('directory', '/data/www/projob.az')
-            ->set('vhostDomain', 'projob.az')
+            ->set('directory', '/data/www/site1.example.com')
+            ->set('vhostDomain', 'site1.example.com')
             ->set('upstreamPort', '3000')
             ->call('create')
-            ->assertSet('error', 'projob.az is not an editable panel vhost.');
+            ->assertSet('error', 'site1.example.com is not an editable panel vhost.');
 
         $this->assertArrayNotHasKey('evil-ro', $fake->supervisorPrograms);
     }

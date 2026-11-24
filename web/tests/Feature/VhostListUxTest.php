@@ -63,7 +63,7 @@ final class VhostListUxTest extends TestCase
         $this->assertNotContains('Container shell', $labels);
         $this->assertNotContains('Reload application', $labels);
 
-        $readonly = collect($page->vhosts)->firstWhere('domain', 'projob.az');
+        $readonly = collect($page->vhosts)->firstWhere('domain', 'site1.example.com');
         $this->assertIsArray($readonly);
         $roLabels = $this->labels($page->vhostActionGroups($readonly));
         $this->assertNotContains('Delete', $roLabels);
@@ -101,7 +101,7 @@ final class VhostListUxTest extends TestCase
         $this->actingAs($this->admin());
         $page = Livewire::test(\App\Livewire\VhostsPage::class)->instance();
         $status = $page->vhostStatus([
-            'domain' => 'raww.az',
+            'domain' => 'site2.example.com',
             'tls_status' => [
                 'failed' => true,
                 'pending' => false,

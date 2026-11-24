@@ -67,13 +67,13 @@ APACHE;
     {
         $contents = <<<'APACHE'
 <VirtualHost *:443>
-    ServerName 157.245.84.199
+    ServerName 203.0.113.20
     SSLEngine on
     DocumentRoot /usr/local/lib/azerioid-panel/web/public
 </VirtualHost>
 APACHE;
         $parsed = ApacheParser::parseFile('/etc/apache2/sites-available/azerioid-panel.conf', $contents, []);
         $this->assertTrue($parsed['readonly']);
-        $this->assertSame('157.245.84.199', $parsed['domain']);
+        $this->assertSame('203.0.113.20', $parsed['domain']);
     }
 }

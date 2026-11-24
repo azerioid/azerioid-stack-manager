@@ -14,9 +14,9 @@ final class PanelCaddyTest extends TestCase
 {
     public function test_render_includes_catch_all_when_public_ip_present(): void
     {
-        $body = (new PanelCaddy())->render(new Config(), $this->spec('201.79.10.81'));
+        $body = (new PanelCaddy())->render(new Config(), $this->spec('203.0.113.30'));
         $this->assertStringContainsString('http://127.0.0.1:3169 {', $body);
-        $this->assertStringContainsString('https://201.79.10.81:3169 {', $body);
+        $this->assertStringContainsString('https://203.0.113.30:3169 {', $body);
         $this->assertStringContainsString('https://:3169 {', $body);
         $this->assertStringContainsString('respond "Misdirected request." 421', $body);
         $this->assertStringNotContainsString("panel.example.com {\n", $body);
@@ -28,18 +28,18 @@ final class PanelCaddyTest extends TestCase
         $this->assertStringContainsString('http://127.0.0.1:3169 {', $body);
         $this->assertStringContainsString('bind 127.0.0.1', $body);
         $this->assertStringNotContainsString('https://:3169', $body);
-        $this->assertStringNotContainsString('201.79.10.81', $body);
+        $this->assertStringNotContainsString('203.0.113.30', $body);
     }
 
     public function test_render_white_label_is_host_specific_on_443(): void
     {
-        $body = (new PanelCaddy())->render(new Config(), $this->spec('201.79.10.81', 'panel.azerioid.io', 'auto'));
+        $body = (new PanelCaddy())->render(new Config(), $this->spec('203.0.113.30', 'panel.azerioid.io', 'auto'));
         $this->assertStringContainsString('# azerioid-managed panel type=php domain=panel.azerioid.io tls=auto', $body);
         $this->assertStringContainsString("panel.azerioid.io {\n", $body);
         $this->assertStringNotContainsString('panel.azerioid.io:3169', $body);
         $after = explode("panel.azerioid.io {", $body, 2)[1] ?? '';
         $this->assertStringNotContainsString('tls internal', $after);
-        $this->assertStringContainsString('https://201.79.10.81:3169 {', $body);
+        $this->assertStringContainsString('https://203.0.113.30:3169 {', $body);
         $this->assertStringContainsString('https://:3169 {', $body);
     }
 
@@ -50,7 +50,7 @@ http://127.0.0.1:3169 {
     bind 127.0.0.1
     root * /usr/local/lib/azerioid-panel/web/public
 }
-https://201.79.10.81:3169 {
+https://203.0.113.30:3169 {
     tls internal
     root * /usr/local/lib/azerioid-panel/web/public
 }
@@ -60,7 +60,7 @@ https://:3169 {
 }
 CADDY;
         $parsed = CaddyParser::parseFile('/etc/caddy/conf.d/azerioid-panel.conf', $contents, []);
-        $this->assertSame(['201.79.10.81:3169', '127.0.0.1:3169'], $parsed['domains']);
+        $this->assertSame(['203.0.113.30:3169', '127.0.0.1:3169'], $parsed['domains']);
         $this->assertNotContains(':3169', $parsed['domains']);
     }
 
@@ -103,14 +103,14 @@ CADDY;
     public function test_refuses_site_vhost_hostname(): void
     {
         $rt = $this->runtime();
-        $rt->files['/etc/caddy/conf.d/let.az.conf'] = <<<'CADDY'
-# azerioid-managed engine=caddy type=php php=8.4 root=/data/www/let.az
-let.az {
-    root * /data/www/let.az
+        $rt->files['/etc/caddy/conf.d/site3.example.com.conf'] = <<<'CADDY'
+# azerioid-managed engine=caddy type=php php=8.4 root=/data/www/site3.example.com
+site3.example.com {
+    root * /data/www/site3.example.com
     file_server
 }
 CADDY;
-        [$code, $decoded] = $this->dispatch($rt, ['broker', 'panel.domain.set'], ['domain' => 'let.az', 'tls_mode' => 'internal']);
+        [$code, $decoded] = $this->dispatch($rt, ['broker', 'panel.domain.set'], ['domain' => 'site3.example.com', 'tls_mode' => 'internal']);
         $this->assertSame(3, $code);
         $this->assertFalse($decoded['ok']);
         $this->assertStringContainsString('already a site vhost', (string) $decoded['error']);

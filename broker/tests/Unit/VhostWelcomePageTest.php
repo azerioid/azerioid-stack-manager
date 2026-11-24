@@ -19,7 +19,7 @@ final class VhostWelcomePageTest extends TestCase
     {
         $this->rt = new FakeRuntime();
         $this->rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
-        $this->rt->files['/etc/caddy/conf.d/projob.az.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-projob.conf');
+        $this->rt->files['/etc/caddy/conf.d/site1.example.com.conf'] = file_get_contents(__DIR__ . '/../fixtures/vhost-site1.conf');
         $this->cfg = new Config();
         $this->kernel = new Kernel($this->cfg, $this->rt);
     }

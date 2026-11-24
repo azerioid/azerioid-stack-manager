@@ -156,7 +156,7 @@ class AzerioidCliTest extends TestCase
     {
         $code = Artisan::call('azerioid:vhost', [
             'action' => 'del',
-            '--domain' => 'projob.az',
+            '--domain' => 'site1.example.com',
         ]);
         $out = Artisan::output();
         $this->assertNotSame(0, $code, $out);
@@ -264,7 +264,7 @@ class AzerioidCliTest extends TestCase
             'action' => 'access',
             'subcommand' => 'set',
             '--engine' => 'mariadb',
-            '--name' => 'projob',
+            '--name' => 'site1db',
             '--mode' => 'global',
         ]);
         $out = Artisan::output();
@@ -275,36 +275,36 @@ class AzerioidCliTest extends TestCase
             'action' => 'access',
             'subcommand' => 'set',
             '--engine' => 'mariadb',
-            '--name' => 'projob',
+            '--name' => 'site1db',
             '--mode' => 'specific',
             '--ip' => '1.2.3.4; DROP TABLE x',
         ]);
         $injectOut = Artisan::output();
         $this->assertNotSame(0, $inject, $injectOut);
         $this->assertStringContainsString('Invalid IP', $injectOut);
-        $this->assertArrayNotHasKey('projob', $this->app->make(FakeBroker::class)->dbAccess['mariadb'] ?? []);
+        $this->assertArrayNotHasKey('site1db', $this->app->make(FakeBroker::class)->dbAccess['mariadb'] ?? []);
 
         $ok = Artisan::call('azerioid:db', [
             'action' => 'access',
             'subcommand' => 'set',
             '--engine' => 'mariadb',
-            '--name' => 'projob',
+            '--name' => 'site1db',
             '--mode' => 'specific',
             '--ip' => '203.0.113.5',
         ]);
         $this->assertSame(0, $ok, Artisan::output());
-        $this->assertSame(['203.0.113.5'], $this->app->make(FakeBroker::class)->dbAccess['mariadb']['projob']['ips']);
+        $this->assertSame(['203.0.113.5'], $this->app->make(FakeBroker::class)->dbAccess['mariadb']['site1db']['ips']);
 
         $global = Artisan::call('azerioid:db', [
             'action' => 'access',
             'subcommand' => 'set',
             '--engine' => 'mariadb',
-            '--name' => 'projob',
+            '--name' => 'site1db',
             '--mode' => 'global',
             '--confirm' => true,
         ]);
         $this->assertSame(0, $global, Artisan::output());
-        $this->assertSame('global', $this->app->make(FakeBroker::class)->dbAccess['mariadb']['projob']['mode']);
+        $this->assertSame('global', $this->app->make(FakeBroker::class)->dbAccess['mariadb']['site1db']['mode']);
 
         $row = AuditLog::query()->where('action', 'db.access.set')->latest('id')->first();
         $this->assertNotNull($row);
@@ -419,7 +419,7 @@ class AzerioidCliTest extends TestCase
                 'action' => 'restore',
                 '--local' => true,
                 '--file' => '/var/lib/azerioid-panel/backups/db/all/fixture.bin',
-                '--target' => 'projob_restore_1',
+                '--target' => 'site1db_restore_1',
             ]);
             $this->assertSame(2, $code);
             $this->assertStringContainsString('--confirm', Artisan::output());

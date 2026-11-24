@@ -76,7 +76,7 @@ CONF;
         $rt->files['/etc/php/8.4/fpm/pool.d/www.conf'] = "[www]\n;request_terminate_timeout = 0\n";
         $rt->files['/etc/php/8.4/fpm/php.ini'] = "max_execution_time = 0\n";
         $rt->files['/etc/caddy/Caddyfile'] = "{\n    admin off\n}\nimport /etc/caddy/conf.d/*.conf\n";
-        $rt->files['/etc/caddy/conf.d/let.az.conf'] = "let.az {\n    php_fastcgi unix//run/php/php8.4-fpm.sock\n}\n";
+        $rt->files['/etc/caddy/conf.d/site3.example.com.conf'] = "site3.example.com {\n    php_fastcgi unix//run/php/php8.4-fpm.sock\n}\n";
         $rt->script(['/usr/bin/systemctl', 'is-active', 'php8.4-fpm'], 0, "active\n");
         $rt->script(['/usr/bin/systemctl', 'reload', 'php8.4-fpm'], 0);
         $rt->script(['/usr/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile'], 0, 'Valid configuration');
@@ -90,7 +90,7 @@ CONF;
         $this->assertTrue($json['ok']);
         $this->assertStringContainsString('request_terminate_timeout = 30', $rt->files['/etc/php/8.4/fpm/pool.d/www.conf']);
         $this->assertStringContainsString('max_execution_time = 30', $rt->files['/etc/php/8.4/fpm/php.ini']);
-        $this->assertStringContainsString('read_timeout 35s', $rt->files['/etc/caddy/conf.d/let.az.conf']);
+        $this->assertStringContainsString('read_timeout 35s', $rt->files['/etc/caddy/conf.d/site3.example.com.conf']);
         $this->assertContains('/etc/php/8.4/fpm/pool.d/www.conf', $json['data']['timeouts']['pools']);
     }
 

@@ -52,7 +52,7 @@ final class RestorePreflightTest extends TestCase
     private function protectedConfig(): Config
     {
         $cfg = new Config();
-        $cfg->readonlyVhosts = ['projob.az', 'www.projob.az'];
+        $cfg->readonlyVhosts = ['site1.example.com', 'www.site1.example.com'];
 
         return $cfg;
     }
@@ -62,9 +62,9 @@ final class RestorePreflightTest extends TestCase
     public function test_an_existing_database_is_refused_with_the_restore_wording(): void
     {
         $rt = new FakeRuntime();
-        $rt->dbRows = [['Database' => 'projob']];
+        $rt->dbRows = [['Database' => 'site1db']];
 
-        [$code, $json] = $this->check($rt, ['db'], ['target' => 'projob']);
+        [$code, $json] = $this->check($rt, ['db'], ['target' => 'site1db']);
 
         $this->assertNotSame(0, $code);
         // Identical wording to backup.restore.db, because it is the same guard.
@@ -78,7 +78,7 @@ final class RestorePreflightTest extends TestCase
     {
         // The fake answers every SHOW DATABASES the same way, so "does not exist"
         // is expressed by returning nothing — as in KernelPhase2Test.
-        [$code, $json] = $this->check(new FakeRuntime(), ['db'], ['target' => 'projob_restore_1']);
+        [$code, $json] = $this->check(new FakeRuntime(), ['db'], ['target' => 'site1db_restore_1']);
 
         $this->assertSame(0, $code);
         $this->assertTrue($json['data']['allowed']);
@@ -87,12 +87,12 @@ final class RestorePreflightTest extends TestCase
     public function test_overwrite_still_needs_the_typed_confirmation(): void
     {
         $rt = new FakeRuntime();
-        $rt->dbRows = [['Database' => 'projob']];
+        $rt->dbRows = [['Database' => 'site1db']];
 
-        [$code] = $this->check($rt, ['db'], ['target' => 'projob', 'overwrite' => true]);
+        [$code] = $this->check($rt, ['db'], ['target' => 'site1db', 'overwrite' => true]);
         $this->assertNotSame(0, $code);
 
-        [$ok] = $this->check($rt, ['db'], ['target' => 'projob', 'overwrite' => true, 'confirm' => 'OVERWRITE']);
+        [$ok] = $this->check($rt, ['db'], ['target' => 'site1db', 'overwrite' => true, 'confirm' => 'OVERWRITE']);
         $this->assertSame(0, $ok);
     }
 
@@ -100,9 +100,9 @@ final class RestorePreflightTest extends TestCase
     public function test_no_passphrase_is_required(): void
     {
         $rt = new FakeRuntime();
-        $rt->dbRows = [['Database' => 'projob']];
+        $rt->dbRows = [['Database' => 'site1db']];
 
-        [$code, $json] = $this->check($rt, ['db'], ['target' => 'projob']);
+        [$code, $json] = $this->check($rt, ['db'], ['target' => 'site1db']);
 
         $this->assertNotSame(0, $code);
         $this->assertStringNotContainsString('assphrase', (string) $json['error']);
@@ -115,13 +115,13 @@ final class RestorePreflightTest extends TestCase
         [$code, $json] = $this->check(
             new FakeRuntime(),
             ['files'],
-            ['site' => 'projob.az', 'apply' => true],
+            ['site' => 'site1.example.com', 'apply' => true],
             $this->protectedConfig()
         );
 
         $this->assertNotSame(0, $code);
         $this->assertStringContainsString(
-            'Refusing to restore over a read-only vhost without force + confirm PROJOB.AZ.',
+            'Refusing to restore over a read-only vhost without force + confirm SITE1.EXAMPLE.COM.',
             (string) $json['error']
         );
     }
@@ -131,7 +131,7 @@ final class RestorePreflightTest extends TestCase
         [$code, $json] = $this->check(
             new FakeRuntime(),
             ['files'],
-            ['site' => 'projob.az', 'apply' => true, 'force' => true, 'confirm' => 'PROJOB.AZ'],
+            ['site' => 'site1.example.com', 'apply' => true, 'force' => true, 'confirm' => 'SITE1.EXAMPLE.COM'],
             $this->protectedConfig()
         );
 
@@ -157,7 +157,7 @@ final class RestorePreflightTest extends TestCase
         [$code] = $this->check(
             new FakeRuntime(),
             ['files'],
-            ['site' => 'projob.az', 'apply' => false],
+            ['site' => 'site1.example.com', 'apply' => false],
             $this->protectedConfig()
         );
 
@@ -175,8 +175,8 @@ final class RestorePreflightTest extends TestCase
     {
         $rt = new FakeRuntime();
 
-        $this->check($rt, ['db'], ['target' => 'projob_restore_1']);
-        $this->check($rt, ['files'], ['site' => 'projob.az', 'apply' => true, 'force' => true, 'confirm' => 'PROJOB.AZ'], $this->protectedConfig());
+        $this->check($rt, ['db'], ['target' => 'site1db_restore_1']);
+        $this->check($rt, ['files'], ['site' => 'site1.example.com', 'apply' => true, 'force' => true, 'confirm' => 'SITE1.EXAMPLE.COM'], $this->protectedConfig());
 
         $this->assertSame([], $this->spaces->requests, 'no object may be fetched');
         // The audit log is the one permitted write: every broker call is recorded,

@@ -30,7 +30,7 @@ final class PanelHardenerTest extends TestCase
         $this->config->panelFpmSocket = '/run/php/azerioid-panel.sock';
     }
 
-    /** Reproduces the live 64.226.78.176 state: panel and sites both www-data. */
+    /** Reproduces the live 203.0.113.10 state: panel and sites both www-data. */
     private function seedVulnerableAptHost(): void
     {
         $this->rt->files['/etc/php/8.4/fpm/pool.d/azerioid-panel.conf'] =

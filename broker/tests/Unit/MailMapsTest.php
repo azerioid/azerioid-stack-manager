@@ -13,17 +13,17 @@ final class MailMapsTest extends TestCase
     {
         return [
             'domains' => [
-                'raww.az' => ['enabled' => true],
-                'paused.az' => ['enabled' => false],
+                'site2.example.com' => ['enabled' => true],
+                'site10.example.com' => ['enabled' => false],
             ],
             'mailboxes' => [
-                'zaur@raww.az' => ['domain' => 'raww.az', 'local_part' => 'zaur'],
-                'abuse@raww.az' => ['domain' => 'raww.az', 'local_part' => 'abuse'],
-                'old@raww.az' => ['domain' => 'raww.az', 'local_part' => 'old', 'disabled' => true],
+                'zaur@site2.example.com' => ['domain' => 'site2.example.com', 'local_part' => 'zaur'],
+                'abuse@site2.example.com' => ['domain' => 'site2.example.com', 'local_part' => 'abuse'],
+                'old@site2.example.com' => ['domain' => 'site2.example.com', 'local_part' => 'old', 'disabled' => true],
             ],
             'aliases' => [
-                'postmaster@raww.az' => ['domain' => 'raww.az', 'destination' => 'zaur@raww.az'],
-                'blank@raww.az' => ['domain' => 'raww.az', 'destination' => '   '],
+                'postmaster@site2.example.com' => ['domain' => 'site2.example.com', 'destination' => 'zaur@site2.example.com'],
+                'blank@site2.example.com' => ['domain' => 'site2.example.com', 'destination' => '   '],
             ],
         ];
     }
@@ -31,14 +31,14 @@ final class MailMapsTest extends TestCase
     public function test_only_enabled_domains_are_accepted(): void
     {
         $map = MailMaps::domainsMap($this->state());
-        $this->assertStringContainsString("raww.az OK\n", $map);
-        $this->assertStringNotContainsString('paused.az', $map);
+        $this->assertStringContainsString("site2.example.com OK\n", $map);
+        $this->assertStringNotContainsString('site10.example.com', $map);
     }
 
     public function test_mailbox_map_uses_trailing_slash_for_maildir(): void
     {
         $map = MailMaps::mailboxMap($this->state());
-        $this->assertStringContainsString("zaur@raww.az raww.az/zaur/\n", $map);
+        $this->assertStringContainsString("zaur@site2.example.com site2.example.com/zaur/\n", $map);
         foreach (explode("\n", trim($map)) as $line) {
             if ($line === '' || str_starts_with($line, '#')) {
                 continue;
@@ -50,28 +50,28 @@ final class MailMapsTest extends TestCase
     public function test_disabled_mailbox_stops_delivery_but_keeps_its_maildir(): void
     {
         $state = $this->state();
-        $this->assertStringNotContainsString('old@raww.az', MailMaps::mailboxMap($state));
+        $this->assertStringNotContainsString('old@site2.example.com', MailMaps::mailboxMap($state));
 
-        $users = MailMaps::dovecotUsers($state, ['old@raww.az' => '{SHA512-CRYPT}$6$abc'], '/var/vmail');
-        $this->assertStringContainsString('old@raww.az::5000:5000::/var/vmail/raww.az/old::', $users);
+        $users = MailMaps::dovecotUsers($state, ['old@site2.example.com' => '{SHA512-CRYPT}$6$abc'], '/var/vmail');
+        $this->assertStringContainsString('old@site2.example.com::5000:5000::/var/vmail/site2.example.com/old::', $users);
     }
 
     public function test_alias_map_skips_empty_destinations(): void
     {
         $map = MailMaps::aliasMap($this->state());
-        $this->assertStringContainsString('postmaster@raww.az zaur@raww.az', $map);
-        $this->assertStringNotContainsString('blank@raww.az', $map);
+        $this->assertStringContainsString('postmaster@site2.example.com zaur@site2.example.com', $map);
+        $this->assertStringNotContainsString('blank@site2.example.com', $map);
     }
 
     public function test_dovecot_users_carry_hash_uid_gid_and_home(): void
     {
         $users = MailMaps::dovecotUsers(
             $this->state(),
-            ['zaur@raww.az' => '{SHA512-CRYPT}$6$salt$hash'],
+            ['zaur@site2.example.com' => '{SHA512-CRYPT}$6$salt$hash'],
             '/var/vmail/'
         );
         $this->assertStringContainsString(
-            'zaur@raww.az:{SHA512-CRYPT}$6$salt$hash:5000:5000::/var/vmail/raww.az/zaur::',
+            'zaur@site2.example.com:{SHA512-CRYPT}$6$salt$hash:5000:5000::/var/vmail/site2.example.com/zaur::',
             $users
         );
     }

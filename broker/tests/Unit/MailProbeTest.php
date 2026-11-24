@@ -51,9 +51,9 @@ final class MailProbeTest extends TestCase
     public function test_relay_selftest_fails_when_foreign_recipient_is_accepted(): void
     {
         $result = MailProbe::classifyRelayTranscript([
-            'BANNER=220 mail.raww.az ESMTP',
-            'EHLO mail.raww.az =250-mail.raww.az',
-            'MAIL FROM:<relay-test@mail.raww.az> =250 2.1.0 Ok',
+            'BANNER=220 mail.site2.example.com ESMTP',
+            'EHLO mail.site2.example.com =250-mail.site2.example.com',
+            'MAIL FROM:<relay-test@mail.site2.example.com> =250 2.1.0 Ok',
             'RCPT TO:<relay-test@example.com> =250 2.1.5 Ok',
             'QUIT =221 Bye',
         ]);
@@ -66,9 +66,9 @@ final class MailProbeTest extends TestCase
     public function test_relay_selftest_passes_when_foreign_recipient_is_rejected(): void
     {
         $result = MailProbe::classifyRelayTranscript([
-            'BANNER=220 mail.raww.az ESMTP',
-            'EHLO mail.raww.az =250-mail.raww.az',
-            'MAIL FROM:<relay-test@mail.raww.az> =250 2.1.0 Ok',
+            'BANNER=220 mail.site2.example.com ESMTP',
+            'EHLO mail.site2.example.com =250-mail.site2.example.com',
+            'MAIL FROM:<relay-test@mail.site2.example.com> =250 2.1.0 Ok',
             'RCPT TO:<relay-test@example.com> =554 5.7.1 Relay access denied',
             'QUIT =221 Bye',
         ]);
@@ -79,7 +79,7 @@ final class MailProbeTest extends TestCase
 
     public function test_unanswered_rcpt_is_unverified_rather_than_a_pass(): void
     {
-        $result = MailProbe::classifyRelayTranscript(['BANNER=220 mail.raww.az ESMTP']);
+        $result = MailProbe::classifyRelayTranscript(['BANNER=220 mail.site2.example.com ESMTP']);
 
         $this->assertFalse($result['checked']);
         $this->assertFalse($result['passed']);
@@ -88,7 +88,7 @@ final class MailProbeTest extends TestCase
     public function test_unreachable_local_listener_never_claims_a_pass(): void
     {
         $probe = new MailProbe(null, static fn (): array => []);
-        $result = $probe->relaySelftest('mail.raww.az', 1);
+        $result = $probe->relaySelftest('mail.site2.example.com', 1);
 
         $this->assertFalse($result['checked']);
         $this->assertFalse($result['passed']);
@@ -102,15 +102,15 @@ final class MailProbeTest extends TestCase
             $seenHost = $host;
 
             return [
-                'BANNER=220 mail.raww.az ESMTP',
-                'EHLO mail.raww.az =250 mail.raww.az',
-                'MAIL FROM:<relay-test@mail.raww.az> =250 2.1.0 Ok',
+                'BANNER=220 mail.site2.example.com ESMTP',
+                'EHLO mail.site2.example.com =250 mail.site2.example.com',
+                'MAIL FROM:<relay-test@mail.site2.example.com> =250 2.1.0 Ok',
                 'RCPT TO:<relay-test@example.com> =554 5.7.1 Relay access denied',
                 'QUIT =221 Bye',
             ];
         });
 
-        $result = $probe->relaySelftest('mail.raww.az', 1, '203.0.113.10');
+        $result = $probe->relaySelftest('mail.site2.example.com', 1, '203.0.113.10');
         $this->assertSame('203.0.113.10', $seenHost);
         $this->assertTrue($result['passed']);
     }

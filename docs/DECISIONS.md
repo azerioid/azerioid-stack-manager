@@ -145,7 +145,7 @@ The uninstall path performs the same panel-scoped flush before removing the jail
 **Status:** Accepted (2026-09-08)  
 **Decision:**
 
-Caddy treats a **single site** on a listener as the default for **any** Host/SNI on that port. The panel's `https://<IP>:3169` block therefore used to serve the panel for unrelated names (e.g. `https://let.az:3169/`) whenever DNS pointed at the same box — usually as a blank page from `APP_URL`/asset mismatch.
+Caddy treats a **single site** on a listener as the default for **any** Host/SNI on that port. The panel's `https://<IP>:3169` block therefore used to serve the panel for unrelated names (e.g. `https://site3.example.com:3169/`) whenever DNS pointed at the same box — usually as a blank page from `APP_URL`/asset mismatch.
 
 **Fix (always, even with no custom domain):** when public IP access is enabled, add a less-specific catch-all on the same port:
 
@@ -679,8 +679,8 @@ choice ever depended on `sodium`, so the encryption half of LACMP2 required no n
 **v1 product (locked):**
 - Vhost-scoped mailboxes/aliases (delete vhost refuses while mail exists unless `--drop-mail` / typed confirm); full **send + receive** (MX → Maildir) together.
 - Explicit **mail hostname** panel setting (A22-style); TLS prefers existing Caddy/Let’s Encrypt material, else dedicated certbot cert.
-- **Direct outbound MX and smarthost/relay are equally first-class.** Live outbound TCP/25 probe (same pattern proven on fleet droplet `64.226.78.176`, where :25 was open) drives mandatory plain-language UI/CLI status: “Direct mail delivery: available” vs “blocked by your provider — configure a relay…”, with a prominent Configure-relay CTA when blocked. DO and peers document default SMTP blocks on newer accounts — most operators will need relay; do not treat smarthost as v1.1.
-- **Smarthost DKIM/DMARC (fleet-proven 2026-09-15, `let.az` → Gmail via Brevo):** Content-modifying relays commonly invalidate the panel’s local OpenDKIM body hash (`dkim=neutral` on the local selector). That is expected, not a signing defect. DMARC still passes when the relay’s own domain-authenticated DKIM aligns with `From:` (`d=<domain>`). In smarthost mode, relay domain authentication is the deliverability signal; UI must not imply local DKIM authenticates mail after smarthost is active. Direct mode still depends on local OpenDKIM end-to-end.
+- **Direct outbound MX and smarthost/relay are equally first-class.** Live outbound TCP/25 probe (same pattern proven on fleet droplet `203.0.113.10`, where :25 was open) drives mandatory plain-language UI/CLI status: “Direct mail delivery: available” vs “blocked by your provider — configure a relay…”, with a prominent Configure-relay CTA when blocked. DO and peers document default SMTP blocks on newer accounts — most operators will need relay; do not treat smarthost as v1.1.
+- **Smarthost DKIM/DMARC (fleet-proven 2026-09-15, `site3.example.com` → Gmail via Brevo):** Content-modifying relays commonly invalidate the panel’s local OpenDKIM body hash (`dkim=neutral` on the local selector). That is expected, not a signing defect. DMARC still passes when the relay’s own domain-authenticated DKIM aligns with `From:` (`d=<domain>`). In smarthost mode, relay domain authentication is the deliverability signal; UI must not imply local DKIM authenticates mail after smarthost is active. Direct mode still depends on local OpenDKIM end-to-end.
 - CLI **`azerioid mail …`** ships in v1 with full UI parity (including status probe wording).
 - EPEL accepted for OpenDKIM on EL; foreign MTA removal **always** requires typed `REPLACE-MTA` (no Debian-Exim exception); panel Laravel alerts stay on external SMTP unless Settings opt-in; hardcoded ~25 MiB max message, no quota UI.
 - Explicitly out: webmail, spam-filter tuning UI, mailing lists (same scoping discipline as Terminal/File Manager/Node A16).

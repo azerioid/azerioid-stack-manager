@@ -24,7 +24,7 @@ class SmokePagesTest extends TestCase
             ->assertSee('journalctl -xeu php8.2-fpm', false);
 
         $this->get('/vhosts')->assertOk()
-            ->assertSee('projob.az', false)
+            ->assertSee('site1.example.com', false)
             ->assertSee('read-only', false);
 
         $this->get('/databases')->assertOk()->assertSee('lacmp_panel', false);

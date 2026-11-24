@@ -216,8 +216,8 @@ class TlsIssuanceAlertTest extends TestCase
 
     public function test_readonly_vhosts_are_skipped(): void
     {
-        $this->vhostServing('64.226.78.176:3169', ['readonly' => true]);
-        $this->agedVhost('64.226.78.176:3169', 48);
+        $this->vhostServing('203.0.113.10:3169', ['readonly' => true]);
+        $this->agedVhost('203.0.113.10:3169', 48);
 
         $this->evaluate();
 

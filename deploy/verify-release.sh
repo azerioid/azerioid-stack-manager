@@ -7,8 +7,8 @@
 #   ./deploy/verify-release.sh [--from-version=X.Y.Z] [--apply] [--ssh-identity=PATH] HOST
 #
 # Examples:
-#   ./deploy/verify-release.sh --from-version=1.5.0 --apply root@64.226.78.176
-#   ./deploy/verify-release.sh root@64.226.78.176
+#   ./deploy/verify-release.sh --from-version=1.5.0 --apply root@203.0.113.10
+#   ./deploy/verify-release.sh root@203.0.113.10
 #
 # Each check prints [PASS] or [FAIL]. Exit 1 if any check failed.
 set -euo pipefail
@@ -17,8 +17,8 @@ FROM_VERSION=""
 APPLY=0
 SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/lcmp-agent}"
 PANEL_PORT="${PANEL_PORT:-3169}"
-OCTANE_DOMAIN="${OCTANE_DOMAIN:-octane-demo.64.226.78.176.nip.io}"
-PM2_DOMAIN="${PM2_DOMAIN:-pm2-su.64.226.78.176.nip.io}"
+OCTANE_DOMAIN="${OCTANE_DOMAIN:-}"   # default: octane-demo.<host>.nip.io (set after parsing)
+PM2_DOMAIN="${PM2_DOMAIN:-}"         # default: pm2-su.<host>.nip.io
 HOST=""
 
 usage() {
@@ -55,6 +55,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "${HOST}" ]] || usage
+# The demo vhosts the checks expect live under the target host's own nip.io name.
+OCTANE_DOMAIN="${OCTANE_DOMAIN:-octane-demo.${HOST#*@}.nip.io}"
+PM2_DOMAIN="${PM2_DOMAIN:-pm2-su.${HOST#*@}.nip.io}"
 
 SSH=(ssh -i "${SSH_IDENTITY}" -o IdentitiesOnly=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new)
 

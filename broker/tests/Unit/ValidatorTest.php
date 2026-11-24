@@ -21,7 +21,7 @@ final class ValidatorTest extends TestCase
     public function test_valid_domain(): void
     {
         $this->assertSame('example.com', Validator::domain('Example.COM'));
-        $this->assertSame('projob.az', Validator::domain('projob.az'));
+        $this->assertSame('site1.example.com', Validator::domain('site1.example.com'));
         $this->assertSame('api.dev.example.co.uk', Validator::domain('api.dev.example.co.uk'));
     }
 
