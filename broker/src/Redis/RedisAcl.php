@@ -48,11 +48,16 @@ final class RedisAcl
      * all channels (SCAN, RANDOMKEY, PUBSUB) — Redis checks values against the key pattern, not
      * the names those return. Laravel's connection naming stays allowed.
      */
-    private const SITE_EXTRA = '-scan -randomkey -pubsub -script|flush -script|kill -client|tracking -client|caching'
-        . ' +client|setname +client|getname +client|id';
+    private const SITE_EXTRA_7 = '-scan -randomkey -pubsub -script|flush -script|kill -client|tracking -client|caching'
+        . ' +client|setname +client|getname +client|id -function -fcall -fcall_ro';
 
-    /** Redis 7+: functions are instance-wide libraries — a site may not load, delete or flush them. */
-    private const SITE_EXTRA_7 = '-function -fcall -fcall_ro';
+    /**
+     * Redis 6 has no subcommand denies (`-cmd|sub` is 7+) and no FUNCTION, and one rule it does not
+     * know makes the whole file invalid: deny SCRIPT and CLIENT whole, then add back what a site
+     * uses (subcommand allows exist since 6.0).
+     */
+    private const SITE_EXTRA_6 = '-scan -randomkey -pubsub -script -client'
+        . ' +script|load +script|exists +client|setname +client|getname +client|id';
 
     public function __construct(
         private readonly Runtime $runtime,
@@ -148,8 +153,8 @@ final class RedisAcl
                 'prefix' => VhostUser::slug($domain) . '-' . bin2hex(random_bytes(3)) . ':',
                 'password' => Secrets::generatePassword(),
             ];
-            $this->saveState($state);
             $this->reload($state);
+            $this->saveState($state);
         }
 
         return $this->connection($domain, $state['sites'][$domain]);
@@ -176,10 +181,12 @@ final class RedisAcl
             return ['domain' => $domain, 'removed' => false];
         }
         unset($state['sites'][$domain]);
-        $this->saveState($state);
+        // Saved only once Redis has the new file: a rejected load keeps the site recorded, and
+        // a retry removes it, instead of a user left in Redis that the panel no longer knows.
         if ($this->isManaged()) {
             $this->reload($state);
         }
+        $this->saveState($state);
 
         return ['domain' => $domain, 'removed' => true];
     }
@@ -195,8 +202,8 @@ final class RedisAcl
         Validator::typedConfirm($confirm, self::CONFIRM_ENFORCE);
         $state = $this->managedState();
         $state['enforced'] = true;
-        $this->saveState($state);
         $this->reload($state);
+        $this->saveState($state);
         // The point of it: a client without credentials is refused.
         $anon = $this->runtime->exec(['/usr/bin/redis-cli', '-h', '127.0.0.1', '-p', '6379', 'PING'], null, 15);
         if (str_contains(strtoupper($anon->stdout . $anon->stderr), 'PONG')) {
@@ -287,7 +294,7 @@ final class RedisAcl
         $out = ($state['enforced'] ?? false)
             ? "user default off\n"
             : "user default on {$default} ~* &* +@all\n";
-        $extra = self::SITE_EXTRA . ((int) ($state['redis_major'] ?? 7) >= 7 ? ' ' . self::SITE_EXTRA_7 : '');
+        $extra = (int) ($state['redis_major'] ?? 7) >= 7 ? self::SITE_EXTRA_7 : self::SITE_EXTRA_6;
         $out .= 'user ' . self::ADMIN_USER . ' on #' . hash('sha256', (string) $state['admin_password']) . " ~* &* +@all\n";
         foreach ((array) ($state['sites'] ?? []) as $site) {
             $user = (string) $site['user'];
@@ -307,9 +314,17 @@ final class RedisAcl
     /** @param array<string,mixed> $state */
     private function reload(array $state): void
     {
+        // The running server decides which rules are valid, every time (it may have been upgraded).
+        $state['redis_major'] = $this->redisMajor();
+        $previous = $this->runtime->fileExists(self::ACL_FILE) ? $this->runtime->readFile(self::ACL_FILE) : null;
         $this->writeAclFile($state);
         $load = $this->adminCli(['ACL', 'LOAD']);
         if (!$load->ok() || !str_contains(strtoupper($load->stdout), 'OK')) {
+            // Redis kept its running users; the file must match them, or the next restart
+            // would load the rejected one (and a file Redis rejects stops it from starting).
+            if ($previous !== null) {
+                $this->runtime->writeFile(self::ACL_FILE, $previous, 0640);
+            }
             throw new BrokerException('Redis refused the panel\'s ACL file: ' . trim($load->stdout . ' ' . $load->stderr), 1);
         }
     }

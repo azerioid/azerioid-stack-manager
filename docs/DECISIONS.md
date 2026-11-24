@@ -3131,6 +3131,12 @@ vhost deletion that could not remove the Redis user says so in its result. (3) I
 closed to sites as well: `SCRIPT FLUSH`/`KILL`, `CLIENT TRACKING`/`CACHING`, and on Redis 7+ (`FUNCTION` does not exist
 in 6.2, and an unknown command makes the whole file invalid) `FUNCTION`, `FCALL`, `FCALL_RO`; the major version is
 read from `redis-server --version`. `SCRIPT LOAD`/`EVALSHA` stay. All re-checked on redis-server 7.4.
+Redis 6 cannot deny a subcommand (`-cmd|sub` is 7+) and one rule it does not know invalidates the whole file, so a
+Redis 6 server gets its own set: `-script -client` whole, then `+script|load +script|exists +client|setname
++client|getname +client|id` back. The major version is read from the running server on every load (it may have been
+upgraded) and defaults to the stricter 7 set when it cannot be read. A load Redis rejects puts the previous file back
+and records nothing, so a failed removal stays retryable. The Redis 6 set was checked for syntax and isolation on
+7.4; it has not run on a 6.2 server.
 
 Memcached: no access control exists to scope per site. The component is described as single-tenant — every site
 can read and change every item — to be used for one site or for data that is not private.
