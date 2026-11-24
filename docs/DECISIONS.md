@@ -3362,3 +3362,21 @@ site's choice — the same failure modes as A119, for the cron page and the `cro
 Decision: `Runtime::readTail($path, $bytes)` with the same regular-file checks as A119, seeking to the last `$bytes`.
 `lastRun` reads 8 KiB and reports "no run recorded" when the read is refused; `cron.job.log` reads the last 1 MiB and
 returns an `error` instead of failing. `BoundedReadTest` covers the tail and the symlink refusal.
+
+## A121 — A backup stream that fails or runs out of time stops its source process
+
+Security audit run-2 (2026-11-11), finding AZ-41. `execReader` compared the deadline only before each blocking
+`fread`, so a source that went quiet was never interrupted, and nothing signalled the child. On any error the
+pipeline called `finish()`, which read the rest of stdout into one string and waited for the child to exit. A site
+whose tree is backed up decides how long `tar` runs, so one site could hold the scheduled backup run — every site's
+schedules, one process, one hourly mutex — past its deadline and grow root's memory.
+
+Decision (`PosixRuntime::execReader`, `BackupPipeline::run`):
+- `execReader` returns a third closure, `abort`: SIGKILL to the child, both pipes closed, child reaped, output
+  discarded. It is idempotent; `finish()` after `abort()` refuses.
+- `read` waits with `stream_select` against the remaining time and calls `abort` before it throws at the deadline.
+- Captured stderr is capped at 64 KiB.
+- `BackupPipeline` calls `abort`, then `sink->abort()`, on every failure. `finish()` remains the success path.
+
+Tests: `BackupPipelineAbortTest` — a sink that throws makes the pipeline abort the source and never finish it; with
+the real `PosixRuntime`, a silent `sleep 30` with a 1 s deadline is killed within the deadline.
