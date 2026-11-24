@@ -257,13 +257,36 @@ CADDY;
 
     private function resolvePublicIp(Runtime $runtime, Config $config, array $current): ?string
     {
-        foreach ([$config->panelPublicIp, $current['public_ip'] ?? null, $this->detectPublicIp($runtime)] as $ip) {
+        // A113: an IP listener is kept when one was configured or is already in the snippet,
+        // and only *detected* on a host installed for public access. On a tunnel-only install,
+        // setting or clearing a panel domain used to add https://<host-ip>:3169 as a side effect.
+        $candidates = [$config->panelPublicIp, $current['public_ip'] ?? null];
+        if ($this->accessMode($runtime) === 'public') {
+            $candidates[] = $this->detectPublicIp($runtime);
+        }
+        foreach ($candidates as $ip) {
             if (is_string($ip) && $ip !== '' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && !str_starts_with($ip, '127.')) {
                 return $ip;
             }
         }
 
         return null;
+    }
+
+    /** The installer's access choice (`tunnel` or `public`), from /etc/azerioid-panel/access.env. */
+    private function accessMode(Runtime $runtime): string
+    {
+        $path = '/etc/azerioid-panel/access.env';
+        if (!$runtime->fileExists($path)) {
+            return 'tunnel';
+        }
+        foreach (explode("\n", $runtime->readFile($path)) as $line) {
+            if (preg_match('/^\s*ACCESS_MODE\s*=\s*["\']?([a-z]+)["\']?\s*$/', $line, $m) === 1) {
+                return $m[1];
+            }
+        }
+
+        return 'tunnel';
     }
 
     private function assertNotSiteVhost(Runtime $runtime, Config $config, string $domain): void
@@ -312,6 +335,9 @@ CADDY;
         $runtime->writeFile($snippet, $newBody, 0644);
         if ($oldEnv !== null || $runtime->fileExists($envPath)) {
             $this->setEnvKey($runtime, $envPath, 'APP_URL', $appUrl);
+            // A113: once the panel answers on an HTTPS origin, its session cookie is Secure.
+            // The tunnel (http://127.0.0.1) keeps working: browsers accept Secure cookies there.
+            $this->setEnvKey($runtime, $envPath, 'SESSION_SECURE_COOKIE', str_starts_with($appUrl, 'https://') ? 'true' : 'false');
             try {
                 $runtime->chown($envPath, $config->panelUser, $config->panelUser);
             } catch (\Throwable) {
@@ -353,6 +379,7 @@ CADDY;
             throw $e instanceof BrokerException ? $e : new BrokerException($e->getMessage(), 1);
         }
 
+        $this->refreshConfigCache($runtime, $config);
         $this->reloadPanelFpm($runtime, $config);
 
         $status = $this->status($runtime, $config);
@@ -371,6 +398,25 @@ CADDY;
             $runtime->exec(['/usr/bin/systemctl', 'reload', $unit], null, 30);
         } catch (\Throwable) {
         }
+    }
+
+    /**
+     * A113: the panel's config is cached (config:cache on every update), so APP_URL and
+     * SESSION_SECURE_COOKIE written above would only apply after the next update. Rebuild the
+     * cache as the panel account when there is one, then re-lock its directory (A69). Best
+     * effort: the domain change itself stands either way.
+     */
+    private function refreshConfigCache(Runtime $runtime, Config $config): void
+    {
+        $web = rtrim($config->panelRoot, '/') . '/web';
+        if (!$runtime->fileExists($web . '/bootstrap/cache/config.php')) {
+            return;
+        }
+        $ver = $config->panelPhpVersion !== '' ? $config->panelPhpVersion : '8.4';
+        $php = $runtime->fileExists('/usr/bin/php' . $ver) ? '/usr/bin/php' . $ver : '/usr/bin/php';
+        $runuser = $runtime->fileExists('/usr/sbin/runuser') ? '/usr/sbin/runuser' : '/sbin/runuser';
+        $runtime->exec([$runuser, '-u', $config->panelUser, '--', $php, $web . '/artisan', 'config:cache', '--no-interaction'], null, 120);
+        $runtime->exec(['/bin/chmod', '0750', $web . '/bootstrap/cache'], null, 15);
     }
 
     private function appUrl(?string $domain, ?string $publicIp, int $port): string
