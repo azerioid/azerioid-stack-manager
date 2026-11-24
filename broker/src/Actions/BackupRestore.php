@@ -59,6 +59,8 @@ final class BackupRestore
             $passphrase,
             ArchiveCipher::contextForKey($key),
             $expectedSha !== '' || !empty($input['allow_unbound_identity'])
+                // A legacy archive already needed its own, stronger opt-in above.
+                || $format !== 'lacmp2'
         );
         $bound = ArchiveCipher::isBound($cipher);
 

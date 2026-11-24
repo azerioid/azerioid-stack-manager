@@ -478,6 +478,16 @@ final class ArchiveCipher
     public static function decryptBlob(string $blob, string $passphrase, ?string $context = null, bool $allowUnbound = false): string
     {
         if (self::detect($blob) !== 'lacmp2') {
+            // A122: a legacy archive is unauthenticated and unbound; a caller that expects an
+            // identity gets it only with the same opt-in as an unbound LACMP2 archive.
+            if ($context !== null && !$allowUnbound) {
+                throw new BrokerException(
+                    'This is a legacy (LACMP1/LCMP1) archive: unauthenticated and not bound to its storage name. '
+                    . 'Restore it only if you trust the storage it came from: pass allow_unbound_identity.',
+                    2
+                );
+            }
+
             return ArchiveCrypto::decrypt($blob, $passphrase);
         }
         $pos = 0;

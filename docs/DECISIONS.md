@@ -3405,6 +3405,9 @@ Decision (`ArchiveCipher`, header byte 9 — previously reserved, always 0):
   a checkbox for it, the CLI `--allow-unbound`. A bundle part checked against its manifest's sha256 (A74) needs no
   opt-in: the checksum is its binding. `backup.verify` accepts both and reports `identity_bound`.
 - Consequence: a bound archive cannot be read by a panel older than this release. The filename suffix is unchanged.
+- A legacy LACMP1/LCMP1 archive is neither authenticated nor bound. Where an identity is expected it needs the same
+  opt-in (`backup.restore.*` keeps its stronger `allow_legacy_unauthenticated`), so a bundle manifest cannot be
+  downgraded to the legacy format to skip the binding.
 
 Tests: `ArchiveCipherTest` — a bound archive opens only under its own context, not another site's or another stamp's;
 clearing the flag fails; an unbound archive needs the opt-in; the context is the last three key components.

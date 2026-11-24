@@ -336,6 +336,13 @@ final class ArchiveCipherTest extends TestCase
         ArchiveCipher::decryptBlob($blob, self::PASS, 'db/shop/x.lacmp2.bin');
     }
 
+    public function test_a_legacy_archive_cannot_skip_the_binding(): void
+    {
+        $legacy = ArchiveCrypto::encrypt('old', self::PASS);
+        $this->expectExceptionMessage('legacy');
+        ArchiveCipher::decryptBlob($legacy, self::PASS, 'vhost/shop.test/20261101T000000Z/manifest.lacmp2.bin');
+    }
+
     public function test_context_is_the_last_three_components_of_the_key(): void
     {
         $this->assertSame('files/shop/s.lacmp2.bin', ArchiveCipher::contextForKey('/var/lib/azerioid-panel/backups/files/shop/s.lacmp2.bin'));
