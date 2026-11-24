@@ -410,6 +410,9 @@
             @else
                 In direct mode, the panel’s local OpenDKIM signature is what receivers verify.
             @endif
+            The test leaves through the local queue, which is not DKIM-signed: only mail sent through
+            submission (587/465) with a mailbox login is signed, so a local account cannot sign as your domains.
+            To check signing, send from a mail client logged in to a mailbox.
         </p>
     </section>
     @endif

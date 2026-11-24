@@ -20,6 +20,7 @@ final class MailMaps
     public const VIRTUAL_MAILBOXES = 'azerioid-virtual-mailboxes';
     public const VIRTUAL_ALIASES = 'azerioid-virtual-aliases';
     public const DOVECOT_USERS = 'azerioid-users';
+    public const SENDER_LOGINS = 'azerioid-sender-logins';
 
     public const VMAIL_UID = 5000;
     public const VMAIL_GID = 5000;
@@ -86,6 +87,44 @@ final class MailMaps
     }
 
     /**
+     * A123: which SASL login may use which envelope sender. A mailbox sends as itself; an alias
+     * as the local mailboxes it delivers to. Submission rejects any other sender
+     * (reject_authenticated_sender_login_mismatch), so one mailbox's password is not every
+     * domain's From.
+     *
+     * @param array<string,mixed> $state
+     */
+    public static function senderLoginMap(array $state): string
+    {
+        $active = [];
+        foreach (self::sortedKeys($state['mailboxes'] ?? []) as $address) {
+            if (!(bool) ($state['mailboxes'][$address]['disabled'] ?? false)) {
+                $active[strtolower($address)] = true;
+            }
+        }
+        $lines = [];
+        foreach (array_keys($active) as $address) {
+            $lines[$address] = $address . ' ' . $address;
+        }
+        foreach (self::sortedKeys($state['aliases'] ?? []) as $address) {
+            $owners = [];
+            foreach (preg_split('/[\s,]+/', (string) ($state['aliases'][$address]['destination'] ?? '')) ?: [] as $dest) {
+                $dest = strtolower(trim($dest));
+                if (isset($active[$dest])) {
+                    $owners[$dest] = true;
+                }
+            }
+            $key = strtolower($address);
+            if ($owners !== [] && !isset($lines[$key])) {
+                $lines[$key] = $key . ' ' . implode(',', array_keys($owners));
+            }
+        }
+        ksort($lines);
+
+        return self::render(array_values($lines));
+    }
+
+    /**
      * Dovecot passwd-file: user:hash:uid:gid:gecos:home:shell:extra
      * Disabled mailboxes keep their Maildir but get no usable password field,
      * so IMAP and submission both refuse them without deleting mail.
@@ -135,6 +174,7 @@ final class MailMaps
             $postfixDir . '/' . self::VIRTUAL_DOMAINS => self::domainsMap($state),
             $postfixDir . '/' . self::VIRTUAL_MAILBOXES => self::mailboxMap($state),
             $postfixDir . '/' . self::VIRTUAL_ALIASES => self::aliasMap($state),
+            $postfixDir . '/' . self::SENDER_LOGINS => self::senderLoginMap($state),
         ];
         foreach ($files as $path => $body) {
             $this->runtime->writeFile($path, $body, 0644);
@@ -161,7 +201,7 @@ final class MailMaps
         return dirname(rtrim($this->paths->dovecotConfD(), '/')) . '/' . self::DOVECOT_USERS;
     }
 
-    /** @return array{domains:string,mailboxes:string,aliases:string} lookup specs for main.cf */
+    /** @return array{domains:string,mailboxes:string,aliases:string,senders:string} lookup specs for main.cf */
     public function lookupSpecs(): array
     {
         $postfixDir = rtrim($this->paths->postfixDir(), '/');
@@ -170,6 +210,7 @@ final class MailMaps
             'domains' => 'hash:' . $postfixDir . '/' . self::VIRTUAL_DOMAINS,
             'mailboxes' => 'hash:' . $postfixDir . '/' . self::VIRTUAL_MAILBOXES,
             'aliases' => 'hash:' . $postfixDir . '/' . self::VIRTUAL_ALIASES,
+            'senders' => 'hash:' . $postfixDir . '/' . self::SENDER_LOGINS,
         ];
     }
 

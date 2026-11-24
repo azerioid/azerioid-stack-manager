@@ -30,6 +30,12 @@ final class MailProvisioner
     private const MANAGED_BEGIN = '# BEGIN azerioid-managed (broker-owned; edits are overwritten)';
     private const MANAGED_END = '# END azerioid-managed';
 
+    /** Postfix's queue directory; a chrooted smtpd sees paths relative to it. */
+    private const SPOOL = '/var/spool/postfix/';
+
+    /** The Debian/Ubuntu signer socket, as a chrooted smtpd addresses it. */
+    public const DEFAULT_MILTER = 'unix:opendkim/opendkim.sock';
+
     public function __construct(
         private readonly Config $config,
         private readonly Runtime $runtime,
@@ -128,7 +134,7 @@ final class MailProvisioner
     }
 
     /**
-     * @param  array{domains:string,mailboxes:string,aliases:string}  $specs
+     * @param  array{domains:string,mailboxes:string,aliases:string,senders:string}  $specs
      * @param  array{cert:string,key:string,source:string}  $tls
      * @return array<string,string>
      */
@@ -152,6 +158,8 @@ final class MailProvisioner
             'virtual_mailbox_domains' => $specs['domains'],
             'virtual_mailbox_maps' => $specs['mailboxes'],
             'virtual_alias_maps' => $specs['aliases'],
+            // A123: submission checks the envelope sender against the SASL login.
+            'smtpd_sender_login_maps' => $specs['senders'],
             // No trailing slash — mailbox map values already include domain/user/.
             'virtual_mailbox_base' => $vmailRoot,
             'virtual_uid_maps' => 'static:' . MailMaps::VMAIL_UID,
@@ -185,9 +193,11 @@ final class MailProvisioner
 
             'milter_default_action' => 'accept',
             'milter_protocol' => '6',
-            // Inet localhost avoids Postfix chroot + SELinux unix-socket denials on EL.
-            'smtpd_milters' => 'inet:127.0.0.1:8891',
-            'non_smtpd_milters' => 'inet:127.0.0.1:8891',
+            // A124: no global milters. The signer is attached to submission and smtps only
+            // (master.cf), so only SASL-authenticated mail is signed — not loopback SMTP or
+            // sendmail from any local account.
+            'smtpd_milters' => '',
+            'non_smtpd_milters' => '',
 
             'local_recipient_maps' => '',
             'alias_maps' => 'hash:/etc/aliases',
@@ -195,10 +205,22 @@ final class MailProvisioner
         ];
     }
 
-    /** Reserved for diagnostics; milter transport is inet:8891@localhost. */
-    private function milterSocketSpec(): string
+    /**
+     * A125: the signer listens on a unix socket only Postfix can open. Debian/Ubuntu keep it in
+     * the Postfix spool (smtpd is chrooted there, so the path is relative to it); EL keeps it in
+     * /run/opendkim, the one place SELinux lets opendkim create it, and runs submission
+     * unchrooted, as EL's own master.cf does.
+     */
+    public function milterSocketSpec(): string
     {
-        return 'inet:127.0.0.1:8891';
+        $socket = $this->paths->opendkimSocket();
+
+        return 'unix:' . ($this->milterChrooted() ? substr($socket, strlen(self::SPOOL)) : $socket);
+    }
+
+    private function milterChrooted(): bool
+    {
+        return str_starts_with($this->paths->opendkimSocket(), self::SPOOL);
     }
 
     private function writeSubmissionServices(OperationLogger $log): void
@@ -207,7 +229,7 @@ final class MailProvisioner
         if (!$this->runtime->fileExists($path)) {
             throw new BrokerException('Postfix master.cf is missing; the package did not install correctly.', 1);
         }
-        $body = self::masterCfWithSubmission($this->runtime->readFile($path));
+        $body = self::masterCfWithSubmission($this->runtime->readFile($path), $this->milterSocketSpec(), $this->milterChrooted());
         $this->runtime->writeFile($path, $body, 0644);
         $log->info('Enabled SASL submission on 587 and 465 in master.cf (port 25 stays AUTH-free).');
     }
@@ -217,15 +239,16 @@ final class MailProvisioner
      *
      * Pure so the "AUTH never lands on 25" invariant is unit-testable without a host.
      */
-    public static function masterCfWithSubmission(string $body): string
+    public static function masterCfWithSubmission(string $body, string $milter = self::DEFAULT_MILTER, bool $chroot = true): string
     {
+        $c = $chroot ? 'y' : 'n';
         $body = self::stripManagedBlock($body);
         $body = self::stripService($body, 'submission');
         $body = self::stripService($body, 'smtps');
         $body = self::stripService($body, 'submissions');
 
         $block = self::MANAGED_BEGIN . "\n"
-            . "submission inet n       -       y       -       -       smtpd\n"
+            . "submission inet n       -       {$c}       -       -       smtpd\n"
             . "  -o syslog_name=postfix/submission\n"
             . "  -o smtpd_tls_security_level=encrypt\n"
             . "  -o smtpd_sasl_auth_enable=yes\n"
@@ -233,14 +256,22 @@ final class MailProvisioner
             . "  -o smtpd_client_restrictions=permit_sasl_authenticated,reject\n"
             . "  -o smtpd_relay_restrictions=permit_sasl_authenticated,reject\n"
             . "  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject\n"
+            // A123: a login sends only as the addresses it owns (smtpd_sender_login_maps).
+            . "  -o smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch\n"
+            // A124: the signer sees authenticated submissions and nothing else.
+            . "  -o smtpd_milters={$milter}\n"
             . "  -o milter_macro_daemon_name=ORIGINATING\n"
-            . "smtps     inet  n       -       y       -       -       smtpd\n"
+            . "smtps     inet  n       -       {$c}       -       -       smtpd\n"
             . "  -o syslog_name=postfix/smtps\n"
             . "  -o smtpd_tls_wrappermode=yes\n"
             . "  -o smtpd_sasl_auth_enable=yes\n"
             . "  -o smtpd_client_restrictions=permit_sasl_authenticated,reject\n"
             . "  -o smtpd_relay_restrictions=permit_sasl_authenticated,reject\n"
             . "  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject\n"
+            // A123: a login sends only as the addresses it owns (smtpd_sender_login_maps).
+            . "  -o smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch\n"
+            // A124: the signer sees authenticated submissions and nothing else.
+            . "  -o smtpd_milters={$milter}\n"
             . "  -o milter_macro_daemon_name=ORIGINATING\n"
             . self::MANAGED_END . "\n";
 
@@ -492,6 +523,15 @@ CONF;
         if (!$this->runtime->isDir($keysDir)) {
             $this->runtime->mkdir($keysDir, 0755);
         }
+        // A125: the socket's directory is reachable by opendkim and the postfix group only, and
+        // Postfix joins the opendkim group because the socket is opendkim's (UMask 007 → 0660).
+        $socketDir = dirname($this->paths->opendkimSocket());
+        if (!$this->runtime->isDir($socketDir)) {
+            $this->runtime->mkdir($socketDir, 0750);
+        }
+        $this->runtime->exec(['/usr/bin/chown', 'opendkim:' . ($this->milterChrooted() ? 'postfix' : 'opendkim'), $socketDir], null, 15);
+        $this->runtime->exec(['/usr/bin/chmod', '0750', $socketDir], null, 15);
+        $this->runtime->exec(['/usr/sbin/usermod', '-a', '-G', 'opendkim', 'postfix'], null, 30);
         $this->runtime->exec(['/usr/bin/chown', '-R', 'opendkim:opendkim', $keysDir], null, 30);
         $this->runtime->exec(['/usr/bin/chmod', '0755', $keysDir], null, 15);
         // Runtime dir for PidFile (tmpfiles.d normally creates this).
@@ -518,18 +558,19 @@ CONF;
             $this->runtime->exec(['/usr/sbin/restorecon', '-Rv', $opendkimEtc], null, 30);
         }
 
+        $socket = $this->paths->opendkimSocket();
         $body = <<<CONF
 # AZERIOID Stack Manager — broker-generated; edits are overwritten
 Syslog                  yes
-UMask                   002
+UMask                   007
 Mode                    sv
 Canonicalization        relaxed/simple
 SubDomains              no
 OversignHeaders         From
 AutoRestart             yes
 AutoRestartRate         10/1h
-# Inet localhost — portable across Ubuntu/Debian and SELinux Enforcing EL hosts.
-Socket                  inet:8891@localhost
+# A125: a unix socket only opendkim and Postfix can open (a loopback port is open to every account).
+Socket                  local:{$socket}
 PidFile                 /run/opendkim/opendkim.pid
 UserID                  opendkim:opendkim
 KeyTable                file:{$keyTable}
@@ -539,7 +580,7 @@ InternalHosts           refile:{$trusted}
 
 CONF;
         $this->runtime->writeFile($this->paths->opendkimConf(), $body, 0644);
-        $log->info('Wrote OpenDKIM configuration (inet milter on 127.0.0.1:8891).');
+        $log->info('Wrote OpenDKIM configuration (milter on ' . $socket . ').');
     }
 
     private function applyMaps(OperationLogger $log): void
@@ -580,6 +621,80 @@ CONF;
             $this->runtime->exec(['/usr/bin/chmod', '0660', $socket], null, 15);
         }
         $log->info('Mail services enabled and restarted.');
+    }
+
+    /**
+     * A123–A125 on a host provisioned before them: sender login checks, the signer on submission
+     * only, and the signer on a unix socket. A no-op once converged. Every file it changes is
+     * saved first; if Postfix rejects the result, a service does not come back, or the postfix
+     * user cannot open the socket, the files are put back and both services restarted.
+     *
+     * @return array{applied:bool, reason?:string, socket?:string}
+     */
+    public function convergeBoundaries(OperationLogger $log): array
+    {
+        $socket = $this->paths->opendkimSocket();
+        $files = [$this->paths->mainCf(), $this->paths->masterCf(), $this->paths->opendkimConf()];
+        $read = fn (string $f): ?string => $this->runtime->fileExists($f) ? $this->runtime->readFile($f) : null;
+        $postconf = fn (string $key): string => trim($this->runtime->exec(['/usr/sbin/postconf', '-h', $key], null, 30)->stdout);
+
+        $master = (string) $read($this->paths->masterCf());
+        $converged = str_contains((string) $read($this->paths->opendkimConf()), 'local:' . $socket)
+            && $postconf('smtpd_milters') === '' && $postconf('non_smtpd_milters') === ''
+            && $postconf('smtpd_sender_login_maps') !== ''
+            && str_contains($master, 'reject_authenticated_sender_login_mismatch')
+            && str_contains($master, 'smtpd_milters=' . $this->milterSocketSpec());
+        if ($converged) {
+            return ['applied' => false, 'reason' => 'already converged'];
+        }
+
+        $saved = [];
+        foreach ($files as $f) {
+            $saved[$f] = $read($f);
+        }
+        try {
+            $specs = (new MailMaps($this->config, $this->runtime, $this->paths))->lookupSpecs();
+            $this->postconf('smtpd_milters=');
+            $this->postconf('non_smtpd_milters=');
+            $this->postconf('smtpd_sender_login_maps=' . $specs['senders']);
+            $this->writeSubmissionServices($log);
+            $this->writeOpenDkimConfig($log);
+            $this->applyMaps($log);
+            $this->assertPostfixConfigValid($log);
+            $this->restartServices($log);
+            $this->assertSignerReachable($socket);
+        } catch (\Throwable $e) {
+            foreach ($saved as $f => $body) {
+                if ($body !== null) {
+                    $this->runtime->writeFile($f, $body, 0644);
+                }
+            }
+            foreach (['opendkim', 'postfix'] as $key) {
+                $this->runtime->exec(['/usr/bin/systemctl', 'restart', $this->paths->unit($key)], null, 120);
+            }
+            $log->warn('Mail boundary converge rolled back: ' . $e->getMessage());
+            throw new BrokerException('Mail boundary converge failed and was rolled back: ' . $e->getMessage(), 1);
+        }
+        $log->info('Mail boundaries converged (sender login checks, signer on submission only, ' . $socket . ').');
+
+        return ['applied' => true, 'socket' => $socket];
+    }
+
+    /** Both services up, and the postfix user able to open the signer's socket. */
+    private function assertSignerReachable(string $socket): void
+    {
+        foreach (['opendkim', 'postfix'] as $key) {
+            if (!$this->runtime->exec(['/usr/bin/systemctl', 'is-active', '--quiet', $this->paths->unit($key)], null, 30)->ok()) {
+                throw new BrokerException($this->paths->unit($key) . ' is not running.', 1);
+            }
+        }
+        $probe = $this->runtime->exec([
+            '/usr/sbin/runuser', '-u', 'postfix', '--', PHP_BINARY, '-r',
+            'exit(@stream_socket_client("unix://" . $argv[1], $e, $s, 5) ? 0 : 1);', $socket,
+        ], null, 30);
+        if (!$probe->ok()) {
+            throw new BrokerException('The postfix user cannot open the signer socket ' . $socket . '.', 1);
+        }
     }
 
     private function postconf(string $assignment): void
