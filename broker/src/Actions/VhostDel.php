@@ -82,14 +82,20 @@ final class VhostDel
         }
         VhostUser::deprovision($runtime, $config, $domain);
         // Its Redis user goes with it (A111); the next site with this name gets a new one.
+        $redisError = null;
         try {
             (new \AzerioidPanel\Broker\Redis\RedisAcl($runtime, $config))->disableSite($domain);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $redisError = $e->getMessage();
         }
 
         $result = WebServers::for($config)->removeVhost($runtime, $config, $domain);
         if ($mailDropped !== null) {
             $result['mail_dropped'] = $mailDropped;
+        }
+        if ($redisError !== null) {
+            // The vhost is gone either way; say that its Redis user may still exist.
+            $result['redis_user_not_removed'] = $redisError;
         }
         // Container environment and settings (A50) hold secrets and go with the vhost, as does
         // the deploy key (A53).

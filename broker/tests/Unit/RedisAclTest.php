@@ -74,11 +74,13 @@ final class RedisAclTest extends TestCase
         $conn = $this->acl()->enableSite('shop.example.com');
 
         $this->assertSame('az-vh-shop-example-com', $conn['user']);
-        $this->assertSame('shop-example-com:', $conn['prefix']);
+        $this->assertMatchesRegularExpression('/^shop-example-com-[0-9a-f]{6}:$/', $conn['prefix']);
+        $p = $conn['prefix'];
         $line = array_values(array_filter(explode("\n", $this->rt->files[RedisAcl::ACL_FILE]), static fn (string $l): bool => str_starts_with($l, 'user az-vh-')))[0];
         $this->assertSame(
             'user az-vh-shop-example-com on #' . hash('sha256', $conn['password'])
-            . ' resetchannels ~shop-example-com:* &shop-example-com:* +@all -@admin -@dangerous -scan -randomkey -pubsub +client|setname +client|getname +client|id',
+            . " resetchannels ~{$p}* &{$p}* +@all -@admin -@dangerous -scan -randomkey -pubsub -script|flush -script|kill"
+            . ' -client|tracking -client|caching +client|setname +client|getname +client|id -function -fcall -fcall_ro',
             $line
         );
         $this->assertSame($conn, $this->acl()->showSite('shop.example.com'));
@@ -98,6 +100,7 @@ final class RedisAclTest extends TestCase
 
     public function test_an_existing_instance_stays_open_until_enforced(): void
     {
+        $this->rt->files['/etc/redis/redis.conf'] = "bind 127.0.0.1\nprotected-mode yes\nport 6379\n";
         $this->acl()->enableSite('shop.example.com');
         $this->assertStringContainsString("user default on nopass ~* &* +@all\n", $this->rt->files[RedisAcl::ACL_FILE]);
         $this->assertFalse($this->acl()->status()['enforced']);
@@ -149,10 +152,50 @@ final class RedisAclTest extends TestCase
         $this->assertStringNotContainsString('az-vh-shop-example-com', $this->rt->files[RedisAcl::ACL_FILE]);
     }
 
+    /** Review of A111: an instance that already required a password keeps requiring it. */
+    public function test_an_existing_requirepass_stays_required_until_enforced(): void
+    {
+        $this->acl()->enableSite('shop.example.com');
+        $this->assertStringContainsString('user default on #' . hash('sha256', 'oldsecret') . " ~* &* +@all\n", $this->rt->files[RedisAcl::ACL_FILE]);
+        $this->assertStringNotContainsString('nopass', $this->rt->files[RedisAcl::ACL_FILE]);
+    }
+
+    public function test_users_or_an_acl_file_of_the_operators_own_are_not_replaced(): void
+    {
+        foreach (["user bob on >x ~* +@all\n", "aclfile /etc/redis/users.acl\n"] as $conf) {
+            $this->rt->files['/etc/redis/redis.conf'] = $conf;
+            try {
+                $this->acl()->setup(true);
+                $this->fail('expected refusal for ' . $conf);
+            } catch (BrokerException $e) {
+                $this->assertStringContainsString('will not replace', $e->getMessage());
+            }
+            $this->assertSame($conf, $this->rt->files['/etc/redis/redis.conf']);
+        }
+    }
+
+    /** Review of A111: a site re-created under the same name does not get the old site's keys. */
+    public function test_a_re_enabled_site_gets_a_new_prefix(): void
+    {
+        $this->acl()->setup(true);
+        $first = $this->acl()->enableSite('shop.example.com')['prefix'];
+        $this->acl()->disableSite('shop.example.com');
+        $this->assertNotSame($first, $this->acl()->enableSite('shop.example.com')['prefix']);
+    }
+
+    public function test_redis_6_gets_no_rule_it_does_not_know(): void
+    {
+        $state = ['enforced' => true, 'admin_password' => 'x', 'redis_major' => 6,
+            'sites' => ['a.test' => ['user' => 'az-vh-a-test', 'prefix' => 'a-test-abcdef:', 'password' => 'p']]];
+        $this->assertStringNotContainsString('function', RedisAcl::renderAcl($state));
+        $state['redis_major'] = 7;
+        $this->assertStringContainsString('-function -fcall -fcall_ro', RedisAcl::renderAcl($state));
+    }
+
     public function test_wiring_is_line_by_line_and_idempotent(): void
     {
-        $once = RedisAcl::wireAclFile("port 6379\naclfile /etc/redis/users.acl\nuser bob on >x ~* +@all\n");
-        $this->assertSame("port 6379\naclfile " . RedisAcl::ACL_FILE . "\n# user bob on >x ~* +@all  # azerioid-panel A111: users live in " . RedisAcl::ACL_FILE . "\n", $once);
+        $once = RedisAcl::wireAclFile("port 6379\naclfile /etc/redis/azerioid-users.acl\nrequirepass x\n");
+        $this->assertSame("port 6379\naclfile " . RedisAcl::ACL_FILE . "\n# requirepass x  # azerioid-panel A111: users live in " . RedisAcl::ACL_FILE . "\n", $once);
         $this->assertSame($once, RedisAcl::wireAclFile($once));
     }
 
