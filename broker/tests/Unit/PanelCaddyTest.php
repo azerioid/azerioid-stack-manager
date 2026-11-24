@@ -100,6 +100,39 @@ CADDY;
         $this->assertStringContainsString('APP_URL=https://panel.example.com', $rt->files['/usr/local/lib/azerioid-panel/web/.env']);
     }
 
+    /** A113: on a tunnel-only install a panel domain adds no public IP listener, and HTTPS origins get a Secure cookie. */
+    public function test_a_tunnel_only_install_gets_no_ip_listener_from_a_domain_change(): void
+    {
+        $rt = $this->runtime();
+        $rt->files['/etc/azerioid-panel/access.env'] = "ACCESS_MODE=tunnel\n";
+        [$code, $decoded] = $this->dispatch($rt, ['broker', 'panel.domain.set'], ['domain' => 'panel.example.com', 'tls_mode' => 'internal']);
+        $this->assertSame(0, $code, json_encode($decoded));
+        $snippet = $rt->files['/etc/caddy/conf.d/azerioid-panel.conf'];
+        $this->assertStringNotContainsString('203.0.113.10', $snippet);
+        $this->assertStringNotContainsString('https://:3169', $snippet);
+        $env = $rt->files['/usr/local/lib/azerioid-panel/web/.env'];
+        $this->assertStringContainsString('SESSION_SECURE_COOKIE=true', $env);
+
+        [$code] = $this->dispatch($rt, ['broker', 'panel.domain.set'], ['clear' => true]);
+        $this->assertSame(0, $code);
+        $this->assertStringNotContainsString('203.0.113.10', $rt->files['/etc/caddy/conf.d/azerioid-panel.conf'], 'clearing the domain does not open the IP either');
+        $this->assertStringContainsString('APP_URL=http://127.0.0.1:3169', $rt->files['/usr/local/lib/azerioid-panel/web/.env']);
+        $this->assertStringContainsString('SESSION_SECURE_COOKIE=false', $rt->files['/usr/local/lib/azerioid-panel/web/.env']);
+    }
+
+    /** A113: a cached panel config is rebuilt so the new APP_URL and cookie setting apply now, and its directory re-locked. */
+    public function test_a_cached_config_is_rebuilt_and_relocked(): void
+    {
+        $rt = $this->runtime();
+        $rt->files['/usr/local/lib/azerioid-panel/web/bootstrap/cache/config.php'] = '<?php return [];';
+        [$code] = $this->dispatch($rt, ['broker', 'panel.domain.set'], ['domain' => 'panel.example.com', 'tls_mode' => 'internal']);
+        $this->assertSame(0, $code);
+        $cmds = array_column($rt->execLog, 'command');
+        $cache = array_search(['/sbin/runuser', '-u', (new \AzerioidPanel\Broker\Config())->panelUser, '--', '/usr/bin/php', '/usr/local/lib/azerioid-panel/web/artisan', 'config:cache', '--no-interaction'], $cmds, true);
+        $this->assertIsInt($cache);
+        $this->assertSame(['/bin/chmod', '0750', '/usr/local/lib/azerioid-panel/web/bootstrap/cache'], $cmds[$cache + 1]);
+    }
+
     public function test_refuses_site_vhost_hostname(): void
     {
         $rt = $this->runtime();
@@ -178,6 +211,7 @@ CADDY;
         $rt->script(['/usr/bin/caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--address', '127.0.0.1:2019', '--force'], 0);
         $rt->script(['/usr/bin/systemctl', 'is-active', 'caddy'], 0, "active\n");
         $rt->script(['/usr/sbin/ip', '-4', 'route', 'get', '1.1.1.1'], 0, "1.1.1.1 via 203.0.113.1 dev eth0 src 203.0.113.10 uid 0\n");
+        $rt->files['/etc/azerioid-panel/access.env'] = "ACCESS_MODE=public\n";
 
         return $rt;
     }

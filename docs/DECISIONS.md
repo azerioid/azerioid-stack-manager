@@ -3198,3 +3198,27 @@ the password with `read -rs` and exports it before the same `runuser` call.
 
 Tests: `InstallerAdminPasswordTest` runs the real function under bash with recording stubs for `runuser` and
 `sudo`: the password is in no recorded argv and does reach the child's environment; the hint uses a prompt.
+
+## A113 — A panel domain change keeps a tunnel-only panel private, and HTTPS origins get a Secure cookie
+
+Security audit run-2 (2026-11-11), finding AZ-37. On a tunnel-only install (panel on `127.0.0.1:3169`), setting
+or clearing a panel domain re-rendered the panel snippet with the host's IP detected from the routing table, so
+`https://<host-ip>:3169` (and the `:3169` catch-all) appeared as a side effect: the panel became reachable from the
+internet although the operator had chosen a tunnel. The session cookie was not marked `Secure` on HTTPS origins.
+
+Decision:
+- `PanelCaddy::resolvePublicIp` keeps an IP listener that is configured (`broker.json` `panel.public_ip`) or already
+  in the snippet, and *detects* the host IP only when the installer recorded `ACCESS_MODE=public` in
+  `/etc/azerioid-panel/access.env`. A tunnel-only host gets a domain listener and nothing else.
+- `commit()` writes `SESSION_SECURE_COOKIE=true` whenever the panel's URL is HTTPS (a domain or a public IP), and
+  `false` for the plain tunnel. Browsers accept Secure cookies on `http://127.0.0.1` and `localhost`, so the tunnel
+  keeps working.
+- The panel's configuration is cached (`config:cache` on every update), so these values — and APP_URL, which had
+  the same problem — only applied after the next update. When a cached config exists, `commit()` now rebuilds it
+  as the panel account and re-locks `bootstrap/cache` to 0750 (A69).
+
+Existing hosts keep their current snippet until the panel domain is next set or cleared.
+
+Tests: `PanelCaddyTest` — on a tunnel-only install a domain set and a clear add no IP listener or catch-all; the
+cookie follows the scheme; a cached config is rebuilt as the panel account and its directory re-locked. The
+existing public-install tests now declare `ACCESS_MODE=public`.
