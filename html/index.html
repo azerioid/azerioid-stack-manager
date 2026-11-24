@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AZERIOID Stack Manager — a control panel where every site is its own box</title>
-<meta name="description" content="A free control panel for one Linux server: Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker, installed on demand — with every site isolated under its own account, PHP pool and Docker daemon.">
+<meta name="description" content="A free control panel for one Linux server: Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker, installed on demand — with every site isolated under its own account, its own PHP pool and, for Docker sites, its own Docker daemon. Open source (MIT).">
 <link rel="canonical" href="https://azerioid.dev/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://azerioid.dev/">
 <meta property="og:title" content="AZERIOID Stack Manager">
-<meta property="og:description" content="One server, one panel, every site in its own box. Free. Ubuntu, Debian, AlmaLinux and Rocky Linux with SELinux enforcing.">
+<meta property="og:description" content="One server, one panel, every site in its own box. Free and open source (MIT). Ubuntu 24.04, Debian 12/13 and Enterprise Linux 9/10.">
 <meta property="og:image" content="https://azerioid.dev/assets/virtual-hosts.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0d0f13">
@@ -262,7 +262,7 @@
     <div class="wrap">
       <span class="eyebrow">Control panel for one Linux server</span>
       <h1>Every site on your server, in <em>its own box</em>.</h1>
-      <p class="lead">A free web control panel for a VPS or bare-metal host. Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker install on demand — and each site runs under its own account, its own PHP pool and its own Docker daemon.</p>
+      <p class="lead">A free web control panel for a VPS or bare-metal host. Caddy, PHP 8.1–8.4, Node.js, databases, mail and rootless Docker install on demand — and each site runs under its own account, its own PHP pool and, for Docker sites, its own Docker daemon.</p>
       <div class="cta">
         <a class="btn btn-gold" href="#install">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6l4 4-4 4M10 15h6"/></svg>
@@ -273,9 +273,9 @@
       <div class="chips" aria-label="Supported systems">
         <span class="chip"><b>●</b> Ubuntu 24.04</span>
         <span class="chip"><b>●</b> Debian 12 / 13</span>
-        <span class="chip"><b>●</b> AlmaLinux · Rocky 9+</span>
+        <span class="chip"><b>●</b> AlmaLinux · Rocky 9 / 10</span>
         <span class="chip"><b>●</b> SELinux enforcing</span>
-        <span class="chip">No license fees</span>
+        <span class="chip">MIT licensed</span>
       </div>
       <div class="window">
         <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>panel · virtual hosts</span></div>
@@ -290,17 +290,17 @@
       <div class="section-head">
         <span class="eyebrow">What you get</span>
         <h2>A real UI for day-two work — and a CLI that does the same thing.</h2>
-        <p class="lead">The bootstrap installs only what the panel needs. Everything else comes from a registry of official upstream packages, when you ask for it.</p>
+        <p class="lead">The bootstrap installs only what the panel needs. Everything else comes from a registry of components — vendor and well-known maintainer repositories, each pinned to its signing key — when you ask for it.</p>
       </div>
       <div class="features">
         <div class="card"><span class="k">Sites</span><h3>Three engines, one front door</h3><p>Each site picks Caddy, Apache or Nginx. Caddy always owns :80/:443 and terminates TLS; the others run on loopback behind it.</p></div>
         <div class="card"><span class="k">HTTPS</span><h3>Certificates without thinking</h3><p>Let’s Encrypt over HTTP-01 automatically, DNS-01 through Cloudflare or DigitalOcean for wildcards, or an internal CA for private hosts.</p></div>
         <div class="card"><span class="k">Runtimes</span><h3>PHP-FPM, Octane, PM2, Docker</h3><p>Per site: plain PHP-FPM, Laravel Octane on FrankenPHP, a PM2 Node cluster on Node 20, 22 or 24, or a rootless Docker container.</p></div>
-        <div class="card"><span class="k">Data</span><h3>Databases and cache</h3><p>MariaDB, PostgreSQL, MongoDB, Redis, Memcached — with per-database access rules and Adminer behind the panel’s login. Elasticsearch too.</p></div>
+        <div class="card"><span class="k">Data</span><h3>Databases and cache</h3><p>MariaDB, PostgreSQL, MongoDB, Redis, Memcached and Elasticsearch. One user per database, per-database access rules for MariaDB and PostgreSQL, a Redis user per site, and Adminer behind the panel’s login.</p></div>
         <div class="card"><span class="k">Mail</span><h3>A mail server that tells the truth</h3><p>Postfix, Dovecot and DKIM with copy-paste DNS records. It probes whether port 25 is blocked and steers you to a relay when it is.</p></div>
-        <div class="card"><span class="k">Files</span><h3>File Manager and Terminal</h3><p>Edit files and open a shell in the browser — always as the site’s own account, never as root, confined to that site.</p></div>
-        <div class="card"><span class="k">Backups</span><h3>Whole-site bundles</h3><p>Files, configuration and the site’s databases in one bundle, with per-target schedules and retention, verified by restoring into a scratch database.</p></div>
-        <div class="card"><span class="k">Deploy</span><h3>Git deploy with rollback</h3><p>The deploy key stays with root; code is checked out and your build command runs as the site. Manual or scheduled, one-click rollback.</p></div>
+        <div class="card"><span class="k">Files</span><h3>File Manager and Terminal</h3><p>Edit files and open a shell in the browser — always as the site’s own account, never as root. The File Manager stays inside the site’s directory; the shell is limited by file permissions.</p></div>
+        <div class="card"><span class="k">Backups</span><h3>Whole-site bundles</h3><p>Files, configuration and the site’s databases in one encrypted bundle, with per-target schedules and retention, and an optional deep check that restores the database dumps into a scratch database.</p></div>
+        <div class="card"><span class="k">Deploy</span><h3>Git deploy with rollback</h3><p>The deploy key stays with root; code is checked out and your build command runs as the site. Manual, scheduled or on push (signed webhook), with a one-click rollback of the code.</p></div>
         <div class="card"><span class="k">Operations</span><h3>CLI, audit, self-update</h3><p><code>azerioid</code> drives the same privileged broker as the UI. Every action is audited; updates install release tags and roll back on failure.</p></div>
       </div>
     </div>
@@ -322,7 +322,7 @@
       <div class="window" style="margin-top:0">
         <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>panel</span></div>
         <figure class="shot on" id="s1" role="tabpanel" aria-labelledby="t1" style="margin:0">
-          <img src="assets/components.png" width="1500" height="900" loading="lazy" alt="The Components page: web engines, databases, runtimes and tools, each installable from official upstream packages.">
+          <img src="assets/components.png" width="1500" height="900" loading="lazy" alt="The Components page: web engines, databases, runtimes and tools, each installable on demand.">
         </figure>
         <figure class="shot" id="s2" role="tabpanel" aria-labelledby="t2" style="margin:0">
           <img src="assets/file-manager-editor.png" width="1890" height="1638" loading="lazy" alt="The File Manager with an editor open, working inside one site's directory as that site's own account.">
@@ -334,7 +334,7 @@
           <img src="assets/security.png" width="1500" height="900" loading="lazy" alt="The Security page: SSH log audit, firewall rules and fail2ban jails.">
         </figure>
       </div>
-      <p class="lead" id="shot-caption" style="margin-top:16px;font-size:15px">Install and remove stack components from a registry of official packages — the panel never runs a package manager itself.</p>
+      <p class="lead" id="shot-caption" style="margin-top:16px;font-size:15px">Install and remove stack components from a registry of pinned repositories — the panel never runs a package manager itself.</p>
     </div>
   </section>
 
@@ -345,21 +345,21 @@
         <div class="section-head" style="margin-bottom:0">
           <span class="eyebrow">The difference</span>
           <h2>Built as if every site on the server were hostile.</h2>
-          <p class="lead">On most shared servers one compromised site can read every other site’s <code>.env</code>. Here each site is a separate Linux account, and every way code runs — web requests, workers, containers, the terminal — runs as that account.</p>
+          <p class="lead">Each site is a separate Linux account, and every way its code runs — web requests, workers, containers, the terminal — runs as that account.</p>
         </div>
         <div class="proof" aria-label="Tested results">
-          <span class="eyebrow" style="color:var(--green)">Tested, not promised</span>
-          <div class="row"><span>Site A’s PHP reads site B’s files</span><span class="ok">denied</span></div>
-          <div class="row"><span>Site A’s worker (Octane / PM2) writes to site B</span><span class="ok">denied</span></div>
-          <div class="row"><span>Site A’s container mounts another daemon’s socket</span><span class="ok">denied</span></div>
-          <div class="row"><span>Same tests on Rocky Linux, SELinux enforcing</span><span class="ok">0 AVC</span></div>
+          <span class="eyebrow" style="color:var(--green)">Checked on every release</span>
+          <div class="row"><span>Site A’s account reads site B’s files</span><span class="ok">denied</span></div>
+          <div class="row"><span>Each site’s PHP pool runs as that site</span><span class="ok">checked</span></div>
+          <div class="row"><span>Octane, PM2 and Docker workers run as their site</span><span class="ok">checked</span></div>
+          <div class="row"><span>The shared worker account is in no site’s group</span><span class="ok">checked</span></div>
         </div>
       </div>
       <div class="layers">
-        <div class="layer"><span class="n">01</span><div><h3>An account and a group per site</h3><p>Files, SFTP, cron, the Terminal and the File Manager all act as the site’s own <code>az-vh-*</code> account. No shared group opens one site to another.</p></div></div>
+        <div class="layer"><span class="n">01</span><div><h3>An account and a group per site</h3><p>Files, SFTP, cron, the Terminal and the File Manager all act as the site’s own <code>az-vh-*</code> account. Other sites’ accounts are not in its group; only the web server is, to serve the files.</p></div></div>
         <div class="layer"><span class="n">02</span><div><h3>A PHP-FPM pool per site</h3><p>PHP runs as the site, on a socket only the web server can reach. On-demand workers: an idle site costs no memory.</p></div></div>
-        <div class="layer"><span class="n">03</span><div><h3>Workers run as their site</h3><p>Octane, PM2 and your own Supervisor programs run under the site they belong to — never under a shared account.</p></div></div>
-        <div class="layer"><span class="n">04</span><div><h3>A Docker daemon per site</h3><p>Rootless Docker, one daemon per Docker site, with its own id range. A container can reach its own site and nothing else.</p></div></div>
+        <div class="layer"><span class="n">03</span><div><h3>Workers run as their site</h3><p>Octane, PM2 and your own Supervisor programs run under the site they belong to. Programs tied to no site run under a separate unprivileged account, never root.</p></div></div>
+        <div class="layer"><span class="n">04</span><div><h3>A Docker daemon per site</h3><p>Rootless Docker, one daemon per Docker site, run by the site’s own account with its own id range — so bind mounts reach only what that site could read anyway.</p></div></div>
         <div class="layer"><span class="n">05</span><div><h3>A broker, not a root web app</h3><p>The panel runs unprivileged. Every host change goes through a broker that allows a fixed list of actions and validates each one again.</p></div></div>
       </div>
     </div>
@@ -370,7 +370,7 @@
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">The stack</span>
-        <h2>Official packages. Installed when you ask.</h2>
+        <h2>Pinned repositories. Installed when you ask.</h2>
       </div>
       <div class="stack">
         <div class="card"><span class="k">Web</span><ul><li>Caddy <span>front door</span></li><li>Nginx <span>backend</span></li><li>Apache <span>backend</span></li></ul></div>
@@ -388,7 +388,7 @@
         <div class="section-head" style="margin-bottom:0">
           <span class="eyebrow">Install</span>
           <h2>From a fresh server to a working panel.</h2>
-          <p class="lead">Needs root, outbound HTTPS and <code>git</code>. The installer asks a few questions and never takes a password on the command line.</p>
+          <p class="lead">Needs root, outbound HTTPS and <code>git</code>. The installer asks a few questions; passwords are never command-line flags.</p>
         </div>
         <div class="steps">
           <div class="step"><b>1</b><p><strong>Run the installer</strong> on Ubuntu, Debian, AlmaLinux or Rocky Linux.</p></div>
@@ -413,18 +413,18 @@
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">Supported systems</span>
-        <h2>Verified end to end — SELinux left on.</h2>
+        <h2>Tested on Ubuntu and on Rocky Linux with SELinux enforcing.</h2>
       </div>
       <div class="table-scroll">
         <table class="os">
           <thead><tr><th>System</th><th>Status</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td>Ubuntu 24.04</td><td><span class="ok-badge">supported</span></td><td>Verified</td></tr>
-            <tr><td>Debian 12 / 13</td><td><span class="ok-badge">supported</span></td><td>Verified</td></tr>
-            <tr><td>AlmaLinux 9+</td><td><span class="ok-badge">supported</span></td><td>SELinux enforcing</td></tr>
-            <tr><td>Rocky Linux 9+</td><td><span class="ok-badge">supported</span></td><td>SELinux enforcing</td></tr>
-            <tr><td>CentOS Stream · RHEL · Oracle 9+</td><td><span class="ok-badge">supported</span></td><td>Same EL path</td></tr>
-            <tr><td>Fedora</td><td><span class="no-badge">not supported</span></td><td>The installer refuses it</td></tr>
+            <tr><td>Ubuntu 24.04</td><td><span class="ok-badge">supported</span></td><td>Checked on every release</td></tr>
+            <tr><td>Debian 12 / 13</td><td><span class="ok-badge">supported</span></td><td>Same apt path as Ubuntu; tested less often</td></tr>
+            <tr><td>AlmaLinux 9 / 10</td><td><span class="ok-badge">supported</span></td><td>Same EL path as Rocky Linux</td></tr>
+            <tr><td>Rocky Linux 9 / 10</td><td><span class="ok-badge">supported</span></td><td>Tested on 9 with SELinux enforcing</td></tr>
+            <tr><td>CentOS Stream · RHEL · Oracle 9 / 10</td><td><span class="ok-badge">supported</span></td><td>Same EL path</td></tr>
+            <tr><td>Fedora · other distributions</td><td><span class="no-badge">not supported</span></td><td>The installer refuses them</td></tr>
           </tbody>
         </table>
       </div>
@@ -437,12 +437,12 @@
       <div class="section-head">
         <span class="eyebrow">Price</span>
         <h2>No license, no per-account fee.</h2>
-        <p class="lead">Classic control panels charge per server and per account. This one costs what your server costs.</p>
+        <p class="lead">Open source under the MIT license. It costs what your server costs.</p>
       </div>
       <div class="free">
         <div class="card"><span class="big">$0</span><h3>Per server, per month</h3><p>Install it on as many servers as you run.</p></div>
         <div class="card"><span class="big">∞</span><h3>Sites and databases</h3><p>Limited by your hardware, not by a tier.</p></div>
-        <div class="card"><span class="big">1</span><h3>Command to update</h3><p><code>azerioid panel update apply</code> — and an automatic rollback if it fails.</p></div>
+        <div class="card"><span class="big">1</span><h3>Command to update</h3><p><code>azerioid panel update apply --confirm</code> — and an automatic rollback if it fails.</p></div>
       </div>
     </div>
   </section>
@@ -461,6 +461,8 @@
           <li>Deliverability still needs reverse DNS, which you set at your provider.</li>
           <li>Octane is for Laravel apps, PM2 for Node apps.</li>
           <li>One server per panel — no cluster management.</li>
+          <li>Memcached has no access control: use it for one site, or for data that is not private.</li>
+          <li>Git deploys check out in place; rollback restores code, not database migrations.</li>
           <li>Each Docker site runs its own daemon: budget about 100–170 MB of RAM per Docker site.</li>
         </ul>
       </div>
@@ -506,7 +508,7 @@
 <script>
   (function () {
     var captions = {
-      t1: 'Install and remove stack components from a registry of official packages — the panel never runs a package manager itself.',
+      t1: 'Install and remove stack components from a registry of pinned repositories — the panel never runs a package manager itself.',
       t2: 'Files and editor for one site, working as that site’s own account — path traversal and symlink escapes are refused.',
       t3: 'Mail health, outbound delivery check and relay settings. The relay password is stored root-only and never shown again.',
       t4: 'SSH log audit, firewall rules and fail2ban jails in one place.'
